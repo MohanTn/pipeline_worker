@@ -1,0 +1,104 @@
+/**
+ * .pipeline-worker.yml loader. Resolution order per value: environment variable ->
+ * .env file at repo root (never overrides real env) -> .pipeline-worker.yml ->
+ * built-in default. Config file path: explicit override param ->
+ * PIPELINE_WORKER_CONFIG env var -> <repoRoot>/.pipeline-worker.yml. Never throws — a
+ * missing or unparseable file falls back to defaults (with a warning),
+ * mirroring mcp-sonar-analysis's registry.ts read/never-throw contract.
+ */
+
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseEnv } from 'node:util';
+import { load } from 'js-yaml';
+import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
+
+const CONFIG_FILE_NAME = '.pipeline-worker.yml';
+
+const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot'];
+const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
+
+const DEFAULT_CONFIG: PipelineWorkerConfig = {
+  agent: 'claude',
+  forge: 'gitlab',
+  gitlab: {
+    host: '',
+    projectId: 0,
+  },
+  github: {
+    repo: '',
+  },
+  build: 'npm run build',
+  lint: 'npm run lint',
+  test: 'npm test',
+  maxFixAttempts: 5,
+  pollIntervalSeconds: 15,
+};
+
+/** Loads <repoRoot>/.env into process.env; already-set variables always win. */
+function loadDotEnv(repoRoot: string): void {
+  const envPath = join(repoRoot, '.env');
+  if (!existsSync(envPath)) return;
+  try {
+    const parsed = parseEnv(readFileSync(envPath, 'utf-8'));
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!(key in process.env)) process.env[key] = value;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: failed to read ${envPath}: ${message}. Ignoring it.`);
+  }
+}
+
+function pickName<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+/** Parses a positive number, falling back when unset or invalid. */
+function positiveNumber(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+function resolveConfigPath(repoRoot: string, override?: string): string {
+  return override || process.env.PIPELINE_WORKER_CONFIG || join(repoRoot, CONFIG_FILE_NAME);
+}
+
+function readYamlConfig(configPath: string): Partial<PipelineWorkerConfig> {
+  if (!existsSync(configPath)) return {};
+  try {
+    return (load(readFileSync(configPath, 'utf-8')) as Partial<PipelineWorkerConfig>) ?? {};
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: failed to read ${configPath}: ${message}. Falling back to defaults.`);
+    return {};
+  }
+}
+
+export function loadConfig(repoRoot: string, override?: string): PipelineWorkerConfig {
+  loadDotEnv(repoRoot); // before resolveConfigPath so PIPELINE_WORKER_CONFIG can also come from .env
+
+  const parsed = readYamlConfig(resolveConfigPath(repoRoot, override));
+
+  // Each tier is validated independently: an invalid env value falls back to
+  // a valid yaml value, not straight to the built-in default.
+  return {
+    agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, pickName(parsed.agent, AGENT_NAMES, DEFAULT_CONFIG.agent)),
+    forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, pickName(parsed.forge, FORGE_NAMES, DEFAULT_CONFIG.forge)),
+    gitlab: {
+      host: parsed.gitlab?.host ?? DEFAULT_CONFIG.gitlab.host,
+      projectId: parsed.gitlab?.projectId ?? DEFAULT_CONFIG.gitlab.projectId,
+    },
+    github: {
+      repo: parsed.github?.repo ?? DEFAULT_CONFIG.github.repo,
+    },
+    build: parsed.build ?? DEFAULT_CONFIG.build,
+    lint: parsed.lint ?? DEFAULT_CONFIG.lint,
+    test: parsed.test ?? DEFAULT_CONFIG.test,
+    maxFixAttempts: parsed.maxFixAttempts ?? DEFAULT_CONFIG.maxFixAttempts,
+    pollIntervalSeconds: positiveNumber(
+      process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS,
+      positiveNumber(parsed.pollIntervalSeconds, DEFAULT_CONFIG.pollIntervalSeconds),
+    ),
+  };
+}

@@ -1,0 +1,65 @@
+{
+  "name": "pipeline-worker",
+  "version": "0.1.0",
+  "description": "Automated git-worktree workflow: captures intent from a diff via Claude Code or GitHub Copilot CLI, runs build/lint/test, opens a GitLab MR or GitHub PR, and auto-fixes failing pipelines — with a companion forge MCP server (TOON-encoded responses).",
+  "license": "MIT",
+  "author": "Mohan TN <mohan.tn100@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MohanTn/pipeline-worker.git"
+  },
+  "bugs": "https://github.com/MohanTn/pipeline-worker/issues",
+  "homepage": "https://github.com/MohanTn/pipeline-worker#readme",
+  "keywords": [
+    "automation",
+    "ci",
+    "gitlab",
+    "github",
+    "merge-request",
+    "pull-request",
+    "claude",
+    "copilot",
+    "mcp",
+    "agent"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "type": "module",
+  "main": "dist/mcp/server.js",
+  "bin": {
+    "pipeline-worker": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".pipeline-worker.yml.example",
+    ".env.example"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint . --ext .ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@toon-format/toon": "^2.3.0",
+    "commander": "^12.0.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/js-yaml": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.0.0"
+  }
+}
