@@ -90,7 +90,7 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 
 ## How the fix loop stays bounded
 
-Every retry path has a cap: local checks abort the run before an MR is ever opened; pipeline polling gives up after a 2-hour safety window; fix attempts stop at `maxFixAttempts`; a fix attempt that changes no files, or a pipeline that ends `canceled`/`skipped`, escalates immediately instead of spending agent tokens. Escalation always leaves a comment on the MR/PR so a human knows to take over.
+Every retry path has a cap: local checks abort the run before an MR is ever opened; if no CI pipeline shows up for the MR/PR within 60s, the run ends there instead of polling; otherwise pipeline polling gives up after a 2-hour safety window; fix attempts stop at `maxFixAttempts`; a fix attempt that changes no files, or a pipeline that ends `canceled`/`skipped`, escalates immediately instead of spending agent tokens. Escalation always leaves a comment on the MR/PR so a human knows to take over.
 
 ## License
 

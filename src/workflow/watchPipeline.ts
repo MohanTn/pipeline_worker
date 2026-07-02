@@ -13,6 +13,10 @@
  * poll interval rather than only after a pipeline goes terminal. When found,
  * merges the target branch in and asks the agent to resolve any actual
  * conflict markers, sharing the same maxFixAttempts budget as CI fixes.
+ *
+ * If no pipeline shows up for the MR/PR at all within a short grace window
+ * (repo has no CI configured), the run ends there instead of polling for up
+ * to the full 2-hour safety window.
  */
 
 import { execFile } from 'node:child_process';
@@ -31,33 +35,51 @@ import type { PipelineWorkerConfig, Pipeline, PipelineJob, RunState } from '../t
 const execFileAsync = promisify(execFile);
 
 const MAX_POLL_WINDOW_MS = 2 * 60 * 60 * 1000; // per pipeline attempt, as a safety net
+// How long to tolerate zero pipelines before concluding the repo has no CI
+// configured for this MR/PR, rather than CI simply not having registered
+// yet. Only applies before we've ever confirmed a pipeline exists (see
+// `previousPipelineId === undefined` below) — once one has been seen, an
+// empty result can't mean "no CI".
+const NO_PIPELINE_GRACE_MS = 60 * 1000;
 const TERMINAL_STATUSES: Pipeline['status'][] = ['success', 'failed', 'canceled', 'skipped'];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type PollOutcome = { kind: 'pipeline'; pipeline: Pipeline } | { kind: 'conflict' };
+export type PollOutcome = { kind: 'pipeline'; pipeline: Pipeline } | { kind: 'conflict' } | { kind: 'no-pipeline' };
 
 /**
- * Waits for either a *new* terminal pipeline or a confirmed merge conflict,
- * whichever comes first. `previousPipelineId` is the one we already
- * handled, and it stays "latest" on the forge until the pipeline for our fix
- * push is created — without this, the loop would re-fix stale logs and burn
- * attempts on a single real failure.
+ * Waits for either a *new* terminal pipeline, a confirmed merge conflict, or
+ * (only on the first pipeline of the run) confirmation that no CI is
+ * configured at all — whichever comes first. `previousPipelineId` is the one
+ * we already handled, and it stays "latest" on the forge until the pipeline
+ * for our fix push is created — without this, the loop would re-fix stale
+ * logs and burn attempts on a single real failure.
  *
  * The conflict check runs on every interval (not just once per outer loop
  * iteration): some repos never run CI on an unmergeable PR, so waiting for a
  * terminal pipeline that will never arrive would otherwise spin until the
  * 2-hour safety window times out instead of surfacing the conflict promptly.
+ *
+ * `noPipelineGraceMs` defaults to NO_PIPELINE_GRACE_MS and is only overridable
+ * so tests don't have to wait out the real grace window.
  */
-async function pollForNextAction(
+export async function pollForNextAction(
   forge: ForgeClient,
   mrIid: number,
   intervalMs: number,
   previousPipelineId?: number,
+  noPipelineGraceMs: number = NO_PIPELINE_GRACE_MS,
 ): Promise<PollOutcome> {
   const maxPolls = Math.max(1, Math.ceil(MAX_POLL_WINDOW_MS / intervalMs));
+  // Undefined previousPipelineId means no pipeline has been confirmed yet
+  // for this MR/PR; give the forge a short grace window to register one
+  // before concluding there's no CI to watch. Disarmed for good the moment
+  // any pipeline is observed (even non-terminal) — that alone proves CI is
+  // configured, so a later transient empty response must never be counted.
+  let noPipelineGracePolls = previousPipelineId === undefined ? Math.max(1, Math.ceil(noPipelineGraceMs / intervalMs)) : undefined;
+  let emptyPolls = 0;
   for (let i = 0; i < maxPolls; i++) {
     if (await forge.hasMergeConflicts(mrIid)) {
       return { kind: 'conflict' };
@@ -67,6 +89,14 @@ async function pollForNextAction(
     const latest = pipelines[0];
     if (latest && latest.id !== previousPipelineId && TERMINAL_STATUSES.includes(latest.status)) {
       return { kind: 'pipeline', pipeline: latest };
+    }
+    if (latest) {
+      noPipelineGracePolls = undefined; // CI is confirmed to exist; never re-arm the no-pipeline check
+    } else if (noPipelineGracePolls !== undefined) {
+      emptyPolls += 1;
+      if (emptyPolls >= noPipelineGracePolls) {
+        return { kind: 'no-pipeline' };
+      }
     }
     await sleep(intervalMs);
   }
@@ -244,6 +274,16 @@ export async function watchPipeline(
       const resolved = await tryResolveConflicts(forge, agent, config, worktreePath, branch, targetBranch, mrIid, state, repoRoot);
       if (!resolved) return; // already escalated inside tryResolveConflicts
       continue;
+    }
+
+    if (outcome.kind === 'no-pipeline') {
+      // No CI ran at all (repo has no workflow configured for this MR/PR) —
+      // there's nothing to poll for, so stop instead of spinning until the
+      // 2-hour safety window would otherwise time out.
+      step('ℹ️', 'No CI pipeline found', `no pipeline was detected for the MR/PR within ${NO_PIPELINE_GRACE_MS / 1000}s — nothing to watch`);
+      state.phase = 'done';
+      saveRunState(repoRoot, state);
+      return;
     }
 
     const pipeline = outcome.pipeline;
