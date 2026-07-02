@@ -16,6 +16,7 @@ import type { AgentAdapter } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges } from '../git/commit.js';
 import type { ForgeClient } from '../forge/types.js';
 import { saveRunState } from '../state/runState.js';
+import { step } from '../ui/steps.js';
 import type { PipelineWorkerConfig, Pipeline, PipelineJob, RunState } from '../types.js';
 
 const MAX_POLL_WINDOW_MS = 2 * 60 * 60 * 1000; // per pipeline attempt, as a safety net
@@ -68,6 +69,7 @@ function buildFixPrompt(pipeline: Pipeline, jobs: Array<{ job: PipelineJob; log:
 }
 
 async function escalate(forge: ForgeClient, mrIid: number, message: string, state: RunState, repoRoot: string): Promise<void> {
+  step('Escalating to a human', message);
   await forge.createMrNote(mrIid, message);
   state.phase = 'escalated';
   saveRunState(repoRoot, state);
@@ -114,6 +116,7 @@ export async function watchPipeline(
     state.attempt += 1;
     saveRunState(repoRoot, state);
 
+    step('Pipeline failed', `attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
     if (state.attempt > config.maxFixAttempts) {
       await escalate(
         forge,
@@ -126,9 +129,11 @@ export async function watchPipeline(
       return;
     }
 
+    step('Diagnosing the failure', `reading logs for ${pipeline.webUrl}`);
     const failedJobs = await forge.getFailedJobs(pipeline.id);
     const logs = await Promise.all(failedJobs.map(async (job) => ({ job, log: await forge.getJobLog(job.id) })));
 
+    step('Fixing CI failure', `asking the agent to fix ${failedJobs.length} failed job(s)`);
     const mcpConfigPath = writeAgentMcpConfig();
     try {
       await agent.invoke({
@@ -153,6 +158,7 @@ export async function watchPipeline(
       return;
     }
 
+    step('Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`);
     await stageAll(worktreePath);
     await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
     await push(worktreePath, 'origin', branch);
