@@ -169,7 +169,7 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
       () => commit(worktreePath, intent.commitMessage),
     );
 
-    const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent);
+    const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent, checks);
     state.mrIid = mr.iid;
     state.phase = 'mr';
     saveRunState(repoRoot, state);

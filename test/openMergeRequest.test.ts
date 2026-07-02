@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDescription } from '../src/workflow/openMergeRequest.js';
-import type { CapturedIntent } from '../src/types.js';
+import type { CapturedIntent, CheckResult } from '../src/types.js';
 
 const INTENT: CapturedIntent = {
   intent: 'Let users sign in.',
@@ -17,12 +17,24 @@ const INTENT: CapturedIntent = {
   testScenarios: ['Submit valid credentials and confirm redirect to the dashboard.'],
 };
 
-test('buildDescription renders Intent, Summary, File changes, Risk, and Test Scenarios sections', () => {
-  const description = buildDescription(INTENT, 'claude');
+const CHECKS: CheckResult[] = [
+  { name: 'build', ok: true, stdout: '', stderr: '', durationMs: 1200 },
+  { name: 'lint', ok: true, stdout: '', stderr: '', durationMs: 800 },
+  { name: 'test', ok: true, stdout: '', stderr: '', durationMs: 5100 },
+];
+
+test('buildDescription renders Intent, Summary, File changes, Risk, Checks, and Test Scenarios sections', () => {
+  const description = buildDescription(INTENT, 'claude', CHECKS);
   assert.match(description, /\*\*Intent:\*\* Let users sign in\./);
   assert.match(description, /\*\*Summary:\*\* Adds a login page\./);
   assert.match(description, /\*\*File changes:\*\*\n- `src\/login\.ts`: Adds the login form component\.\n- `src\/routes\.ts`: Registers the \/login route\./);
   assert.match(description, /\*\*Risk:\*\* Low — New, isolated component with no existing callers\./);
+  assert.match(description, /\*\*Checks:\*\*\n- ✅ build \(1\.2s\)\n- ✅ lint \(0\.8s\)\n- ✅ test \(5\.1s\)/);
   assert.match(description, /\*\*Test Scenarios:\*\*\n- Submit valid credentials and confirm redirect to the dashboard\./);
   assert.match(description, /intent captured via \*\*claude\*\*/);
+});
+
+test('buildDescription marks a failed check with ❌', () => {
+  const description = buildDescription(INTENT, 'claude', [{ name: 'build', ok: false, stdout: '', stderr: '', durationMs: 500 }]);
+  assert.match(description, /\*\*Checks:\*\*\n- ❌ build \(0\.5s\)/);
 });
