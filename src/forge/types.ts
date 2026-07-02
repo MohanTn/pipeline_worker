@@ -23,4 +23,13 @@ export interface ForgeClient {
   getJobLog(jobId: number): Promise<string>;
   retryPipeline(pipelineId: number): Promise<Pipeline>;
   createMrNote(mrIid: number, body: string): Promise<{ id: number }>;
+  /**
+   * True only when the forge has *confirmed* the MR/PR has real merge
+   * conflicts against its target branch (GitHub's `mergeable_state: "dirty"`,
+   * GitLab's `merge_status: "cannot_be_merged"`). Both forges compute this
+   * asynchronously after a push, so a not-yet-known state must read as
+   * false here — treating "unknown" as "conflicted" would trigger conflict
+   * resolution on every push, before the forge has even checked.
+   */
+  hasMergeConflicts(mrIid: number): Promise<boolean>;
 }

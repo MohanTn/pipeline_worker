@@ -15,9 +15,11 @@ export interface GitlabAuth {
 }
 
 export function resolveGitlabAuth(config: PipelineWorkerConfig): GitlabAuth {
-  const host = process.env.PIPELINE_WORKER_GITLAB_HOST || config.gitlab.host;
-  const projectIdEnv = process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID;
-  const projectId = projectIdEnv ? Number(projectIdEnv) : config.gitlab.projectId;
+  // config.gitlab.host/projectId are already env/.env/yaml-resolved by
+  // config/loader.ts; only the token (never read from yaml) is read
+  // directly from the environment here.
+  const host = config.gitlab.host;
+  const projectId = config.gitlab.projectId;
   const token = process.env.PIPELINE_WORKER_GITLAB_TOKEN;
 
   if (!host) throw new Error('GitLab host is not configured (set gitlab.host in .pipeline-worker.yml or PIPELINE_WORKER_GITLAB_HOST).');
@@ -117,6 +119,15 @@ export function createGitlabForge(config: PipelineWorkerConfig): ForgeClient {
       });
       const note = (await res.json()) as { id: number };
       return { id: note.id };
+    },
+
+    async hasMergeConflicts(mrIid: number): Promise<boolean> {
+      const res = await gitlabRequest(auth, `/merge_requests/${mrIid}`);
+      const mr = (await res.json()) as { merge_status?: string };
+      // "cannot_be_merged" is GitLab's confirmed-conflict state; "unchecked"/
+      // "checking"/"cannot_be_merged_recheck" mean it hasn't finished
+      // computing yet and must not be treated as a conflict.
+      return mr.merge_status === 'cannot_be_merged';
     },
   };
 }

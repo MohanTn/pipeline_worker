@@ -14,9 +14,15 @@ export interface CapturedDiff {
  * Captures staged+unstaged changes (`git diff HEAD`) plus the list of
  * untracked files (which `git diff` never includes) so both can be carried
  * into an isolated worktree.
+ *
+ * `--full-index` records full (not abbreviated) blob hashes, which
+ * worktree.ts's `git apply --3way` needs to reliably locate each blob's
+ * common ancestor when the worktree has since been rebased onto a newer
+ * origin — otherwise a 3-way merge could fail to resolve an otherwise
+ * legitimate abbreviated hash.
  */
 export async function captureDiff(repoRoot: string): Promise<CapturedDiff> {
-  const { stdout: diffText } = await execFileAsync('git', ['diff', 'HEAD'], {
+  const { stdout: diffText } = await execFileAsync('git', ['diff', 'HEAD', '--full-index'], {
     cwd: repoRoot,
     maxBuffer: 64 * 1024 * 1024,
   });
