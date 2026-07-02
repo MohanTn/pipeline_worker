@@ -34,9 +34,7 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE",
-    ".pipeline-worker.yml.example",
-    ".env.example"
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20.12"
