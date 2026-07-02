@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config/loader.js';
@@ -178,5 +178,42 @@ test('loadConfig honors PIPELINE_WORKER_CONFIG env var when no override param is
     process.env.PIPELINE_WORKER_CONFIG = altPath;
     const config = loadConfig(dir);
     assert.equal(config.maxFixAttempts, 1);
+  });
+});
+
+test('loadConfig accepts a string projectId from YAML', () => {
+  withTempDir((dir) => {
+    writeFileSync(
+      join(dir, '.pipeline-worker.yml'),
+      'gitlab:\n  host: https://gitlab.example.com\n  projectId: "my-group/my-project"\n',
+    );
+    const config = loadConfig(dir);
+    assert.equal(config.gitlab.projectId, 'my-group/my-project');
+  });
+});
+
+test('loadConfig auto-detects project path via PIPELINE_WORKER_GITLAB_REPO_BASE', () => {
+  withTempDir((dir) => {
+    // Simulate: repoBase = dir, repoRoot = dir/Media/RetailMediaPortal
+    const repoRoot = join(dir, 'Media', 'RetailMediaPortal');
+    // We pass repoRoot as the "repo" location; no .pipeline-worker.yml there
+    process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
+    const config = loadConfig(repoRoot);
+    assert.equal(config.gitlab.projectId, 'media/retail-media-portal');
+    assert.equal(config.gitlab.repoBase, dir);
+  });
+});
+
+test('loadConfig: explicit projectId in YAML takes precedence over repoBase auto-detection', () => {
+  withTempDir((dir) => {
+    const repoRoot = join(dir, 'Media', 'SomeProject');
+    mkdirSync(repoRoot, { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.pipeline-worker.yml'),
+      'gitlab:\n  host: https://gitlab.example.com\n  projectId: 42\n',
+    );
+    process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
+    const config = loadConfig(repoRoot);
+    assert.equal(config.gitlab.projectId, 42);
   });
 });

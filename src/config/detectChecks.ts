@@ -16,7 +16,8 @@ export interface DetectedChecks {
   test: string;
 }
 
-const DOTNET_PROJECT_SUFFIXES = ['.sln', '.slnx', '.csproj', '.fsproj', '.vbproj'];
+const DOTNET_SOLUTION_SUFFIXES = ['.sln', '.slnx'];
+const DOTNET_PROJECT_SUFFIXES = [...DOTNET_SOLUTION_SUFFIXES, '.csproj', '.fsproj', '.vbproj'];
 const PYTHON_MARKERS = ['pyproject.toml', 'setup.py', 'requirements.txt'];
 
 /** Maps each stage to `npm run <script>` only for scripts the repo declares. */
@@ -38,6 +39,42 @@ function detectNode(repoRoot: string): DetectedChecks {
   };
 }
 
+/**
+ * Returns true when the repo uses CSharpier as its formatter.
+ * Detected via a .csharpierignore file at the root OR a 'csharpier' entry
+ * in .config/dotnet-tools.json (the standard local tools manifest).
+ */
+function hasCsharpier(repoRoot: string): boolean {
+  if (existsSync(join(repoRoot, '.csharpierignore'))) return true;
+  const toolsManifest = join(repoRoot, '.config', 'dotnet-tools.json');
+  if (!existsSync(toolsManifest)) return false;
+  try {
+    const manifest = JSON.parse(readFileSync(toolsManifest, 'utf-8')) as { tools?: Record<string, unknown> };
+    return 'csharpier' in (manifest.tools ?? {});
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Builds the DetectedChecks for a .NET repo.
+ * @param repoRoot  - absolute path to the repo root
+ * @param slnSubdir - relative subdirectory containing the .sln (e.g. 'src'), or undefined if at root
+ */
+function detectDotnet(repoRoot: string, slnSubdir?: string): DetectedChecks {
+  const build = slnSubdir ? `dotnet build ${slnSubdir}` : 'dotnet build';
+
+  const lint = hasCsharpier(repoRoot)
+    ? 'dotnet tool restore && dotnet csharpier check .'
+    : 'dotnet format --verify-no-changes';
+
+  // A `run-tests` script is a common pattern for repos that wrap dotnet test
+  // with coverage reporting; prefer it over the bare dotnet test command.
+  const test = existsSync(join(repoRoot, 'run-tests')) ? './run-tests Unit' : 'dotnet test';
+
+  return { language: 'dotnet', build, lint, test };
+}
+
 export function detectChecks(repoRoot: string): DetectedChecks {
   if (existsSync(join(repoRoot, 'package.json'))) return detectNode(repoRoot);
 
@@ -47,9 +84,25 @@ export function detectChecks(repoRoot: string): DetectedChecks {
   } catch {
     // Unreadable root: fall through to unknown, honoring loader.ts's never-throw contract.
   }
+
+  // .sln/.csproj at the repo root
   if (rootEntries.some((name) => DOTNET_PROJECT_SUFFIXES.some((suffix) => name.endsWith(suffix)))) {
-    return { language: 'dotnet', build: 'dotnet build', lint: 'dotnet format --verify-no-changes', test: 'dotnet test' };
+    return detectDotnet(repoRoot);
   }
+
+  // .sln in a src/ subdirectory — a common layout where source lives one level down
+  const srcDir = join(repoRoot, 'src');
+  if (existsSync(srcDir)) {
+    try {
+      const srcEntries = readdirSync(srcDir);
+      if (srcEntries.some((name) => DOTNET_SOLUTION_SUFFIXES.some((suffix) => name.endsWith(suffix)))) {
+        return detectDotnet(repoRoot, 'src');
+      }
+    } catch {
+      // Ignore readdir errors on the src/ subdirectory.
+    }
+  }
+
   if (existsSync(join(repoRoot, 'go.mod'))) {
     return { language: 'go', build: 'go build ./...', lint: 'go vet ./...', test: 'go test ./...' };
   }

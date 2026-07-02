@@ -10,7 +10,7 @@ import type { CreateMrArgs, ForgeClient } from './types.js';
 
 export interface GitlabAuth {
   host: string;
-  projectId: number;
+  projectId: number | string;
   token: string;
 }
 
@@ -23,14 +23,17 @@ export function resolveGitlabAuth(config: PipelineWorkerConfig): GitlabAuth {
   const token = process.env.PIPELINE_WORKER_GITLAB_TOKEN;
 
   if (!host) throw new Error('GitLab host is not configured (set gitlab.host in .pipeline-worker.yml or PIPELINE_WORKER_GITLAB_HOST).');
-  if (!projectId) throw new Error('GitLab projectId is not configured (set gitlab.projectId in .pipeline-worker.yml or PIPELINE_WORKER_GITLAB_PROJECT_ID).');
+  if (!projectId) throw new Error('GitLab projectId is not configured (set gitlab.projectId in .pipeline-worker.yml, PIPELINE_WORKER_GITLAB_PROJECT_ID, or PIPELINE_WORKER_GITLAB_REPO_BASE for auto-detection).');
   if (!token) throw new Error('PIPELINE_WORKER_GITLAB_TOKEN environment variable is not set.');
 
   return { host, projectId, token };
 }
 
 async function gitlabRequest(auth: GitlabAuth, path: string, init?: RequestInit): Promise<Response> {
-  const url = `${auth.host.replace(/\/$/, '')}/api/v4/projects/${auth.projectId}${path}`;
+  // String project paths (e.g. 'group/subgroup/project') must be URL-encoded
+  // so slashes don't collide with the API route structure.
+  const projectSegment = typeof auth.projectId === 'string' ? encodeURIComponent(auth.projectId) : auth.projectId;
+  const url = `${auth.host.replace(/\/$/, '')}/api/v4/projects/${projectSegment}${path}`;
   const res = await fetch(url, {
     ...init,
     headers: {
