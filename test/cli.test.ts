@@ -123,6 +123,7 @@ test('pipeline-worker serve returns a TOON-encoded envelope for get_pipeline_sta
   const { server, port } = await startGitlabStub();
   const probe = new McpProbe({
     ...process.env,
+    PIPELINE_WORKER_FORGE: 'gitlab',
     PIPELINE_WORKER_GITLAB_HOST: `http://127.0.0.1:${port}`,
     PIPELINE_WORKER_GITLAB_PROJECT_ID: '1',
     PIPELINE_WORKER_GITLAB_TOKEN: 'test-token',
