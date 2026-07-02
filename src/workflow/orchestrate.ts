@@ -11,6 +11,7 @@ import { runChecks } from './runChecks.js';
 import { openMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
 import { saveRunState } from '../state/runState.js';
+import { step, runStep, note } from '../ui/steps.js';
 import type { RunPhase, RunState } from '../types.js';
 
 /** Function-boundary read so TS reports the declared RunPhase union, not a narrowed literal. */
@@ -23,15 +24,24 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
   const forge = createForge(config);
   const agent = selectAgent(config);
 
-  const { diffText, untrackedFiles } = await captureDiff(repoRoot);
+  const { diffText, untrackedFiles } = await runStep(
+    'Capturing your changes',
+    'reading uncommitted edits and untracked files from your repo',
+    () => captureDiff(repoRoot),
+  );
   if (diffText.trim().length === 0 && untrackedFiles.length === 0) {
     console.log('pipeline-worker: no changes to process.');
     return;
   }
+  note(`${untrackedFiles.length} new file(s), ${diffText.split('\n').length} line(s) of diff`);
 
   const targetBranch = await currentBranch(repoRoot);
   const tempBranch = generateTempBranchName();
-  const worktreePath = await createWorktree(repoRoot, tempBranch);
+  const worktreePath = await runStep(
+    'Creating worktree',
+    `create worktree with name ${tempBranch}`,
+    () => createWorktree(repoRoot, tempBranch),
+  );
 
   let state: RunState = { branch: tempBranch, worktreePath, attempt: 0, phase: 'diff' };
   saveRunState(repoRoot, state);
@@ -49,14 +59,33 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
   process.once('SIGTERM', () => onSignal(143));
 
   try {
-    await applyDiffToWorktree(worktreePath, diffText, untrackedFiles, repoRoot);
+    await runStep(
+      'Applying your changes',
+      'replay your diff and untracked files into the new worktree',
+      () => applyDiffToWorktree(worktreePath, diffText, untrackedFiles, repoRoot),
+    );
 
-    const intent = await captureIntent(agent, diffText, worktreePath);
-    await renameBranch(worktreePath, intent.branchName);
+    const intent = await runStep(
+      'Understanding your changes',
+      `ask ${config.agent} to infer a branch name, commit message, and summary`,
+      () => captureIntent(agent, diffText, worktreePath),
+    );
+    note(`${config.agent} says: ${intent.summary}`);
+
+    await runStep(
+      'Checkout feature branch',
+      `switch to feature branch ${intent.branchName}`,
+      () => renameBranch(worktreePath, intent.branchName),
+    );
     state = { ...state, branch: intent.branchName, phase: 'intent' };
     saveRunState(repoRoot, state);
 
-    const checks = await runChecks(config, worktreePath);
+    const checks = await runStep(
+      'Running checks',
+      'build, lint, and test — whichever your repo has configured',
+      () => runChecks(config, worktreePath),
+    );
+    for (const check of checks) note(`${check.name}: ${check.ok ? 'passed' : 'failed'} (${(check.durationMs / 1000).toFixed(1)}s)`);
     const failedCheck = checks.find((c) => !c.ok);
     if (failedCheck) {
       console.error(
@@ -68,9 +97,13 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
     state.phase = 'checks';
     saveRunState(repoRoot, state);
 
-    // applyDiffToWorktree left everything staged; without this commit the
-    // push would carry no changes and the MR would be empty.
-    await commit(worktreePath, intent.commitMessage);
+    await runStep(
+      'Committing changes',
+      `commit message: "${intent.commitMessage}"`,
+      // applyDiffToWorktree left everything staged; without this commit the
+      // push would carry no changes and the MR would be empty.
+      () => commit(worktreePath, intent.commitMessage),
+    );
 
     const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent);
     state.mrIid = mr.iid;
@@ -84,9 +117,9 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
     // 'mr' literal it narrowed state.phase to just before the call.
     const finalPhase = readPhase(state);
     if (finalPhase === 'done') {
-      console.log(`pipeline-worker: MR ${mr.webUrl} passed CI.`);
+      step('Done', `MR ${mr.webUrl} passed CI`);
     } else if (finalPhase === 'escalated') {
-      console.log(`pipeline-worker: automated fixes exhausted — escalated to a human on ${mr.webUrl}.`);
+      step('Stopped for human review', `see ${mr.webUrl} for what was tried and why`);
       process.exitCode = 1;
     }
   } finally {

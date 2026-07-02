@@ -6,7 +6,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, cpSync, writeFileSync, unlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, cpSync, writeFileSync, unlinkSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
@@ -17,11 +17,25 @@ export function generateTempBranchName(): string {
   return `pipeline-worker/tmp-${randomUUID().slice(0, 8)}`;
 }
 
-/** Creates a new worktree off HEAD on a fresh branch, returning its path. */
+/**
+ * Creates a new worktree off HEAD on a fresh branch, returning its path.
+ *
+ * git worktrees don't include node_modules (it's gitignored, not tracked), so
+ * build/lint/test would otherwise fail on a missing toolchain in every repo
+ * that has one. Symlinking the source repo's node_modules in is the same
+ * trick turbo/lerna use for worktree-based tooling: instant, no network, and
+ * safe because node_modules is never part of the diff being tested.
+ */
 export async function createWorktree(repoRoot: string, branchName: string): Promise<string> {
   const parentDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-'));
   const worktreePath = join(parentDir, 'worktree');
   await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], { cwd: repoRoot });
+
+  const sourceNodeModules = join(repoRoot, 'node_modules');
+  if (existsSync(sourceNodeModules)) {
+    symlinkSync(sourceNodeModules, join(worktreePath, 'node_modules'), 'dir');
+  }
+
   return worktreePath;
 }
 
