@@ -1,0 +1,61 @@
+/**
+ * Toolchain detection: default build/lint/test commands for the target repo's
+ * language. An empty command means "no sensible default here" and the stage is
+ * skipped (see runChecks.ts). Explicit .pipeline-worker.yml values always win
+ * (see loader.ts). The first marker that matches decides; mixed-language repos
+ * should set the commands explicitly.
+ */
+
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+export interface DetectedChecks {
+  language: 'node' | 'dotnet' | 'go' | 'python' | 'unknown';
+  build: string;
+  lint: string;
+  test: string;
+}
+
+const DOTNET_PROJECT_SUFFIXES = ['.sln', '.slnx', '.csproj', '.fsproj', '.vbproj'];
+const PYTHON_MARKERS = ['pyproject.toml', 'setup.py', 'requirements.txt'];
+
+/** Maps each stage to `npm run <script>` only for scripts the repo declares. */
+function detectNode(repoRoot: string): DetectedChecks {
+  let scripts: Record<string, unknown>;
+  try {
+    const raw: unknown = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf-8')).scripts;
+    scripts = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  } catch {
+    // Corrupt/unreadable package.json: keep the npm commands so npm itself
+    // reports the real problem instead of the checks being silently skipped.
+    return { language: 'node', build: 'npm run build', lint: 'npm run lint', test: 'npm test' };
+  }
+  return {
+    language: 'node',
+    build: 'build' in scripts ? 'npm run build' : '',
+    lint: 'lint' in scripts ? 'npm run lint' : '',
+    test: 'test' in scripts ? 'npm test' : '',
+  };
+}
+
+export function detectChecks(repoRoot: string): DetectedChecks {
+  if (existsSync(join(repoRoot, 'package.json'))) return detectNode(repoRoot);
+
+  let rootEntries: string[] = [];
+  try {
+    rootEntries = readdirSync(repoRoot);
+  } catch {
+    // Unreadable root: fall through to unknown, honoring loader.ts's never-throw contract.
+  }
+  if (rootEntries.some((name) => DOTNET_PROJECT_SUFFIXES.some((suffix) => name.endsWith(suffix)))) {
+    return { language: 'dotnet', build: 'dotnet build', lint: 'dotnet format --verify-no-changes', test: 'dotnet test' };
+  }
+  if (existsSync(join(repoRoot, 'go.mod'))) {
+    return { language: 'go', build: 'go build ./...', lint: 'go vet ./...', test: 'go test ./...' };
+  }
+  if (PYTHON_MARKERS.some((marker) => existsSync(join(repoRoot, marker)))) {
+    // No universal python build/lint step; pytest is the de-facto test runner.
+    return { language: 'python', build: '', lint: '', test: 'pytest' };
+  }
+  return { language: 'unknown', build: '', lint: '', test: '' };
+}

@@ -13,9 +13,12 @@ gitlab:
 # github:
 #   repo: owner/name
 
-build: npm run build
-lint: npm run lint
-test: npm test
+# Check commands default to the repo's detected toolchain (Node/TypeScript,
+# .NET, Go, Python — see README "Check command auto-detection"). Uncomment to
+# override; an empty string ('') skips that stage.
+# build: npm run build
+# lint: npm run lint
+# test: npm test
 
 maxFixAttempts: 5
 pollIntervalSeconds: 15   # per-repo pipeline poll cadence; bump to 60 for slow pipelines

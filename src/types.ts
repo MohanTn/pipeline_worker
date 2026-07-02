@@ -14,6 +14,7 @@ export interface PipelineWorkerConfig {
     /** "owner/name" slug of the repository. */
     repo: string;
   };
+  /** Check commands; defaults are auto-detected per toolchain, '' skips the stage. */
   build: string;
   lint: string;
   test: string;

@@ -50,11 +50,24 @@ Resolution order per value: **real environment variable → `.env` at repo root 
 | — | `PIPELINE_WORKER_GITLAB_TOKEN` | — | GitLab API token (env only) |
 | `github.repo` | `PIPELINE_WORKER_GITHUB_REPO` | — | `owner/name` slug |
 | — | `PIPELINE_WORKER_GITHUB_TOKEN` | falls back to `GITHUB_TOKEN` | GitHub token (env only) |
-| `build` / `lint` / `test` | — | `npm run build` / `npm run lint` / `npm test` | local check commands |
+| `build` / `lint` / `test` | — | auto-detected (see below) | local check commands; set to `''` to skip a stage |
 | `maxFixAttempts` | — | `5` | agent fix attempts before escalating |
 | `pollIntervalSeconds` | `PIPELINE_WORKER_POLL_INTERVAL_SECONDS` | `15` | pipeline poll cadence; use `60` for slow pipelines |
 
 See [`.env.example`](.env.example) and [`.pipeline-worker.yml.example`](.pipeline-worker.yml.example) for annotated templates.
+
+### Check command auto-detection
+
+When `build` / `lint` / `test` are not set, pipeline-worker picks defaults from the repo's toolchain (first marker found wins; mixed-language repos should set the commands explicitly):
+
+| Toolchain | Marker | build | lint | test |
+| --- | --- | --- | --- | --- |
+| Node / TypeScript | `package.json` | `npm run build` | `npm run lint` | `npm test` — each only if the script is declared |
+| .NET | `*.sln` / `*.csproj` / `*.fsproj` / `*.vbproj` at root | `dotnet build` | `dotnet format --verify-no-changes` | `dotnet test` |
+| Go | `go.mod` | `go build ./...` | `go vet ./...` | `go test ./...` |
+| Python | `pyproject.toml` / `setup.py` / `requirements.txt` | — | — | `pytest` |
+
+A stage with no command (`—`, or `''` in the YAML) is skipped. If no toolchain is detected and no commands are configured, all local checks are skipped with a warning — configure them explicitly for any other stack (`build: make all`, etc.).
 
 ## Commands
 

@@ -19,7 +19,26 @@ test('loadConfig returns defaults when .pipeline-worker.yml is missing', () => {
     const config = loadConfig(dir);
     assert.equal(config.agent, 'claude');
     assert.equal(config.maxFixAttempts, 5);
+    assert.equal(config.build, ''); // no toolchain marker in an empty dir: checks are skipped
+  });
+});
+
+test('loadConfig defaults build/lint/test from detected npm scripts', () => {
+  withTempDir((dir) => {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x', test: 'y' } }));
+    const config = loadConfig(dir);
     assert.equal(config.build, 'npm run build');
+    assert.equal(config.lint, ''); // no lint script declared
+    assert.equal(config.test, 'npm test');
+  });
+});
+
+test('yaml check commands override detected defaults', () => {
+  withTempDir((dir) => {
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x' } }));
+    writeFileSync(join(dir, '.pipeline-worker.yml'), 'build: make all\n');
+    const config = loadConfig(dir);
+    assert.equal(config.build, 'make all');
   });
 });
 
@@ -34,7 +53,7 @@ test('loadConfig merges values from .pipeline-worker.yml over defaults', () => {
     assert.equal(config.gitlab.host, 'https://gitlab.example.com');
     assert.equal(config.gitlab.projectId, 99);
     assert.equal(config.maxFixAttempts, 2);
-    assert.equal(config.lint, 'npm run lint'); // untouched fields keep their default
+    assert.equal(config.lint, ''); // untouched fields keep their (detected) default
   });
 });
 

@@ -6,10 +6,10 @@
   "author": "Mohan TN <mohan.tn100@gmail.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MohanTn/pipeline-worker.git"
+    "url": "git+https://github.com/MohanTn/pipeline_worker.git"
   },
-  "bugs": "https://github.com/MohanTn/pipeline-worker/issues",
-  "homepage": "https://github.com/MohanTn/pipeline-worker#readme",
+  "bugs": "https://github.com/MohanTn/pipeline_worker/issues",
+  "homepage": "https://github.com/MohanTn/pipeline_worker#readme",
   "keywords": [
     "automation",
     "ci",

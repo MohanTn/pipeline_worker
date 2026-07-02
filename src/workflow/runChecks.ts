@@ -40,6 +40,7 @@ export async function runChecks(config: PipelineWorkerConfig, worktreePath: stri
 
   const results: CheckResult[] = [];
   for (const stage of stages) {
+    if (!stage.command.trim()) continue; // empty command = no default for this toolchain, stage skipped
     const result = await runStage(stage.name, stage.command, worktreePath);
     results.push(result);
     if (!result.ok) break;

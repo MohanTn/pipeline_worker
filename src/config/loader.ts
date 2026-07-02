@@ -1,7 +1,8 @@
 /**
  * .pipeline-worker.yml loader. Resolution order per value: environment variable ->
  * .env file at repo root (never overrides real env) -> .pipeline-worker.yml ->
- * built-in default. Config file path: explicit override param ->
+ * built-in default (for build/lint/test: commands auto-detected from the repo's
+ * toolchain, see detectChecks.ts). Config file path: explicit override param ->
  * PIPELINE_WORKER_CONFIG env var -> <repoRoot>/.pipeline-worker.yml. Never throws — a
  * missing or unparseable file falls back to defaults (with a warning),
  * mirroring mcp-sonar-analysis's registry.ts read/never-throw contract.
@@ -11,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { load } from 'js-yaml';
+import { detectChecks } from './detectChecks.js';
 import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
 
 const CONFIG_FILE_NAME = '.pipeline-worker.yml';
@@ -18,7 +20,8 @@ const CONFIG_FILE_NAME = '.pipeline-worker.yml';
 const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot'];
 const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
 
-const DEFAULT_CONFIG: PipelineWorkerConfig = {
+// build/lint/test defaults come from detectChecks(repoRoot) at load time.
+const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   agent: 'claude',
   forge: 'gitlab',
   gitlab: {
@@ -28,9 +31,6 @@ const DEFAULT_CONFIG: PipelineWorkerConfig = {
   github: {
     repo: '',
   },
-  build: 'npm run build',
-  lint: 'npm run lint',
-  test: 'npm test',
   maxFixAttempts: 5,
   pollIntervalSeconds: 15,
 };
@@ -80,6 +80,11 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
 
   const parsed = readYamlConfig(resolveConfigPath(repoRoot, override));
 
+  const detected = detectChecks(repoRoot);
+  if (detected.language === 'unknown' && parsed.build === undefined && parsed.lint === undefined && parsed.test === undefined) {
+    console.error(`Warning: could not detect the toolchain of ${repoRoot}; build/lint/test will be skipped. Set them in ${CONFIG_FILE_NAME}.`);
+  }
+
   // Each tier is validated independently: an invalid env value falls back to
   // a valid yaml value, not straight to the built-in default.
   return {
@@ -92,9 +97,9 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
     github: {
       repo: parsed.github?.repo ?? DEFAULT_CONFIG.github.repo,
     },
-    build: parsed.build ?? DEFAULT_CONFIG.build,
-    lint: parsed.lint ?? DEFAULT_CONFIG.lint,
-    test: parsed.test ?? DEFAULT_CONFIG.test,
+    build: parsed.build ?? detected.build,
+    lint: parsed.lint ?? detected.lint,
+    test: parsed.test ?? detected.test,
     maxFixAttempts: parsed.maxFixAttempts ?? DEFAULT_CONFIG.maxFixAttempts,
     pollIntervalSeconds: positiveNumber(
       process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS,
