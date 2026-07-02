@@ -8,7 +8,8 @@ export interface PipelineWorkerConfig {
   forge: ForgeName;
   gitlab: {
     host: string;
-    projectId: number;
+    projectId: number | string;
+    repoBase?: string; // optional local directory that mirrors the GitLab host root, for auto-detecting projectId
   };
   github: {
     /** "owner/name" slug of the repository. */

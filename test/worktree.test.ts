@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, rmSync, cpSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureDiff } from '../src/git/diff.js';
@@ -10,10 +10,11 @@ import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree } f
 
 const execFileAsync = promisify(execFile);
 const FIXTURE = join(import.meta.dirname, 'fixtures', 'sample-repo');
+const DOTNET_FIXTURE = join(import.meta.dirname, 'fixtures', 'sample-dotnet-repo');
 
-async function makeSampleRepo(): Promise<string> {
+async function makeSampleRepo(fixture: string = FIXTURE): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-repo-'));
-  cpSync(FIXTURE, dir, { recursive: true });
+  cpSync(fixture, dir, { recursive: true });
   await execFileAsync('git', ['init', '-q'], { cwd: dir });
   await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
   await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: dir });
@@ -46,6 +47,75 @@ test('createWorktree + applyDiffToWorktree carries a tracked-file change and an 
     assert.equal(existsSync(worktreePath), false);
     const { stdout: worktreeList } = await execFileAsync('git', ['worktree', 'list'], { cwd: repoRoot });
     assert.doesNotMatch(worktreeList, /tmp-test/);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('createWorktree + applyDiffToWorktree works the same for a non-Node (.NET) repo', async () => {
+  const repoRoot = await makeSampleRepo(DOTNET_FIXTURE);
+  try {
+    writeFileSync(join(repoRoot, 'Program.cs'), readFileSync(join(repoRoot, 'Program.cs'), 'utf-8').replace('hello', 'hello world'));
+    writeFileSync(join(repoRoot, 'NewFile.cs'), '// new file\n');
+
+    const { diffText, untrackedFiles } = await captureDiff(repoRoot);
+    assert.match(diffText, /hello world/);
+    assert.deepEqual(untrackedFiles, ['NewFile.cs']);
+
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-dotnet-test');
+    try {
+      await applyDiffToWorktree(worktreePath, diffText, untrackedFiles, repoRoot);
+
+      assert.match(readFileSync(join(worktreePath, 'Program.cs'), 'utf-8'), /hello world/);
+      assert.equal(readFileSync(join(worktreePath, 'NewFile.cs'), 'utf-8'), '// new file\n');
+      // No node_modules in a .NET repo: applyDiffToWorktree's symlink step must be a no-op, not a crash.
+      assert.equal(existsSync(join(worktreePath, 'node_modules')), false);
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+
+    assert.equal(existsSync(worktreePath), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('applyDiffToWorktree restores the node_modules symlink after replaying a diff that untracks a previously-committed node_modules', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    // Simulate a repo that once accidentally committed node_modules as a
+    // symlink pointing at its own absolute path (e.g. from a broken install
+    // script) — the same target linkNodeModules itself writes, so replaying
+    // the fix diff below looks like a no-op change to git and applies clean.
+    symlinkSync(join(repoRoot, 'node_modules'), join(repoRoot, 'node_modules'));
+    await execFileAsync('git', ['add', 'node_modules'], { cwd: repoRoot });
+    await execFileAsync('git', ['commit', '-q', '-m', 'oops: commit node_modules'], { cwd: repoRoot });
+
+    // Now simulate fixing that mistake: untrack the symlink and install real
+    // dependencies (gitignored) in its place — the PR under test.
+    await execFileAsync('git', ['rm', '--cached', '-q', 'node_modules'], { cwd: repoRoot });
+    rmSync(join(repoRoot, 'node_modules'));
+    mkdirSync(join(repoRoot, 'node_modules'));
+    writeFileSync(join(repoRoot, 'node_modules', 'marker.txt'), 'dep\n');
+    writeFileSync(join(repoRoot, '.gitignore'), 'node_modules/\n');
+    await execFileAsync('git', ['add', '.gitignore'], { cwd: repoRoot });
+
+    const { diffText, untrackedFiles } = await captureDiff(repoRoot);
+    assert.match(diffText, /deleted file mode 120000/);
+    assert.deepEqual(untrackedFiles, []); // node_modules is gitignored, so it's not "untracked"
+
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-nm-test');
+    try {
+      // HEAD still has the symlink tracked (the fix above is uncommitted), so
+      // git worktree add checks it out as-is; applyDiffToWorktree both
+      // replays the deletion and, once done, symlinks node_modules to
+      // repoRoot's real dependencies for the checks that run afterward.
+      await applyDiffToWorktree(worktreePath, diffText, untrackedFiles, repoRoot);
+
+      assert.equal(readFileSync(join(worktreePath, 'node_modules', 'marker.txt'), 'utf-8'), 'dep\n');
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
   }

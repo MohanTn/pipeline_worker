@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { load } from 'js-yaml';
 import { detectChecks } from './detectChecks.js';
+import { deriveProjectPath } from '../git/resolveProjectPath.js';
 import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
 
 const CONFIG_FILE_NAME = '.pipeline-worker.yml';
@@ -87,15 +88,37 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
 
   // Each tier is validated independently: an invalid env value falls back to
   // a valid yaml value, not straight to the built-in default.
+
+  // Resolve the repoBase: env var wins over YAML value
+  const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE || parsed.gitlab?.repoBase;
+
+  // Resolve projectId: YAML value is authoritative; when unset, fall back to
+  // auto-detecting a string path from repoBase. projectId can legitimately be
+  // a string (a 'group/subgroup/project' path), so it is kept as-is below
+  // rather than coerced through positiveNumber, which is number-only.
+  let resolvedProjectId: number | string = parsed.gitlab?.projectId ?? DEFAULT_CONFIG.gitlab.projectId;
+  if (!resolvedProjectId && repoBase) {
+    try {
+      resolvedProjectId = deriveProjectPath(repoBase, repoRoot);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Warning: ${message}`);
+    }
+  }
+
+  // The env var override is numeric-only (GitLab numeric project IDs); an
+  // unset or invalid value falls back to the yaml/auto-detected resolution
+  // above, which may be a string path.
+  const envProjectId = positiveNumber(process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID, NaN);
+  const projectId = Number.isNaN(envProjectId) ? resolvedProjectId : envProjectId;
+
   return {
     agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, pickName(parsed.agent, AGENT_NAMES, DEFAULT_CONFIG.agent)),
     forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, pickName(parsed.forge, FORGE_NAMES, DEFAULT_CONFIG.forge)),
     gitlab: {
       host: process.env.PIPELINE_WORKER_GITLAB_HOST || parsed.gitlab?.host || DEFAULT_CONFIG.gitlab.host,
-      projectId: positiveNumber(
-        process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID,
-        positiveNumber(parsed.gitlab?.projectId, DEFAULT_CONFIG.gitlab.projectId),
-      ),
+      projectId,
+      repoBase,
     },
     github: {
       repo: process.env.PIPELINE_WORKER_GITHUB_REPO || parsed.github?.repo || DEFAULT_CONFIG.github.repo,

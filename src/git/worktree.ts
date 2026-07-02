@@ -19,24 +19,39 @@ export function generateTempBranchName(): string {
 }
 
 /**
- * Creates a new worktree off HEAD on a fresh branch, returning its path.
- *
- * git worktrees don't include node_modules (it's gitignored, not tracked), so
+ * Points worktreePath/node_modules at repoRoot/node_modules. git worktrees
+ * don't include node_modules (it's normally gitignored, not tracked), so
  * build/lint/test would otherwise fail on a missing toolchain in every repo
  * that has one. Symlinking the source repo's node_modules in is the same
  * trick turbo/lerna use for worktree-based tooling: instant, no network, and
  * safe because node_modules is never part of the diff being tested.
+ *
+ * Called only from applyDiffToWorktree, once the diff is fully applied —
+ * never from createWorktree. If node_modules was ever accidentally
+ * committed (as happened in this very repo), `git apply` needs to see the
+ * worktree exactly as `git worktree add` checked it out; pre-placing a
+ * symlink here would make that tracked path's working-tree content diverge
+ * from git's index before git apply runs, and its behavior on a mismatch
+ * ranges from silently dropping the symlink to rejecting the hunk outright.
+ * Linking only after the apply step sidesteps that entirely.
  */
+function linkNodeModules(repoRoot: string, worktreePath: string): void {
+  const sourceNodeModules = join(repoRoot, 'node_modules');
+  if (!existsSync(sourceNodeModules)) return;
+  const destNodeModules = join(worktreePath, 'node_modules');
+  try {
+    unlinkSync(destNodeModules);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  symlinkSync(sourceNodeModules, destNodeModules, 'dir');
+}
+
+/** Creates a new worktree off HEAD on a fresh branch, returning its path. */
 export async function createWorktree(repoRoot: string, branchName: string): Promise<string> {
   const parentDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-'));
   const worktreePath = join(parentDir, 'worktree');
   await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], { cwd: repoRoot });
-
-  const sourceNodeModules = join(repoRoot, 'node_modules');
-  if (existsSync(sourceNodeModules)) {
-    symlinkSync(sourceNodeModules, join(worktreePath, 'node_modules'), 'dir');
-  }
-
   return worktreePath;
 }
 
@@ -102,6 +117,8 @@ export async function applyDiffToWorktree(
   if (untrackedFiles.length > 0 && conflictedFiles.length === 0) {
     await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
   }
+
+  linkNodeModules(repoRoot, worktreePath);
 
   return { conflicted: conflictedFiles.length > 0, conflictedFiles };
 }

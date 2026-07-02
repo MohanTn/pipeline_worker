@@ -6,6 +6,8 @@
 
 Automate the last mile of your local changes: pipeline-worker takes the uncommitted diff in your repo and drives it — unattended — to a green merge request.
 
+![pipeline-worker driving an uncommitted diff into a green MR](photo/Screenshot%20From%202026-07-02%2013-08-46.png)
+
 1. Captures your staged + unstaged changes (your working tree is never touched).
 2. Replays them in a disposable git worktree.
 3. Asks a coding agent (Claude Code or GitHub Copilot CLI) to infer the intent: branch name, commit message, summary.

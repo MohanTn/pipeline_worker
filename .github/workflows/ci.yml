@@ -26,12 +26,13 @@ jobs:
       - run: npm test
 
   publish:
-    # Release on merge to main; NPM_TOKEN comes from the repo's Actions secrets.
+    # Release on merge to main: bump the patch version, push it back, then publish.
+    # NPM_TOKEN comes from the repo's Actions secrets.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write # push the version bump commit/tag
       id-token: write # npm provenance attestation
     steps:
       - uses: actions/checkout@v4
@@ -41,14 +42,13 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: npm
       - run: npm ci
-      - name: Publish to npm when package.json holds a new version
+      - name: Bump version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          npm version patch -m "chore(release): %s [skip ci]"
+          git push origin HEAD:main --follow-tags
+      - name: Publish to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          name=$(node -p "require('./package.json').name")
-          version=$(node -p "require('./package.json').version")
-          if [ "$(npm view "$name@$version" version 2>/dev/null)" = "$version" ]; then
-            echo "$name@$version is already on npm — nothing to publish."
-          else
-            npm publish
-          fi
+        run: npm publish
