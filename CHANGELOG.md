@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on 
 
 - Language-agnostic check defaults: `build` / `lint` / `test` are auto-detected from the repo's toolchain — npm scripts (Node/TypeScript), .NET (`dotnet build/format/test`), Go (`go build/vet/test ./...`), Python (`pytest`). Explicit config always wins; an empty command skips the stage.
 
+### Changed
+
+- Removed the shipped `.env.example` / `.pipeline-worker.yml.example` templates. Real environment variables already take precedence over both files, so exporting `PIPELINE_WORKER_*` once in your shell profile now covers global setup across every repo — see the README Quick start. Per-repo `.env` / `.pipeline-worker.yml` are still supported as optional local overrides.
+
 ## [0.1.0] - 2026-07-01
 
 ### Added
