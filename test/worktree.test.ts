@@ -80,6 +80,37 @@ test('createWorktree + applyDiffToWorktree works the same for a non-Node (.NET) 
   }
 });
 
+test('createWorktree + applyDiffToWorktree carries a modified binary file', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    const iconPath = join(repoRoot, 'icon.bin');
+    writeFileSync(iconPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0x02, 0x03]));
+    await execFileAsync('git', ['add', 'icon.bin'], { cwd: repoRoot });
+    await execFileAsync('git', ['commit', '-q', '-m', 'add binary icon'], { cwd: repoRoot });
+
+    // Modify the tracked binary file so captureDiff must represent the change
+    // as a binary patch, not a "Binary files ... differ" stub.
+    writeFileSync(iconPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xee, 0xdd, 0xcc]));
+
+    const { diffText, untrackedFiles } = await captureDiff(repoRoot);
+    assert.match(diffText, /GIT binary patch/);
+
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-binary-test');
+    try {
+      await applyDiffToWorktree(worktreePath, diffText, untrackedFiles, repoRoot);
+
+      assert.deepEqual(
+        readFileSync(join(worktreePath, 'icon.bin')),
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xee, 0xdd, 0xcc]),
+      );
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('applyDiffToWorktree restores the node_modules symlink after replaying a diff that untracks a previously-committed node_modules', async () => {
   const repoRoot = await makeSampleRepo();
   try {
