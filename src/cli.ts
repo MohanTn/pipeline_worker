@@ -52,7 +52,7 @@ program
       const config = loadConfig(repoRoot);
       const forge = createForge(config);
       const agent = selectAgent(config);
-      await watchPipeline(forge, config, agent, state.worktreePath, state.branch, state.mrIid, state, repoRoot);
+      await watchPipeline(forge, config, agent, state.worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
       console.log(`pipeline-worker: resumed run finished with phase "${state.phase}".`);
     } catch (error) {
       console.error('pipeline-worker resume failed:', error instanceof Error ? error.message : error);

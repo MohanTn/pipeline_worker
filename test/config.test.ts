@@ -122,6 +122,22 @@ test('loadConfig reads forge, github.repo, and pollIntervalSeconds from yaml', (
   });
 });
 
+test('env vars override yaml for github.repo and gitlab.host/projectId', () => {
+  withTempDir((dir) => {
+    writeFileSync(
+      join(dir, '.pipeline-worker.yml'),
+      'github:\n  repo: yaml-owner/yaml-repo\ngitlab:\n  host: https://yaml.example.com\n  projectId: 1\n',
+    );
+    process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
+    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://env.example.com';
+    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = '99';
+    const config = loadConfig(dir);
+    assert.equal(config.github.repo, 'env-owner/env-repo');
+    assert.equal(config.gitlab.host, 'https://env.example.com');
+    assert.equal(config.gitlab.projectId, 99);
+  });
+});
+
 test('env vars override yaml for agent, forge, and poll interval', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, '.pipeline-worker.yml'), 'agent: claude\nforge: gitlab\npollIntervalSeconds: 15\n');
