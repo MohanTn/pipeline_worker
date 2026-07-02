@@ -1,6 +1,7 @@
 /** Steps 6-7: push the branch and open (or reuse) an MR/PR describing the workflow that produced it. */
 
 import { push } from '../git/commit.js';
+import { runStep, note } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { CapturedIntent, MergeRequest } from '../types.js';
 
@@ -12,10 +13,13 @@ export async function openMergeRequest(
   intent: CapturedIntent,
   agentName: string,
 ): Promise<MergeRequest> {
-  await push(worktreePath, 'origin', branch);
+  await runStep('Pushing your branch', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
 
   const existing = await forge.findExistingMr(branch);
-  if (existing) return existing;
+  if (existing) {
+    note(`reusing existing merge request ${existing.webUrl}`);
+    return existing;
+  }
 
   const description =
     `${intent.summary}\n\n` +
@@ -24,10 +28,11 @@ export async function openMergeRequest(
     'build/lint/test passed locally before this MR was opened. ' +
     'If the pipeline fails, pipeline-worker will attempt automated fixes (up to the configured retry cap) before escalating here.';
 
-  return forge.createMergeRequest({
-    sourceBranch: branch,
-    targetBranch,
-    title: intent.commitMessage,
-    description,
-  });
+  const mr = await runStep(
+    'Opening merge request',
+    `target branch: ${targetBranch}`,
+    () => forge.createMergeRequest({ sourceBranch: branch, targetBranch, title: intent.commitMessage, description }),
+  );
+  note(mr.webUrl);
+  return mr;
 }
