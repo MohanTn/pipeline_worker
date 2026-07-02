@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { Command } from 'commander';
 import { runWorkflow } from './workflow/orchestrate.js';
 import { watchPipeline } from './workflow/watchPipeline.js';
@@ -9,9 +12,13 @@ import { selectAgent } from './agent/index.js';
 import { loadRunState } from './state/runState.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
+
 const program = new Command();
 
 program.name('pipeline-worker').description('Automated git-worktree -> agent-fix -> GitLab/GitHub MR workflow');
+program.version(pkg.version, '-v, --version', 'output the installed pipeline-worker version');
 
 program
   .command('run', { isDefault: true })
