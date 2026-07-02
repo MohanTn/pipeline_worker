@@ -16,6 +16,7 @@ import type { AgentAdapter } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges } from '../git/commit.js';
 import type { ForgeClient } from '../forge/types.js';
 import { saveRunState } from '../state/runState.js';
+import { step, runStep, note } from '../ui/steps.js';
 import type { PipelineWorkerConfig, Pipeline, PipelineJob, RunState } from '../types.js';
 
 const MAX_POLL_WINDOW_MS = 2 * 60 * 60 * 1000; // per pipeline attempt, as a safety net
@@ -68,7 +69,7 @@ function buildFixPrompt(pipeline: Pipeline, jobs: Array<{ job: PipelineJob; log:
 }
 
 async function escalate(forge: ForgeClient, mrIid: number, message: string, state: RunState, repoRoot: string): Promise<void> {
-  await forge.createMrNote(mrIid, message);
+  await runStep(10, '🚨', 'Escalating to a human', message, () => forge.createMrNote(mrIid, message));
   state.phase = 'escalated';
   saveRunState(repoRoot, state);
 }
@@ -89,7 +90,14 @@ export async function watchPipeline(
 
   let previousPipelineId: number | undefined;
   for (;;) {
-    const pipeline = await pollLatestPipeline(forge, mrIid, intervalMs, previousPipelineId);
+    const pipeline = await runStep(
+      10,
+      '👀',
+      'Watching pipeline',
+      `poll CI every ${config.pollIntervalSeconds}s until it finishes`,
+      () => pollLatestPipeline(forge, mrIid, intervalMs, previousPipelineId),
+    );
+    note(`pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
     state.pipelineId = pipeline.id;
     saveRunState(repoRoot, state);
 
@@ -114,6 +122,7 @@ export async function watchPipeline(
     state.attempt += 1;
     saveRunState(repoRoot, state);
 
+    step('💥', 'Pipeline failed', `attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
     if (state.attempt > config.maxFixAttempts) {
       await escalate(
         forge,
@@ -126,20 +135,27 @@ export async function watchPipeline(
       return;
     }
 
-    const failedJobs = await forge.getFailedJobs(pipeline.id);
-    const logs = await Promise.all(failedJobs.map(async (job) => ({ job, log: await forge.getJobLog(job.id) })));
+    const { failedJobs, logs } = await runStep(10, '🔍', 'Diagnosing the failure', `reading logs for ${pipeline.webUrl}`, async () => {
+      const jobs = await forge.getFailedJobs(pipeline.id);
+      const jobLogs = await Promise.all(jobs.map(async (job) => ({ job, log: await forge.getJobLog(job.id) })));
+      return { failedJobs: jobs, logs: jobLogs };
+    });
+    note(failedJobs.length > 0 ? failedJobs.map((job) => job.name).join(', ') : 'no specific job names reported');
 
     const mcpConfigPath = writeAgentMcpConfig();
+    let agentResponse: string;
     try {
-      await agent.invoke({
-        prompt: buildFixPrompt(pipeline, logs),
-        cwd: worktreePath,
-        mcpConfigPath,
-        permissionMode: 'acceptEdits',
-      });
+      agentResponse = await runStep(
+        10,
+        '🔧',
+        'Fixing CI failure',
+        `asking the agent to fix ${failedJobs.length} failed job(s)`,
+        async () => (await agent.invoke({ prompt: buildFixPrompt(pipeline, logs), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' })).text,
+      );
     } finally {
       unlinkSync(mcpConfigPath);
     }
+    note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
 
     if (!(await hasChanges(worktreePath))) {
       // Re-pushing an identical tree would never produce a new pipeline; stop here.
@@ -153,9 +169,11 @@ export async function watchPipeline(
       return;
     }
 
-    await stageAll(worktreePath);
-    await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
-    await push(worktreePath, 'origin', branch);
+    await runStep(10, '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
+      await stageAll(worktreePath);
+      await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
+      await push(worktreePath, 'origin', branch);
+    });
     previousPipelineId = pipeline.id;
   }
 }

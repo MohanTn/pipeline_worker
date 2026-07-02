@@ -17,8 +17,11 @@ export interface GithubAuth {
 }
 
 export function resolveGithubAuth(config: PipelineWorkerConfig): GithubAuth {
+  // config.github.repo is already env/.env/yaml-resolved by config/loader.ts;
+  // only the token (never read from yaml) and the API URL override are read
+  // directly from the environment here.
   const apiUrl = process.env.PIPELINE_WORKER_GITHUB_API_URL || 'https://api.github.com';
-  const repo = process.env.PIPELINE_WORKER_GITHUB_REPO || config.github.repo;
+  const repo = config.github.repo;
   const token = process.env.PIPELINE_WORKER_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
 
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) {

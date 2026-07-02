@@ -11,6 +11,8 @@ export interface AgentInvokeOptions {
   mcpConfigPath?: string;
   /** Optional permission mode override; adapters default to an auto-accept mode suitable for unattended runs. */
   permissionMode?: string;
+  /** Optional model override (e.g. "haiku"), for adapters that support per-invocation model selection. */
+  model?: string;
 }
 
 export interface AgentInvokeResult {

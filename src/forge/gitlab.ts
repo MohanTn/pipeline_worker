@@ -15,9 +15,11 @@ export interface GitlabAuth {
 }
 
 export function resolveGitlabAuth(config: PipelineWorkerConfig): GitlabAuth {
-  const host = process.env.PIPELINE_WORKER_GITLAB_HOST || config.gitlab.host;
-  const projectIdEnv = process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID;
-  const projectId = projectIdEnv ? Number(projectIdEnv) : config.gitlab.projectId;
+  // config.gitlab.host/projectId are already env/.env/yaml-resolved by
+  // config/loader.ts; only the token (never read from yaml) is read
+  // directly from the environment here.
+  const host = config.gitlab.host;
+  const projectId = config.gitlab.projectId;
   const token = process.env.PIPELINE_WORKER_GITLAB_TOKEN;
 
   if (!host) throw new Error('GitLab host is not configured (set gitlab.host in .pipeline-worker.yml or PIPELINE_WORKER_GITLAB_HOST).');

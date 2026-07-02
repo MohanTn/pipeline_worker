@@ -33,10 +33,25 @@ export interface RunState {
   phase: RunPhase;
 }
 
+export type RiskLevel = 'low' | 'medium' | 'high';
+
+export interface FileChangeSummary {
+  file: string;
+  summary: string;
+}
+
 export interface CapturedIntent {
+  /** One short sentence: why this change exists / what problem it solves. */
+  intent: string;
   summary: string;
   branchName: string;
   commitMessage: string;
+  fileChanges: FileChangeSummary[];
+  risk: RiskLevel;
+  /** One short sentence justifying the risk level. */
+  riskReason: string;
+  /** Concrete scenarios a reviewer should verify before merging. */
+  testScenarios: string[];
 }
 
 export interface CheckResult {

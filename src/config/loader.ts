@@ -91,11 +91,14 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
     agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, pickName(parsed.agent, AGENT_NAMES, DEFAULT_CONFIG.agent)),
     forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, pickName(parsed.forge, FORGE_NAMES, DEFAULT_CONFIG.forge)),
     gitlab: {
-      host: parsed.gitlab?.host ?? DEFAULT_CONFIG.gitlab.host,
-      projectId: parsed.gitlab?.projectId ?? DEFAULT_CONFIG.gitlab.projectId,
+      host: process.env.PIPELINE_WORKER_GITLAB_HOST || parsed.gitlab?.host || DEFAULT_CONFIG.gitlab.host,
+      projectId: positiveNumber(
+        process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID,
+        positiveNumber(parsed.gitlab?.projectId, DEFAULT_CONFIG.gitlab.projectId),
+      ),
     },
     github: {
-      repo: parsed.github?.repo ?? DEFAULT_CONFIG.github.repo,
+      repo: process.env.PIPELINE_WORKER_GITHUB_REPO || parsed.github?.repo || DEFAULT_CONFIG.github.repo,
     },
     build: parsed.build ?? detected.build,
     lint: parsed.lint ?? detected.lint,

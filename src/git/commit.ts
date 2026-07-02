@@ -32,3 +32,17 @@ export async function currentBranch(cwd: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
   return stdout.trim();
 }
+
+/** Reads git config user.name/user.email for display purposes; never throws — unset config just reads as ''. */
+export async function getGitUser(cwd: string): Promise<{ name: string; email: string }> {
+  async function readConfig(key: string): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync('git', ['config', key], { cwd });
+      return stdout.trim();
+    } catch {
+      return '';
+    }
+  }
+  const [name, email] = await Promise.all([readConfig('user.name'), readConfig('user.email')]);
+  return { name, email };
+}

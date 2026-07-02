@@ -1,9 +1,37 @@
-import { test } from 'node:test';
+import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config/loader.js';
+
+/**
+ * These tests assert on loadConfig's default/yaml-only resolution, which
+ * only holds with a clean environment. A real .env (e.g. this repo's own,
+ * loaded whenever pipeline-worker runs on itself) sets these for the whole
+ * process, so isolate each test from whatever the ambient environment holds.
+ */
+const ENV_PREFIX = 'PIPELINE_WORKER_';
+let savedEnv: Record<string, string | undefined> = {};
+
+beforeEach(() => {
+  savedEnv = {};
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(ENV_PREFIX)) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  }
+});
+
+afterEach(() => {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith(ENV_PREFIX)) delete process.env[key];
+  }
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value !== undefined) process.env[key] = value;
+  }
+});
 
 function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-config-test-'));
@@ -94,22 +122,32 @@ test('loadConfig reads forge, github.repo, and pollIntervalSeconds from yaml', (
   });
 });
 
+test('env vars override yaml for github.repo and gitlab.host/projectId', () => {
+  withTempDir((dir) => {
+    writeFileSync(
+      join(dir, '.pipeline-worker.yml'),
+      'github:\n  repo: yaml-owner/yaml-repo\ngitlab:\n  host: https://yaml.example.com\n  projectId: 1\n',
+    );
+    process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
+    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://env.example.com';
+    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = '99';
+    const config = loadConfig(dir);
+    assert.equal(config.github.repo, 'env-owner/env-repo');
+    assert.equal(config.gitlab.host, 'https://env.example.com');
+    assert.equal(config.gitlab.projectId, 99);
+  });
+});
+
 test('env vars override yaml for agent, forge, and poll interval', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, '.pipeline-worker.yml'), 'agent: claude\nforge: gitlab\npollIntervalSeconds: 15\n');
     process.env.PIPELINE_WORKER_AGENT = 'copilot';
     process.env.PIPELINE_WORKER_FORGE = 'github';
     process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '60';
-    try {
-      const config = loadConfig(dir);
-      assert.equal(config.agent, 'copilot');
-      assert.equal(config.forge, 'github');
-      assert.equal(config.pollIntervalSeconds, 60);
-    } finally {
-      delete process.env.PIPELINE_WORKER_AGENT;
-      delete process.env.PIPELINE_WORKER_FORGE;
-      delete process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS;
-    }
+    const config = loadConfig(dir);
+    assert.equal(config.agent, 'copilot');
+    assert.equal(config.forge, 'github');
+    assert.equal(config.pollIntervalSeconds, 60);
   });
 });
 
@@ -127,14 +165,9 @@ test('.env at repo root supplies defaults but never overrides real env', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, '.env'), 'PIPELINE_WORKER_FORGE=github\nPIPELINE_WORKER_POLL_INTERVAL_SECONDS=60\n');
     process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '30'; // real env wins over .env
-    try {
-      const config = loadConfig(dir);
-      assert.equal(config.forge, 'github'); // came from .env
-      assert.equal(config.pollIntervalSeconds, 30);
-    } finally {
-      delete process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS;
-      delete process.env.PIPELINE_WORKER_FORGE; // loadDotEnv set it from the file
-    }
+    const config = loadConfig(dir);
+    assert.equal(config.forge, 'github'); // came from .env
+    assert.equal(config.pollIntervalSeconds, 30);
   });
 });
 
@@ -143,11 +176,7 @@ test('loadConfig honors PIPELINE_WORKER_CONFIG env var when no override param is
     const altPath = join(dir, 'env.yml');
     writeFileSync(altPath, 'maxFixAttempts: 1\n');
     process.env.PIPELINE_WORKER_CONFIG = altPath;
-    try {
-      const config = loadConfig(dir);
-      assert.equal(config.maxFixAttempts, 1);
-    } finally {
-      delete process.env.PIPELINE_WORKER_CONFIG;
-    }
+    const config = loadConfig(dir);
+    assert.equal(config.maxFixAttempts, 1);
   });
 });

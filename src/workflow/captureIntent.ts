@@ -4,34 +4,103 @@ import { z } from 'zod';
 import type { AgentAdapter } from '../agent/types.js';
 import type { CapturedIntent } from '../types.js';
 
+const COMMIT_MESSAGE_MAX_LENGTH = 72;
+
+/**
+ * Naming a branch/commit/summary from a diff needs no deep reasoning, so a
+ * lighter model keeps this step's token cost down. Adapters that don't
+ * support per-invocation model selection (e.g. copilot) just ignore this.
+ * The CI-fix path (watchPipeline.ts) deliberately does NOT set this — fixing
+ * a real failing build needs the stronger default model.
+ */
+const INTENT_MODEL = 'haiku';
+
+const RISK_CRITERIA =
+  'low: the change is isolated to independent components with a small blast radius. ' +
+  'medium: the change touches a shared/dependent component, but that component is well covered by existing unit tests. ' +
+  "high: the change touches existing/critical code paths and needs a human reviewer's attention before merging.";
+
 const INTENT_SCHEMA = {
   type: 'object',
   properties: {
-    summary: { type: 'string', description: 'One or two sentence description of what this change does and why' },
+    intent: { type: 'string', description: 'One short sentence, no line breaks: why this change exists / what problem it solves.' },
+    summary: { type: 'string', description: 'One or two sentences (single line, no line breaks) on what this change does and why' },
     branchName: { type: 'string', description: 'A short kebab-case branch name, prefixed with pipeline-worker/' },
-    commitMessage: { type: 'string', description: 'A conventional-commit-style commit message for this change' },
+    commitMessage: {
+      type: 'string',
+      maxLength: COMMIT_MESSAGE_MAX_LENGTH,
+      description:
+        `A single-line conventional-commit subject (e.g. "fix: handle empty diff"), max ${COMMIT_MESSAGE_MAX_LENGTH} characters. ` +
+        'Used verbatim as both the git commit message and the MR/PR title — no body, bullet list, or line breaks.',
+    },
+    fileChanges: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          file: { type: 'string', description: 'The file path (single line).' },
+          summary: { type: 'string', description: 'A single-line summary of what changed in that file.' },
+        },
+        required: ['file', 'summary'],
+      },
+      description: 'One entry per file touched in the diff, each a single-line summary of what changed in that file.',
+    },
+    risk: { type: 'string', enum: ['low', 'medium', 'high'], description: RISK_CRITERIA },
+    riskReason: { type: 'string', description: 'One short sentence (no line breaks) justifying the risk level.' },
+    testScenarios: {
+      type: 'array',
+      items: { type: 'string', description: 'A single-line test scenario a reviewer should verify before merging.' },
+      description: 'Concrete test scenarios (each a single line) a reviewer should verify before merging.',
+    },
   },
-  required: ['summary', 'branchName', 'commitMessage'],
+  required: ['intent', 'summary', 'branchName', 'commitMessage', 'fileChanges', 'risk', 'riskReason', 'testScenarios'],
 } as const;
+
+/**
+ * Every one of these fields is rendered by openMergeRequest.ts's
+ * buildDescription() as a single inline line or bullet, so — like
+ * commitMessage — none of them may contain a newline, or they'd break the
+ * MR/PR description's formatting.
+ */
+function singleLine(fieldName: string) {
+  return z
+    .string()
+    .min(1)
+    .refine((s) => !s.includes('\n'), `${fieldName} must be a single line`);
+}
 
 /**
  * Agent output is untrusted input: validate the shape and constrain the
  * branch name to characters that are safe as a git ref and a URL segment.
+ * commitMessage doubles as the MR/PR title (see openMergeRequest.ts), so it
+ * must stay a single line short enough to render as one.
  */
 const IntentShape = z.object({
-  summary: z.string().min(1),
+  intent: singleLine('intent'),
+  summary: singleLine('summary'),
   branchName: z.string().regex(/^pipeline-worker\/[A-Za-z0-9][A-Za-z0-9._-]*$/, 'branchName must be pipeline-worker/<kebab-case-name>'),
-  commitMessage: z.string().min(1),
+  commitMessage: z
+    .string()
+    .min(1)
+    .max(COMMIT_MESSAGE_MAX_LENGTH)
+    .refine((s) => !s.includes('\n'), 'commitMessage must be a single line (it doubles as the MR/PR title)'),
+  fileChanges: z.array(z.object({ file: singleLine('fileChanges[].file'), summary: singleLine('fileChanges[].summary') })).min(1),
+  risk: z.enum(['low', 'medium', 'high']),
+  riskReason: singleLine('riskReason'),
+  testScenarios: z.array(singleLine('testScenarios[]')).min(1),
 });
 
 export async function captureIntent(agent: AgentAdapter, diffText: string, worktreePath: string): Promise<CapturedIntent> {
   const prompt =
     'Read the following git diff and determine the intent behind it. ' +
-    'Respond with a JSON object matching the given schema: a short summary of what changed and why, ' +
-    'a kebab-case branch name prefixed with "pipeline-worker/", and a conventional-commit-style commit message.\n\n' +
+    'Respond with a JSON object matching the given schema: why this change exists, a short summary of what changed, ' +
+    'a kebab-case branch name prefixed with "pipeline-worker/", a short single-line conventional-commit ' +
+    `subject (max ${COMMIT_MESSAGE_MAX_LENGTH} characters, no body or bullet list, used verbatim as the MR/PR title), ` +
+    'a one-line summary per changed file, a risk level with a one-line justification ' +
+    `(${RISK_CRITERIA}), and the concrete test scenarios a reviewer should check before merging.\n\n` +
     `\`\`\`diff\n${diffText}\n\`\`\``;
 
-  const result = await agent.invoke({ prompt, cwd: worktreePath, jsonSchema: INTENT_SCHEMA });
+  const result = await agent.invoke({ prompt, cwd: worktreePath, jsonSchema: INTENT_SCHEMA, model: INTENT_MODEL });
   try {
     return IntentShape.parse(JSON.parse(result.text));
   } catch (error) {
