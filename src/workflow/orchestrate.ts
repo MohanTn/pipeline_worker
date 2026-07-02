@@ -181,7 +181,8 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
     // 'mr' literal it narrowed state.phase to just before the call.
     const finalPhase = readPhase(state);
     if (finalPhase === 'done') {
-      step('🎉', 'Done', `MR ${mr.webUrl} passed CI`);
+      const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
+      step('🎉', 'Done', detail);
     } else if (finalPhase === 'escalated') {
       step('🚨', 'Stopped for human review', `see ${mr.webUrl} for what was tried and why`);
       process.exitCode = 1;
