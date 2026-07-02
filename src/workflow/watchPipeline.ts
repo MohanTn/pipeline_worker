@@ -100,8 +100,22 @@ function buildFixPrompt(pipeline: Pipeline, jobs: Array<{ job: PipelineJob; log:
   );
 }
 
+/**
+ * Renders an escalation note as a headline plus a per-stage checklist —
+ * the same ❌/⚠️ glyphs cli.ts prints for a failed/inconclusive stage (see
+ * ui/steps.ts's runStep), so what lands in the MR/PR matches what the user
+ * already watched scroll by in the terminal.
+ */
+function formatEscalationNote(headline: string, bullets: string[], footer: string): string {
+  return `🚨 **${headline}**\n\n${bullets.map((b) => `- ${b}`).join('\n')}\n\n${footer}`;
+}
+
 async function escalate(forge: ForgeClient, mrIid: number, message: string, state: RunState, repoRoot: string): Promise<void> {
-  await runStep(11, '🚨', 'Escalating to a human', message, () => forge.createMrNote(mrIid, message));
+  // message may be a multi-line checklist (see formatEscalationNote); runStep's
+  // detail line assumes single-line text (it doesn't collapse newlines the way
+  // note() does), so flatten it there while posting the full body to the MR/PR.
+  const detail = message.replace(/\s*\n\s*/g, ' ');
+  await runStep(11, '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
   state.phase = 'escalated';
   saveRunState(repoRoot, state);
 }
@@ -133,7 +147,11 @@ async function tryResolveConflicts(
     await escalate(
       forge,
       mrIid,
-      `pipeline-worker: automated fix attempts exhausted (${state.attempt - 1} attempts). This MR/PR still has merge conflicts and needs a human to resolve them.`,
+      formatEscalationNote(
+        `Automated fix attempts exhausted (${state.attempt - 1} attempt(s))`,
+        [`❌ Merge conflicts with \`origin/${targetBranch}\` could not be resolved automatically`],
+        'This MR/PR needs a human to resolve them.',
+      ),
       state,
       repoRoot,
     );
@@ -178,7 +196,11 @@ async function tryResolveConflicts(
       await escalate(
         forge,
         mrIid,
-        `pipeline-worker: agent left ${stillConflicted.length} file(s) still conflicted (${stillConflicted.join(', ')}) — escalating to a human.`,
+        formatEscalationNote(
+          'Merge conflict resolution failed',
+          [`❌ Agent left ${stillConflicted.length} file(s) still conflicted: ${stillConflicted.join(', ')}`],
+          'Escalating to a human.',
+        ),
         state,
         repoRoot,
       );
@@ -240,7 +262,11 @@ export async function watchPipeline(
       await escalate(
         forge,
         mrIid,
-        `pipeline-worker: pipeline ${pipeline.webUrl} ended as "${pipeline.status}" — nothing to auto-fix, needs a human decision.`,
+        formatEscalationNote(
+          'Pipeline ended without a clear pass/fail',
+          [`⚠️ CI pipeline: \`${pipeline.status}\` — ${pipeline.webUrl}`],
+          'Nothing to auto-fix — needs a human decision.',
+        ),
         state,
         repoRoot,
       );
@@ -255,8 +281,11 @@ export async function watchPipeline(
       await escalate(
         forge,
         mrIid,
-        `pipeline-worker: automated fix attempts exhausted (${state.attempt - 1} attempts). ` +
-          `Pipeline ${pipeline.webUrl} is still failing and needs a human to take over.`,
+        formatEscalationNote(
+          `Automated fix attempts exhausted (${state.attempt - 1} attempt(s))`,
+          [`❌ CI pipeline: still failing — ${pipeline.webUrl}`],
+          'Needs a human to take over.',
+        ),
         state,
         repoRoot,
       );
@@ -290,7 +319,11 @@ export async function watchPipeline(
       await escalate(
         forge,
         mrIid,
-        `pipeline-worker: fix attempt ${state.attempt} produced no changes for pipeline ${pipeline.webUrl} — escalating to a human.`,
+        formatEscalationNote(
+          'Fix attempt produced no changes',
+          [`❌ CI pipeline: still failing — ${pipeline.webUrl}`, `⚠️ Agent fix attempt ${state.attempt} made no changes to push`],
+          'Escalating to a human.',
+        ),
         state,
         repoRoot,
       );
