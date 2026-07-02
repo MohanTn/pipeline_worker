@@ -1,9 +1,13 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config/loader.js';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * These tests assert on loadConfig's default/yaml-only resolution, which
@@ -37,6 +41,18 @@ function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-config-test-'));
   try {
     fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Like withTempDir, but the dir is a real git repo with `origin` set to remoteUrl. */
+async function withTempGitRepo(remoteUrl: string, fn: (dir: string) => void | Promise<void>): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-config-test-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['remote', 'add', 'origin', remoteUrl], { cwd: dir });
+    await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -215,5 +231,28 @@ test('loadConfig: explicit projectId in YAML takes precedence over repoBase auto
     process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
     const config = loadConfig(repoRoot);
     assert.equal(config.gitlab.projectId, 42);
+  });
+});
+
+test('loadConfig auto-detects github.repo from the origin remote when unset elsewhere', async () => {
+  await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
+    const config = loadConfig(dir);
+    assert.equal(config.github.repo, 'acme/widgets');
+  });
+});
+
+test('loadConfig: yaml github.repo takes precedence over origin-remote auto-detection', async () => {
+  await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
+    writeFileSync(join(dir, '.pipeline-worker.yml'), 'github:\n  repo: yaml-owner/yaml-repo\n');
+    const config = loadConfig(dir);
+    assert.equal(config.github.repo, 'yaml-owner/yaml-repo');
+  });
+});
+
+test('loadConfig: env github.repo takes precedence over origin-remote auto-detection', async () => {
+  await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
+    process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
+    const config = loadConfig(dir);
+    assert.equal(config.github.repo, 'env-owner/env-repo');
   });
 });

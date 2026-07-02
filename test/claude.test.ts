@@ -150,3 +150,28 @@ test('claudeAdapter omits --model when opts.model is not set', { skip: process.p
     rmSync(topDir, { recursive: true, force: true });
   }
 });
+
+test('claudeAdapter delivers the prompt over stdin rather than argv, avoiding E2BIG on large diffs', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeClaude = join(binDir, 'claude');
+  const argsFile = join(topDir, 'args.txt');
+  const stdinFile = join(topDir, 'stdin.txt');
+  writeFileSync(fakeClaude, `#!/bin/sh\necho "$@" > "${argsFile}"\ncat > "${stdinFile}"\necho '{"result":"ok"}'\n`);
+  chmodSync(fakeClaude, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    // Bigger than Linux's MAX_ARG_STRLEN (128KB) — this would have failed
+    // with E2BIG under the old argv-based invocation.
+    const bigPrompt = 'DIFF-MARKER-' + 'x'.repeat(200_000);
+    await claudeAdapter.invoke({ prompt: bigPrompt, cwd: binDir });
+    assert.equal(readFileSync(stdinFile, 'utf-8'), bigPrompt);
+    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /DIFF-MARKER/);
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});

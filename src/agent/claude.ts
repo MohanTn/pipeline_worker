@@ -4,6 +4,13 @@
  * `--json-schema`, `--mcp-config`. There is no `--cwd` flag — working
  * directory is controlled by the spawned process's `cwd` option.
  *
+ * The prompt is written to the child's stdin rather than passed as a CLI
+ * argument. captureIntent.ts embeds a full git diff in the prompt, and Linux
+ * caps a single exec() argument at ~128KB (MAX_ARG_STRLEN); a large diff
+ * blows past that and execFile fails with E2BIG before `claude` even starts.
+ * Piping via stdin (verified: `echo "..." | claude -p` reads the prompt from
+ * stdin when the positional `prompt` argument is omitted) has no such limit.
+ *
  * When the spawned CLI exits non-zero, the rejection we throw includes
  * **stdout in addition to stderr**. Under `--output-format json` Claude
  * frequently writes a structured `is_error: true` envelope to stdout, which
@@ -15,6 +22,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { AgentAdapter, AgentInvokeOptions, AgentInvokeResult } from './types.js';
+import { writePromptToStdin } from './stdinPrompt.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -87,7 +95,7 @@ export function formatProcessError(err: ExecErrorShape): string {
 export const claudeAdapter: AgentAdapter = {
   async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
     const args = [
-      '-p', opts.prompt,
+      '-p',
       '--output-format', 'json',
       '--permission-mode', opts.permissionMode ?? 'acceptEdits',
     ];
@@ -103,11 +111,14 @@ export const claudeAdapter: AgentAdapter = {
 
     let stdout: string;
     try {
-      const result = await execFileAsync('claude', args, {
+      const invocation = execFileAsync('claude', args, {
         cwd: opts.cwd,
         timeout: INVOKE_TIMEOUT_MS,
         maxBuffer: 64 * 1024 * 1024,
       });
+      // stdin is always a pipe here since stdio isn't overridden in execFileAsync's options.
+      writePromptToStdin(invocation.child.stdin!, opts.prompt);
+      const result = await invocation;
       stdout = result.stdout;
     } catch (rawErr) {
       const err = rawErr as ExecErrorShape;

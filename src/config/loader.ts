@@ -2,7 +2,8 @@
  * .pipeline-worker.yml loader. Resolution order per value: environment variable ->
  * .env file at repo root (never overrides real env) -> .pipeline-worker.yml ->
  * built-in default (for build/lint/test: commands auto-detected from the repo's
- * toolchain, see detectChecks.ts). Config file path: explicit override param ->
+ * toolchain, see detectChecks.ts; for github.repo: the repo's own `origin`
+ * remote, see git/remote.ts). Config file path: explicit override param ->
  * PIPELINE_WORKER_CONFIG env var -> <repoRoot>/.pipeline-worker.yml. Never throws — a
  * missing or unparseable file falls back to defaults (with a warning),
  * mirroring mcp-sonar-analysis's registry.ts read/never-throw contract.
@@ -14,6 +15,7 @@ import { parseEnv } from 'node:util';
 import { load } from 'js-yaml';
 import { detectChecks } from './detectChecks.js';
 import { deriveProjectPath } from '../git/resolveProjectPath.js';
+import { detectGithubRepo } from '../git/remote.js';
 import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
 
 const CONFIG_FILE_NAME = '.pipeline-worker.yml';
@@ -121,7 +123,7 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
       repoBase,
     },
     github: {
-      repo: process.env.PIPELINE_WORKER_GITHUB_REPO || parsed.github?.repo || DEFAULT_CONFIG.github.repo,
+      repo: process.env.PIPELINE_WORKER_GITHUB_REPO || parsed.github?.repo || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
     },
     build: parsed.build ?? detected.build,
     lint: parsed.lint ?? detected.lint,

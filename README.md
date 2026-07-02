@@ -60,7 +60,7 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_GITLAB_PROJECT_ID`     | —                            | numeric project id                                                            |
 | `PIPELINE_WORKER_GITLAB_REPO_BASE`      | —                            | local dir mirroring the GitLab namespace root, for auto-detecting `projectId` |
 | `PIPELINE_WORKER_GITLAB_TOKEN`          | —                            | GitLab API token                                                              |
-| `PIPELINE_WORKER_GITHUB_REPO`           | —                            | `owner/name` slug                                                             |
+| `PIPELINE_WORKER_GITHUB_REPO`           | auto-detected from `origin`  | `owner/name` slug — only needed when `origin` isn't a GitHub remote          |
 | `PIPELINE_WORKER_GITHUB_TOKEN`          | falls back to `GITHUB_TOKEN` | GitHub token                                                                  |
 | `PIPELINE_WORKER_POLL_INTERVAL_SECONDS` | `15`                         | pipeline poll cadence; use `60` for slow pipelines                            |
 
