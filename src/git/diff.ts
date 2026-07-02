@@ -20,9 +20,14 @@ export interface CapturedDiff {
  * common ancestor when the worktree has since been rebased onto a newer
  * origin — otherwise a 3-way merge could fail to resolve an otherwise
  * legitimate abbreviated hash.
+ *
+ * `--binary` is required so changed binary files (images, etc.) carry their
+ * actual base64 patch data instead of a `Binary files a/... differ` stub —
+ * without it, `git apply` in worktree.ts fails with "missing binary patch
+ * data" for any binary file in the change set.
  */
 export async function captureDiff(repoRoot: string): Promise<CapturedDiff> {
-  const { stdout: diffText } = await execFileAsync('git', ['diff', 'HEAD', '--full-index'], {
+  const { stdout: diffText } = await execFileAsync('git', ['diff', 'HEAD', '--full-index', '--binary'], {
     cwd: repoRoot,
     maxBuffer: 64 * 1024 * 1024,
   });
