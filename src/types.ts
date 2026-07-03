@@ -21,6 +21,10 @@ export interface PipelineWorkerConfig {
   test: string;
   maxFixAttempts: number;
   pollIntervalSeconds: number;
+  /** Feature branch naming template. Supports {type}, {ticket}, {name} placeholders; e.g. "{type}/{ticket}/{name}". */
+  branchPattern: string;
+  /** Once the MR/PR is opened and CI is green, reset repoRoot to HEAD — the captured changes now live safely on the branch. */
+  cleanupOnSuccess: boolean;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';
@@ -36,6 +40,7 @@ export interface RunState {
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high';
+export type ChangeType = 'feature' | 'bugfix' | 'chore';
 
 export interface FileChangeSummary {
   file: string;
@@ -46,7 +51,9 @@ export interface CapturedIntent {
   /** One short sentence: why this change exists / what problem it solves. */
   intent: string;
   summary: string;
-  branchName: string;
+  changeType: ChangeType;
+  /** Short kebab-case slug describing the change, with no prefix/ticket — the branch pattern supplies those. */
+  branchSlug: string;
   commitMessage: string;
   fileChanges: FileChangeSummary[];
   risk: RiskLevel;

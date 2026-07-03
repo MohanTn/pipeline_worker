@@ -1,6 +1,8 @@
 /** Reads the caller's in-progress change set without touching their working tree. */
 
 import { execFile } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -47,4 +49,19 @@ export async function captureDiff(repoRoot: string): Promise<CapturedDiff> {
     .map((line) => line.slice(3).trim());
 
   return { diffText, changedFiles, untrackedFiles };
+}
+
+/**
+ * Discards repoRoot's now-redundant uncommitted changes once they're safely
+ * captured on the opened MR/PR: `git reset --hard HEAD` undoes tracked
+ * edits (whatever branch repoRoot happens to be on), then `untrackedFiles`
+ * — the same list captureDiff recorded at the start of the run — is deleted
+ * individually rather than via a blanket `git clean`, so unrelated
+ * untracked files (build output, scratch files) are left alone.
+ */
+export async function resetRepo(repoRoot: string, untrackedFiles: string[]): Promise<void> {
+  await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: repoRoot });
+  for (const relativePath of untrackedFiles) {
+    rmSync(join(repoRoot, relativePath), { recursive: true, force: true });
+  }
 }

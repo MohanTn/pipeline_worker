@@ -27,7 +27,8 @@ function spyAgent(text: string): { agent: AgentAdapter; lastInvoke: () => AgentI
 const VALID_PAYLOAD = {
   intent: 'Let users sign in.',
   summary: 'Adds a login page.',
-  branchName: 'pipeline-worker/add-login-page',
+  changeType: 'feature',
+  branchSlug: 'add-login-page',
   commitMessage: 'feat: add login page',
   fileChanges: [{ file: 'src/login.ts', summary: 'Adds the login form component.' }],
   risk: 'low',
@@ -66,6 +67,16 @@ test('captureIntent rejects a commitMessage longer than 72 characters', async ()
 test('captureIntent rejects an invalid risk level', async () => {
   const payload = { ...VALID_PAYLOAD, risk: 'critical' };
   await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp'));
+});
+
+test('captureIntent rejects an invalid changeType', async () => {
+  const payload = { ...VALID_PAYLOAD, changeType: 'refactor' };
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp'));
+});
+
+test('captureIntent rejects a branchSlug with a prefix or uppercase characters', async () => {
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, branchSlug: 'pipeline-worker/add-login-page' })), ['src/login.ts'], '/tmp'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, branchSlug: 'Add-Login-Page' })), ['src/login.ts'], '/tmp'));
 });
 
 test('captureIntent rejects empty fileChanges or testScenarios', async () => {

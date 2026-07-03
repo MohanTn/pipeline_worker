@@ -6,7 +6,8 @@ import type { CapturedIntent, CheckResult } from '../src/types.js';
 const INTENT: CapturedIntent = {
   intent: 'Let users sign in.',
   summary: 'Adds a login page.',
-  branchName: 'pipeline-worker/add-login-page',
+  changeType: 'feature',
+  branchSlug: 'add-login-page',
   commitMessage: 'feat: add login page',
   fileChanges: [
     { file: 'src/login.ts', summary: 'Adds the login form component.' },
