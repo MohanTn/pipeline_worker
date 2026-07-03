@@ -14,9 +14,9 @@ export function repositoryUrl(config: PipelineWorkerConfig): string {
 }
 
 export function agentDescription(config: PipelineWorkerConfig): string {
-  // Mirrors captureIntent.ts's INTENT_MODEL choice: only claude supports
+  // Mirrors captureIntent.ts's model handling: only claude supports
   // per-invocation model selection today, so only claude has a "mode" to show.
-  return config.agent === 'claude' ? 'claude (haiku for intent capture, default model for CI fixes)' : 'copilot';
+  return config.agent === 'claude' ? `claude (${config.intentModel} for intent capture, default model for CI fixes)` : 'copilot';
 }
 
 export async function printWelcome(config: PipelineWorkerConfig, repoRoot: string): Promise<void> {

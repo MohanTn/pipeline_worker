@@ -33,8 +33,7 @@ export function deriveProjectPath(repoBase: string, repoRoot: string): string {
   if (!rel || rel.startsWith('..')) {
     throw new Error(
       `Cannot derive GitLab project path: '${repoRoot}' is not inside repoBase '${repoBase}'. ` +
-        `Set PIPELINE_WORKER_GITLAB_REPO_BASE (or gitlab.repoBase in .pipeline-worker.yml) ` +
-        `to the local directory that mirrors the GitLab host namespace root.`,
+        `Set PIPELINE_WORKER_GITLAB_REPO_BASE to the local directory that mirrors the GitLab host namespace root.`,
     );
   }
   return rel.split(sep).map(toKebabCase).join('/');

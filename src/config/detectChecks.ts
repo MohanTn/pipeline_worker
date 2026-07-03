@@ -1,9 +1,9 @@
 /**
  * Toolchain detection: default build/lint/test commands for the target repo's
  * language. An empty command means "no sensible default here" and the stage is
- * skipped (see runChecks.ts). Explicit .pipeline-worker.yml values always win
- * (see loader.ts). The first marker that matches decides; mixed-language repos
- * should set the commands explicitly.
+ * skipped (see runChecks.ts). Explicit PIPELINE_WORKER_BUILD / _LINT / _TEST
+ * env vars always win (see loader.ts). The first marker that matches decides;
+ * mixed-language repos should set the commands explicitly.
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';

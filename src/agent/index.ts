@@ -4,7 +4,7 @@ import { claudeAdapter } from './claude.js';
 import { copilotAdapter } from './copilot.js';
 
 /**
- * Picks the adapter named in .pipeline-worker.yml. Deliberately no runtime
+ * Picks the adapter named by PIPELINE_WORKER_AGENT. Deliberately no runtime
  * fallback/interactive choice — the config names exactly one agent per repo.
  */
 export function selectAgent(config: PipelineWorkerConfig): AgentAdapter {

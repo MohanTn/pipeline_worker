@@ -3,7 +3,7 @@
  * shapes: pull request -> MergeRequest (iid = PR number), the set of Actions
  * workflow runs for the PR's head SHA -> one aggregated Pipeline, workflow
  * jobs -> PipelineJob. The token is deliberately sourced only from an
- * environment variable — never from `.pipeline-worker.yml`.
+ * environment variable and never logged.
  */
 
 import type { PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
@@ -17,15 +17,14 @@ export interface GithubAuth {
 }
 
 export function resolveGithubAuth(config: PipelineWorkerConfig): GithubAuth {
-  // config.github.repo is already env/.env/yaml-resolved by config/loader.ts;
-  // only the token (never read from yaml) and the API URL override are read
-  // directly from the environment here.
+  // config.github.repo is already env/.env-resolved by config/loader.ts; the
+  // token and the API URL override are read directly from the environment here.
   const apiUrl = process.env.PIPELINE_WORKER_GITHUB_API_URL || 'https://api.github.com';
   const repo = config.github.repo;
   const token = process.env.PIPELINE_WORKER_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
 
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) {
-    throw new Error('GitHub repo is not configured (set github.repo to "owner/name" in .pipeline-worker.yml or PIPELINE_WORKER_GITHUB_REPO).');
+    throw new Error('GitHub repo is not configured (set PIPELINE_WORKER_GITHUB_REPO to "owner/name").');
   }
   if (!token) throw new Error('PIPELINE_WORKER_GITHUB_TOKEN (or GITHUB_TOKEN) environment variable is not set.');
 

@@ -21,6 +21,8 @@ export interface PipelineWorkerConfig {
   test: string;
   maxFixAttempts: number;
   pollIntervalSeconds: number;
+  /** Model passed to the agent for the intent-capture step (see captureIntent.ts). Ignored by adapters with no per-invocation model selection (e.g. copilot). */
+  intentModel: string;
   /** Feature branch naming template. Supports {type}, {ticket}, {name} placeholders; e.g. "{type}/{ticket}/{name}". */
   branchPattern: string;
   /** Once the MR/PR is opened and CI is green, reset repoRoot to HEAD — the captured changes now live safely on the branch. */

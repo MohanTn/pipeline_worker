@@ -1,8 +1,8 @@
 /**
  * GitLab REST (v4) ForgeClient. The token is deliberately sourced only from
- * an environment variable — it must never live in `.pipeline-worker.yml` or be
- * logged. Used both by the workflow orchestrator and the MCP tool handlers,
- * so there is exactly one place that knows how to talk to GitLab.
+ * an environment variable and never logged. Used both by the workflow
+ * orchestrator and the MCP tool handlers, so there is exactly one place that
+ * knows how to talk to GitLab.
  */
 
 import type { PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
@@ -15,15 +15,14 @@ export interface GitlabAuth {
 }
 
 export function resolveGitlabAuth(config: PipelineWorkerConfig): GitlabAuth {
-  // config.gitlab.host/projectId are already env/.env/yaml-resolved by
-  // config/loader.ts; only the token (never read from yaml) is read
-  // directly from the environment here.
+  // config.gitlab.host/projectId are already env/.env-resolved by
+  // config/loader.ts; the token is read directly from the environment here.
   const host = config.gitlab.host;
   const projectId = config.gitlab.projectId;
   const token = process.env.PIPELINE_WORKER_GITLAB_TOKEN;
 
-  if (!host) throw new Error('GitLab host is not configured (set gitlab.host in .pipeline-worker.yml or PIPELINE_WORKER_GITLAB_HOST).');
-  if (!projectId) throw new Error('GitLab projectId is not configured (set gitlab.projectId in .pipeline-worker.yml, PIPELINE_WORKER_GITLAB_PROJECT_ID, or PIPELINE_WORKER_GITLAB_REPO_BASE for auto-detection).');
+  if (!host) throw new Error('GitLab host is not configured (set PIPELINE_WORKER_GITLAB_HOST).');
+  if (!projectId) throw new Error('GitLab projectId is not configured (set PIPELINE_WORKER_GITLAB_PROJECT_ID, or PIPELINE_WORKER_GITLAB_REPO_BASE for auto-detection).');
   if (!token) throw new Error('PIPELINE_WORKER_GITLAB_TOKEN environment variable is not set.');
 
   return { host, projectId, token };

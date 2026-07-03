@@ -10,10 +10,10 @@ import { loadConfig } from '../src/config/loader.js';
 const execFileAsync = promisify(execFile);
 
 /**
- * These tests assert on loadConfig's default/yaml-only resolution, which
- * only holds with a clean environment. A real .env (e.g. this repo's own,
- * loaded whenever pipeline-worker runs on itself) sets these for the whole
- * process, so isolate each test from whatever the ambient environment holds.
+ * These tests assert on loadConfig's default/env-only resolution, which only
+ * holds with a clean environment. A real .env (e.g. this repo's own, loaded
+ * whenever pipeline-worker runs on itself) sets these for the whole process,
+ * so isolate each test from whatever the ambient environment holds.
  */
 const ENV_PREFIX = 'PIPELINE_WORKER_';
 let savedEnv: Record<string, string | undefined> = {};
@@ -58,7 +58,7 @@ async function withTempGitRepo(remoteUrl: string, fn: (dir: string) => void | Pr
   }
 }
 
-test('loadConfig returns defaults when .pipeline-worker.yml is missing', () => {
+test('loadConfig returns defaults in an empty repo', () => {
   withTempDir((dir) => {
     const config = loadConfig(dir);
     assert.equal(config.agent, 'claude');
@@ -77,45 +77,33 @@ test('loadConfig defaults build/lint/test from detected npm scripts', () => {
   });
 });
 
-test('yaml check commands override detected defaults', () => {
+test('PIPELINE_WORKER_BUILD/LINT/TEST override detected defaults', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x' } }));
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'build: make all\n');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x', lint: 'y', test: 'z' } }));
+    process.env.PIPELINE_WORKER_BUILD = 'make all';
+    process.env.PIPELINE_WORKER_LINT = 'make lint';
+    process.env.PIPELINE_WORKER_TEST = 'make test';
     const config = loadConfig(dir);
     assert.equal(config.build, 'make all');
+    assert.equal(config.lint, 'make lint');
+    assert.equal(config.test, 'make test');
   });
 });
 
-test('loadConfig merges values from .pipeline-worker.yml over defaults', () => {
+test('PIPELINE_WORKER_BUILD set to an empty string explicitly skips the stage, even with a detected default', () => {
   withTempDir((dir) => {
-    writeFileSync(
-      join(dir, '.pipeline-worker.yml'),
-      'agent: copilot\ngitlab:\n  host: https://gitlab.example.com\n  projectId: 99\nmaxFixAttempts: 2\n',
-    );
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x' } }));
+    process.env.PIPELINE_WORKER_BUILD = '';
     const config = loadConfig(dir);
-    assert.equal(config.agent, 'copilot');
-    assert.equal(config.gitlab.host, 'https://gitlab.example.com');
-    assert.equal(config.gitlab.projectId, 99);
-    assert.equal(config.maxFixAttempts, 2);
-    assert.equal(config.lint, ''); // untouched fields keep their (detected) default
+    assert.equal(config.build, '');
   });
 });
 
-test('loadConfig falls back to defaults (and never throws) on corrupt YAML', () => {
+test('loadConfig falls back to defaults (and never throws) on missing repo info', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'agent: [this is: not, valid: yaml');
     const config = loadConfig(dir);
     assert.equal(config.agent, 'claude');
     assert.equal(config.maxFixAttempts, 5);
-  });
-});
-
-test('loadConfig honors an explicit override path', () => {
-  withTempDir((dir) => {
-    const altPath = join(dir, 'alt.yml');
-    writeFileSync(altPath, 'agent: copilot\n');
-    const config = loadConfig(dir, altPath);
-    assert.equal(config.agent, 'copilot');
   });
 });
 
@@ -136,18 +124,8 @@ test('loadConfig defaults branchPattern to pipeline-worker/{name} and cleanupOnS
   });
 });
 
-test('loadConfig reads branchPattern and cleanupOnSuccess from yaml', () => {
+test('env vars set branchPattern and cleanupOnSuccess', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'branchPattern: "{type}/{ticket}/{name}"\ncleanupOnSuccess: false\n');
-    const config = loadConfig(dir);
-    assert.equal(config.branchPattern, '{type}/{ticket}/{name}');
-    assert.equal(config.cleanupOnSuccess, false);
-  });
-});
-
-test('env vars override yaml for branchPattern and cleanupOnSuccess', () => {
-  withTempDir((dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'branchPattern: "yaml/{name}"\ncleanupOnSuccess: true\n');
     process.env.PIPELINE_WORKER_BRANCH_PATTERN = '{type}/{name}';
     process.env.PIPELINE_WORKER_CLEANUP = 'false';
     const config = loadConfig(dir);
@@ -156,9 +134,34 @@ test('env vars override yaml for branchPattern and cleanupOnSuccess', () => {
   });
 });
 
-test('loadConfig reads forge, github.repo, and pollIntervalSeconds from yaml', () => {
+test('loadConfig defaults intentModel to haiku', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'forge: github\ngithub:\n  repo: acme/widgets\npollIntervalSeconds: 60\n');
+    assert.equal(loadConfig(dir).intentModel, 'haiku');
+  });
+});
+
+test('PIPELINE_WORKER_INTENT_MODEL overrides the default', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_INTENT_MODEL = 'sonnet';
+    assert.equal(loadConfig(dir).intentModel, 'sonnet');
+  });
+});
+
+test('PIPELINE_WORKER_MAX_FIX_ATTEMPTS overrides the default, and an invalid value falls back to it', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS = '2';
+    assert.equal(loadConfig(dir).maxFixAttempts, 2);
+
+    process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS = 'not-a-number';
+    assert.equal(loadConfig(dir).maxFixAttempts, 5);
+  });
+});
+
+test('env vars set forge, github.repo, and pollIntervalSeconds', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_FORGE = 'github';
+    process.env.PIPELINE_WORKER_GITHUB_REPO = 'acme/widgets';
+    process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '60';
     const config = loadConfig(dir);
     assert.equal(config.forge, 'github');
     assert.equal(config.github.repo, 'acme/widgets');
@@ -166,12 +169,8 @@ test('loadConfig reads forge, github.repo, and pollIntervalSeconds from yaml', (
   });
 });
 
-test('env vars override yaml for github.repo and gitlab.host/projectId', () => {
+test('env vars set github.repo and gitlab.host/projectId', () => {
   withTempDir((dir) => {
-    writeFileSync(
-      join(dir, '.pipeline-worker.yml'),
-      'github:\n  repo: yaml-owner/yaml-repo\ngitlab:\n  host: https://yaml.example.com\n  projectId: 1\n',
-    );
     process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
     process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://env.example.com';
     process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = '99';
@@ -182,9 +181,8 @@ test('env vars override yaml for github.repo and gitlab.host/projectId', () => {
   });
 });
 
-test('env vars override yaml for agent, forge, and poll interval', () => {
+test('env vars set agent, forge, and poll interval', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'agent: claude\nforge: gitlab\npollIntervalSeconds: 15\n');
     process.env.PIPELINE_WORKER_AGENT = 'copilot';
     process.env.PIPELINE_WORKER_FORGE = 'github';
     process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '60';
@@ -197,7 +195,9 @@ test('env vars override yaml for agent, forge, and poll interval', () => {
 
 test('invalid agent/forge/poll values fall back to defaults instead of throwing', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'agent: gpt\nforge: bitbucket\npollIntervalSeconds: -3\n');
+    process.env.PIPELINE_WORKER_AGENT = 'gpt';
+    process.env.PIPELINE_WORKER_FORGE = 'bitbucket';
+    process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '-3';
     const config = loadConfig(dir);
     assert.equal(config.agent, 'claude');
     assert.equal(config.forge, 'gitlab');
@@ -215,22 +215,10 @@ test('.env at repo root supplies defaults but never overrides real env', () => {
   });
 });
 
-test('loadConfig honors PIPELINE_WORKER_CONFIG env var when no override param is given', () => {
+test('loadConfig accepts a non-numeric (namespace path) projectId from the env var', () => {
   withTempDir((dir) => {
-    const altPath = join(dir, 'env.yml');
-    writeFileSync(altPath, 'maxFixAttempts: 1\n');
-    process.env.PIPELINE_WORKER_CONFIG = altPath;
-    const config = loadConfig(dir);
-    assert.equal(config.maxFixAttempts, 1);
-  });
-});
-
-test('loadConfig accepts a string projectId from YAML', () => {
-  withTempDir((dir) => {
-    writeFileSync(
-      join(dir, '.pipeline-worker.yml'),
-      'gitlab:\n  host: https://gitlab.example.com\n  projectId: "my-group/my-project"\n',
-    );
+    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://gitlab.example.com';
+    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = 'my-group/my-project';
     const config = loadConfig(dir);
     assert.equal(config.gitlab.projectId, 'my-group/my-project');
   });
@@ -240,7 +228,6 @@ test('loadConfig auto-detects project path via PIPELINE_WORKER_GITLAB_REPO_BASE'
   withTempDir((dir) => {
     // Simulate: repoBase = dir, repoRoot = dir/Media/RetailMediaPortal
     const repoRoot = join(dir, 'Media', 'RetailMediaPortal');
-    // We pass repoRoot as the "repo" location; no .pipeline-worker.yml there
     process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
     const config = loadConfig(repoRoot);
     assert.equal(config.gitlab.projectId, 'media/retail-media-portal');
@@ -248,14 +235,12 @@ test('loadConfig auto-detects project path via PIPELINE_WORKER_GITLAB_REPO_BASE'
   });
 });
 
-test('loadConfig: explicit projectId in YAML takes precedence over repoBase auto-detection', () => {
+test('loadConfig: explicit PIPELINE_WORKER_GITLAB_PROJECT_ID takes precedence over repoBase auto-detection', () => {
   withTempDir((dir) => {
     const repoRoot = join(dir, 'Media', 'SomeProject');
     mkdirSync(repoRoot, { recursive: true });
-    writeFileSync(
-      join(repoRoot, '.pipeline-worker.yml'),
-      'gitlab:\n  host: https://gitlab.example.com\n  projectId: 42\n',
-    );
+    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://gitlab.example.com';
+    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = '42';
     process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
     const config = loadConfig(repoRoot);
     assert.equal(config.gitlab.projectId, 42);
@@ -269,15 +254,7 @@ test('loadConfig auto-detects github.repo from the origin remote when unset else
   });
 });
 
-test('loadConfig: yaml github.repo takes precedence over origin-remote auto-detection', async () => {
-  await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
-    writeFileSync(join(dir, '.pipeline-worker.yml'), 'github:\n  repo: yaml-owner/yaml-repo\n');
-    const config = loadConfig(dir);
-    assert.equal(config.github.repo, 'yaml-owner/yaml-repo');
-  });
-});
-
-test('loadConfig: env github.repo takes precedence over origin-remote auto-detection', async () => {
+test('loadConfig: PIPELINE_WORKER_GITHUB_REPO takes precedence over origin-remote auto-detection', async () => {
   await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
     process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
     const config = loadConfig(dir);
