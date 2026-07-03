@@ -1,11 +1,13 @@
 /**
  * Step 8: poll the MR/PR's pipeline (at config.pollIntervalSeconds) until it
- * succeeds; on failure, hand the failing jobs' logs to the configured agent
- * (with pipeline-worker's own forge MCP server available so it can pull further
- * detail itself), commit the fix, push, and retry — capped at
- * config.maxFixAttempts before escalating via an MR comment. Never retries
- * indefinitely, and never spends agent tokens on pipelines that are not
- * actually failed (canceled/skipped go straight to a human).
+ * succeeds; on failure, hand the pipeline id/URL to the configured agent and
+ * let it pull the failed jobs and logs itself via whatever forge MCP tooling
+ * is available (pipeline-worker's own, or an external GitLab/GitHub MCP
+ * server the agent already has configured), then commit the fix, push, and
+ * retry — capped at config.maxFixAttempts before escalating via an MR
+ * comment. Never retries indefinitely, and never spends agent tokens on
+ * pipelines that are not actually failed (canceled/skipped go straight to a
+ * human).
  *
  * Also watches for the forge confirming a real merge conflict against the
  * target branch (GitHub's "dirty" / GitLab's "cannot_be_merged") — some
@@ -32,7 +34,7 @@ import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolved
 import type { ForgeClient } from '../forge/types.js';
 import { saveRunState } from '../state/runState.js';
 import { step, runStep, note } from '../ui/steps.js';
-import type { ForgeName, PipelineWorkerConfig, Pipeline, PipelineJob, RunState } from '../types.js';
+import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState } from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -150,14 +152,17 @@ function writeAgentMcpConfig(): string {
   return path;
 }
 
-function buildFixPrompt(pipeline: Pipeline, jobs: Array<{ job: PipelineJob; log: string }>): string {
-  const jobSummaries = jobs
-    .map(({ job, log }) => `### Job "${job.name}" (stage: ${job.stage})\n\`\`\`\n${log.slice(-4000)}\n\`\`\``)
-    .join('\n\n');
+function forgeLabel(forgeName: ForgeName): string {
+  return forgeName === 'gitlab' ? 'GitLab' : 'GitHub';
+}
+
+function buildFixPrompt(pipeline: Pipeline, forgeName: ForgeName): string {
+  const label = forgeLabel(forgeName);
   return (
-    `The CI pipeline ${pipeline.webUrl} failed. Fix the underlying issue in this worktree so the pipeline passes. ` +
-    'You have access to the pipeline-worker-forge MCP server for further pipeline/job detail if these excerpts are not enough.\n\n' +
-    jobSummaries
+    `The CI pipeline ${pipeline.webUrl} (id ${pipeline.id}) failed. Use whichever ${label} MCP server tooling is ` +
+    `available in this environment (pipeline-worker's own forge MCP server, or an external ${label} MCP server if ` +
+    'one is configured) to see which jobs failed and why, then fix the underlying issue in this worktree so the ' +
+    'pipeline passes.'
   );
 }
 
@@ -364,13 +369,6 @@ export async function watchPipeline(
       return;
     }
 
-    const { failedJobs, logs } = await runStep(11, '🔍', 'Diagnosing the failure', `reading logs for ${pipeline.webUrl}`, async () => {
-      const jobs = await forge.getFailedJobs(pipeline.id);
-      const jobLogs = await Promise.all(jobs.map(async (job) => ({ job, log: await forge.getJobLog(job.id) })));
-      return { failedJobs: jobs, logs: jobLogs };
-    });
-    note(failedJobs.length > 0 ? failedJobs.map((job) => job.name).join(', ') : 'no specific job names reported');
-
     const mcpConfigPath = writeAgentMcpConfig();
     let agentResponse: string;
     try {
@@ -378,8 +376,8 @@ export async function watchPipeline(
         11,
         '🔧',
         'Fixing CI failure',
-        `asking the agent to fix ${failedJobs.length} failed job(s)`,
-        async () => (await agent.invoke({ prompt: buildFixPrompt(pipeline, logs), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' })).text,
+        `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
+        async () => (await agent.invoke({ prompt: buildFixPrompt(pipeline, config.forge), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' })).text,
       );
     } finally {
       unlinkSync(mcpConfigPath);
