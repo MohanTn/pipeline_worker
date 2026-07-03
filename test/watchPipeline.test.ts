@@ -1,7 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pollForNextAction } from '../src/workflow/watchPipeline.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pollForNextAction, hasCiConfig } from '../src/workflow/watchPipeline.js';
 import type { ForgeClient } from '../src/forge/types.js';
+
+function withTempDir(fn: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-watchpipeline-test-'));
+  try {
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
   return {
@@ -71,3 +83,35 @@ test('pollForNextAction never reports no-pipeline once any pipeline (even non-te
   assert.deepEqual(outcome, { kind: 'pipeline', pipeline });
   assert.equal(calls, 5);
 });
+
+test('pollForNextAction never reports no-pipeline when ciConfigured=true, even once the grace window would otherwise have elapsed', async () => {
+  let calls = 0;
+  const pipeline = { id: 5, status: 'success' as const, webUrl: 'http://example/5' };
+  const forge = stubForge({
+    getMrPipelines: async () => {
+      calls += 1;
+      return calls < 4 ? [] : [pipeline]; // registers well past a 20ms grace window
+    },
+  });
+  const outcome = await pollForNextAction(forge, 1, 5, undefined, 20, true);
+  assert.deepEqual(outcome, { kind: 'pipeline', pipeline });
+  assert.equal(calls, 4);
+});
+
+test('hasCiConfig(gitlab) is true only when .gitlab-ci.yml exists at the worktree root', () =>
+  withTempDir((dir) => {
+    assert.equal(hasCiConfig(dir, 'gitlab'), false);
+    writeFileSync(join(dir, '.gitlab-ci.yml'), 'stages: []\n');
+    assert.equal(hasCiConfig(dir, 'gitlab'), true);
+  }));
+
+test('hasCiConfig(github) is true only once .github/workflows contains a .yml/.yaml file', () =>
+  withTempDir((dir) => {
+    assert.equal(hasCiConfig(dir, 'github'), false);
+    mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
+    assert.equal(hasCiConfig(dir, 'github'), false); // dir exists but is empty
+    writeFileSync(join(dir, '.github', 'workflows', 'README.md'), '# not a workflow\n');
+    assert.equal(hasCiConfig(dir, 'github'), false); // non-workflow file present, still no config
+    writeFileSync(join(dir, '.github', 'workflows', 'ci.yaml'), 'on: push\n');
+    assert.equal(hasCiConfig(dir, 'github'), true);
+  }));

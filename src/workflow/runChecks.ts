@@ -59,12 +59,16 @@ async function runStage(name: CheckResult['name'], command: string, cwd: string)
   }
 }
 
-/** Runs build, then lint, then test, stopping at the first failure (fail-fast). */
+/**
+ * Runs build, then lint, then test, stopping at the first failure (fail-fast).
+ * lint/test are skipped when config.runLintAndTest is false — e.g. when an
+ * earlier workflow such as upstream CI already verified them.
+ */
 export async function runChecks(config: PipelineWorkerConfig, worktreePath: string): Promise<CheckResult[]> {
   const stages: Array<{ name: CheckResult['name']; command: string }> = [
     { name: 'build', command: config.build },
-    { name: 'lint', command: config.lint },
-    { name: 'test', command: config.test },
+    { name: 'lint', command: config.runLintAndTest ? config.lint : '' },
+    { name: 'test', command: config.runLintAndTest ? config.test : '' },
   ];
 
   const results: CheckResult[] = [];

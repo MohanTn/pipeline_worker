@@ -71,6 +71,7 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_LINT`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage                                                              |
 | `PIPELINE_WORKER_TEST`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage                                                              |
 | `PIPELINE_WORKER_MAX_FIX_ATTEMPTS`      | `5`                          | how many CI-fix attempts before escalating to a human                                                                        |
+| `PIPELINE_WORKER_RUN_LINT_AND_TEST`     | `true`                       | run the local lint and test stages (`false` to run only build — for repos where an earlier workflow, e.g. upstream CI, already verified lint/test) |
 
 ### Branch naming
 

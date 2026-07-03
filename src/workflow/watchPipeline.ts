@@ -15,12 +15,14 @@
  * conflict markers, sharing the same maxFixAttempts budget as CI fixes.
  *
  * If no pipeline shows up for the MR/PR at all within a short grace window
- * (repo has no CI configured), the run ends there instead of polling for up
- * to the full 2-hour safety window.
+ * AND the worktree has no CI config file (.gitlab-ci.yml / .github/workflows),
+ * the run ends there instead of polling for up to the full 2-hour safety
+ * window. A repo that does have a CI config file always gets the full
+ * window — its pipeline may just be slow to register.
  */
 
 import { execFile } from 'node:child_process';
-import { writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -30,7 +32,7 @@ import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolved
 import type { ForgeClient } from '../forge/types.js';
 import { saveRunState } from '../state/runState.js';
 import { step, runStep, note } from '../ui/steps.js';
-import type { PipelineWorkerConfig, Pipeline, PipelineJob, RunState } from '../types.js';
+import type { ForgeName, PipelineWorkerConfig, Pipeline, PipelineJob, RunState } from '../types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,13 +40,34 @@ const MAX_POLL_WINDOW_MS = 2 * 60 * 60 * 1000; // per pipeline attempt, as a saf
 // How long to tolerate zero pipelines before concluding the repo has no CI
 // configured for this MR/PR, rather than CI simply not having registered
 // yet. Only applies before we've ever confirmed a pipeline exists (see
-// `previousPipelineId === undefined` below) — once one has been seen, an
-// empty result can't mean "no CI".
+// `previousPipelineId === undefined` below) and only when hasCiConfig found
+// no CI config file in the worktree — once either is untrue, an empty
+// result can't mean "no CI".
 const NO_PIPELINE_GRACE_MS = 60 * 1000;
 const TERMINAL_STATUSES: Pipeline['status'][] = ['success', 'failed', 'canceled', 'skipped'];
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Whether the worktree itself has a CI config file for `forge`. A repo that
+ * has one will eventually run a pipeline even if the forge's API hasn't
+ * registered it yet (slow runner pickup, branch/rules delay) — so the
+ * no-pipeline grace window below must never fire in that case, only when
+ * there's genuinely no CI config to run.
+ *
+ * Checks only the conventional path for each forge; a GitLab project whose
+ * "CI/CD configuration file" setting points elsewhere (a custom path or a
+ * separate repo) reads as unconfigured here and keeps the old grace-window
+ * behavior — a known gap, not a false "no CI".
+ */
+export function hasCiConfig(worktreePath: string, forge: ForgeName): boolean {
+  if (forge === 'gitlab') {
+    return existsSync(join(worktreePath, '.gitlab-ci.yml'));
+  }
+  const workflowsDir = join(worktreePath, '.github', 'workflows');
+  return existsSync(workflowsDir) && readdirSync(workflowsDir).some((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
 }
 
 export type PollOutcome = { kind: 'pipeline'; pipeline: Pipeline } | { kind: 'conflict' } | { kind: 'no-pipeline' };
@@ -63,7 +86,10 @@ export type PollOutcome = { kind: 'pipeline'; pipeline: Pipeline } | { kind: 'co
  * 2-hour safety window times out instead of surfacing the conflict promptly.
  *
  * `noPipelineGraceMs` defaults to NO_PIPELINE_GRACE_MS and is only overridable
- * so tests don't have to wait out the real grace window.
+ * so tests don't have to wait out the real grace window. `ciConfigured`
+ * (see hasCiConfig) disarms the grace window entirely: a repo with a real CI
+ * config file must never be declared "no CI" just because its pipeline is
+ * slow to register — it should keep polling the full window instead.
  */
 export async function pollForNextAction(
   forge: ForgeClient,
@@ -71,14 +97,19 @@ export async function pollForNextAction(
   intervalMs: number,
   previousPipelineId?: number,
   noPipelineGraceMs: number = NO_PIPELINE_GRACE_MS,
+  ciConfigured: boolean = false,
 ): Promise<PollOutcome> {
   const maxPolls = Math.max(1, Math.ceil(MAX_POLL_WINDOW_MS / intervalMs));
   // Undefined previousPipelineId means no pipeline has been confirmed yet
   // for this MR/PR; give the forge a short grace window to register one
-  // before concluding there's no CI to watch. Disarmed for good the moment
-  // any pipeline is observed (even non-terminal) — that alone proves CI is
-  // configured, so a later transient empty response must never be counted.
-  let noPipelineGracePolls = previousPipelineId === undefined ? Math.max(1, Math.ceil(noPipelineGraceMs / intervalMs)) : undefined;
+  // before concluding there's no CI to watch. Only armed when ciConfigured
+  // is false — a repo with a real CI config file can never reach this
+  // conclusion, no matter how many polls come back empty. Also disarmed for
+  // good the moment any pipeline is observed (even non-terminal) — that
+  // alone proves CI is configured, so a later transient empty response must
+  // never be counted.
+  let noPipelineGracePolls =
+    !ciConfigured && previousPipelineId === undefined ? Math.max(1, Math.ceil(noPipelineGraceMs / intervalMs)) : undefined;
   let emptyPolls = 0;
   for (let i = 0; i < maxPolls; i++) {
     if (await forge.hasMergeConflicts(mrIid)) {
@@ -257,6 +288,7 @@ export async function watchPipeline(
   repoRoot: string,
 ): Promise<void> {
   const intervalMs = config.pollIntervalSeconds * 1000;
+  const ciConfigured = hasCiConfig(worktreePath, config.forge);
   state.phase = 'watch';
   saveRunState(repoRoot, state);
 
@@ -267,7 +299,7 @@ export async function watchPipeline(
       '👀',
       'Watching pipeline',
       `poll CI every ${config.pollIntervalSeconds}s until it finishes`,
-      () => pollForNextAction(forge, mrIid, intervalMs, previousPipelineId),
+      () => pollForNextAction(forge, mrIid, intervalMs, previousPipelineId, NO_PIPELINE_GRACE_MS, ciConfigured),
     );
 
     if (outcome.kind === 'conflict') {
