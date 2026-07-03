@@ -162,9 +162,30 @@ export async function applyDiffToWorktree(
   return { conflicted: conflictedFiles.length > 0, conflictedFiles };
 }
 
-/** Renames the worktree's current branch (used once the agent has proposed a real name). */
-export async function renameBranch(worktreePath: string, newBranchName: string): Promise<void> {
-  await execFileAsync('git', ['branch', '-m', newBranchName], { cwd: worktreePath });
+/** How many collision retries renameBranch attempts before giving up. */
+const RENAME_BRANCH_MAX_ATTEMPTS = 5;
+
+/**
+ * Renames the worktree's current branch (used once the agent has proposed a
+ * real name), returning the branch name actually applied. If newBranchName
+ * collides with a branch that already exists locally (e.g. two runs both
+ * inferring the same descriptive slug), retries with a short random suffix
+ * appended instead of failing the run outright.
+ */
+export async function renameBranch(worktreePath: string, newBranchName: string): Promise<string> {
+  let candidate = newBranchName;
+  for (let attempt = 1; attempt <= RENAME_BRANCH_MAX_ATTEMPTS; attempt++) {
+    try {
+      await execFileAsync('git', ['branch', '-m', candidate], { cwd: worktreePath });
+      return candidate;
+    } catch (error) {
+      const stderr = (error as { stderr?: string }).stderr ?? '';
+      if (!/already exists/.test(stderr) || attempt === RENAME_BRANCH_MAX_ATTEMPTS) throw error;
+      candidate = `${newBranchName}-${randomUUID().slice(0, 6)}`;
+    }
+  }
+  // Unreachable: the loop above always returns or throws.
+  throw new Error(`pipeline-worker: could not rename branch to a variant of "${newBranchName}"`);
 }
 
 /**

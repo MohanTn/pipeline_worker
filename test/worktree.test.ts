@@ -11,6 +11,7 @@ import {
   syncWithOrigin,
   applyDiffToWorktree,
   removeWorktree,
+  renameBranch,
   isWorktreeOnBranch,
   checkoutExistingBranch,
 } from '../src/git/worktree.js';
@@ -240,6 +241,28 @@ test('syncWithOrigin rebases the worktree onto a moved-ahead origin/main, preser
     rmSync(originDir, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(otherClone, { recursive: true, force: true });
+  }
+});
+
+test('renameBranch falls back to a suffixed variant when the target branch name already exists locally, instead of failing', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    // Simulate a branch name collision, e.g. left over from a previous run.
+    await execFileAsync('git', ['branch', 'pipeline-worker/taken'], { cwd: repoRoot });
+
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-rename-test');
+    try {
+      const actualName = await renameBranch(worktreePath, 'pipeline-worker/taken');
+
+      assert.notEqual(actualName, 'pipeline-worker/taken');
+      assert.match(actualName, /^pipeline-worker\/taken-[0-9a-f]{6}$/);
+      const { stdout: branch } = await execFileAsync('git', ['branch', '--show-current'], { cwd: worktreePath });
+      assert.equal(branch.trim(), actualName);
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
   }
 });
 

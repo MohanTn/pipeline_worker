@@ -162,14 +162,17 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     noteRisk(intent.risk, intent.riskReason);
 
     const branchName = buildBranchName(config.branchPattern, { type: intent.changeType, ticket: options.ticket, name: intent.branchSlug });
-    await runStep(
+    const actualBranchName = await runStep(
       7,
       '🌿',
       'Checkout feature branch',
       `switch to feature branch ${branchName}`,
       () => renameBranch(worktreePath, branchName),
     );
-    state = { ...state, branch: branchName, phase: 'intent' };
+    if (actualBranchName !== branchName) {
+      note(`"${branchName}" already exists locally — using "${actualBranchName}" instead`);
+    }
+    state = { ...state, branch: actualBranchName, phase: 'intent' };
     saveRunState(repoRoot, state);
 
     await runStep(
