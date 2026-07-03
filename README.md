@@ -6,12 +6,13 @@
 
 Automate the last mile of your local changes: pipeline-worker takes the uncommitted diff in your repo and drives it — unattended to a green merge request.
 
-1. Captures your staged + unstaged changes (your working tree is never touched).
+1. Captures your staged + unstaged changes (your working tree is only read, not modified, up through this point).
 2. Replays them in a disposable git worktree.
-3. Asks a coding agent (Claude Code or GitHub Copilot CLI) to infer the intent: branch name, commit message, summary.
+3. Asks a coding agent (Claude Code or GitHub Copilot CLI) to infer the intent: change type, branch slug, commit message, summary.
 4. Runs your `build` / `lint` / `test` commands, fail-fast.
-5. Commits, pushes, and opens a GitLab MR or GitHub PR.
+5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`.
 6. Polls the CI pipeline; on failure it hands the failing job logs to the agent, commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
+7. Once the MR/PR is ready to merge, resets your repo's current branch back to HEAD (see `PIPELINE_WORKER_CLEANUP` below) — your changes now live safely on the feature branch instead of sitting uncommitted locally too.
 
 Polling is plain REST and costs zero agent tokens; the agent is invoked only when a pipeline actually fails, with truncated logs and a token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server for anything more it needs.
 
@@ -63,8 +64,33 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_GITHUB_REPO`           | auto-detected from `origin`  | `owner/name` slug — only needed when `origin` isn't a GitHub remote          |
 | `PIPELINE_WORKER_GITHUB_TOKEN`          | falls back to `GITHUB_TOKEN` | GitHub token                                                                  |
 | `PIPELINE_WORKER_POLL_INTERVAL_SECONDS` | `15`                         | pipeline poll cadence; use `60` for slow pipelines                            |
+| `PIPELINE_WORKER_BRANCH_PATTERN`        | `pipeline-worker/{name}`     | feature branch naming template — see below                                    |
+| `PIPELINE_WORKER_CLEANUP`               | `true`                       | reset repoRoot to HEAD once the MR/PR is opened and CI is green (`false` to keep your local uncommitted changes as-is) |
 
 `build` / `lint` / `test` local check commands and `maxFixAttempts` (default `5`) are not configurable via env var — see auto-detection below.
+
+### Branch naming
+
+`branchPattern` (env var or `.pipeline-worker.yml`) controls the feature branch name, built from three placeholders:
+
+| Placeholder | Filled by                                                          |
+| ----------- | ------------------------------------------------------------------- |
+| `{type}`    | `feature`, `bugfix`, or `chore` — inferred from the diff by the agent |
+| `{ticket}`  | the `--ticket <id>` flag passed to `pipeline-worker run`             |
+| `{name}`    | a short kebab-case slug describing the change — inferred by the agent |
+
+For example, a team using GitLab issue-linked branches would set:
+
+```sh
+export PIPELINE_WORKER_BRANCH_PATTERN='{type}/{ticket}/{name}'
+```
+
+```sh
+pipeline-worker run --ticket PROJ-123
+# -> bugfix/PROJ-123/fix-login-redirect
+```
+
+A pattern that includes `{ticket}` requires `--ticket` to be passed; the run fails fast at the naming step otherwise.
 
 ### Check command auto-detection
 
@@ -83,7 +109,7 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 
 | Command                                      | What it does                                                              |
 | -------------------------------------------- | ------------------------------------------------------------------------- |
-| `pipeline-worker` (or `pipeline-worker run`) | Capture the current diff and drive it to a green MR/PR                    |
+| `pipeline-worker` (or `pipeline-worker run`) `[--ticket <id>]` | Capture the current diff and drive it to a green MR/PR        |
 | `pipeline-worker serve`                      | Start the forge MCP server over stdio (used by the agent during fix runs) |
 | `pipeline-worker resume --branch <name>`     | Resume watching/fixing a run after a crash                                |
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |

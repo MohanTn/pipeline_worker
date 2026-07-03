@@ -128,6 +128,34 @@ test('loadConfig defaults forge to gitlab and pollIntervalSeconds to 15', () => 
   });
 });
 
+test('loadConfig defaults branchPattern to pipeline-worker/{name} and cleanupOnSuccess to true', () => {
+  withTempDir((dir) => {
+    const config = loadConfig(dir);
+    assert.equal(config.branchPattern, 'pipeline-worker/{name}');
+    assert.equal(config.cleanupOnSuccess, true);
+  });
+});
+
+test('loadConfig reads branchPattern and cleanupOnSuccess from yaml', () => {
+  withTempDir((dir) => {
+    writeFileSync(join(dir, '.pipeline-worker.yml'), 'branchPattern: "{type}/{ticket}/{name}"\ncleanupOnSuccess: false\n');
+    const config = loadConfig(dir);
+    assert.equal(config.branchPattern, '{type}/{ticket}/{name}');
+    assert.equal(config.cleanupOnSuccess, false);
+  });
+});
+
+test('env vars override yaml for branchPattern and cleanupOnSuccess', () => {
+  withTempDir((dir) => {
+    writeFileSync(join(dir, '.pipeline-worker.yml'), 'branchPattern: "yaml/{name}"\ncleanupOnSuccess: true\n');
+    process.env.PIPELINE_WORKER_BRANCH_PATTERN = '{type}/{name}';
+    process.env.PIPELINE_WORKER_CLEANUP = 'false';
+    const config = loadConfig(dir);
+    assert.equal(config.branchPattern, '{type}/{name}');
+    assert.equal(config.cleanupOnSuccess, false);
+  });
+});
+
 test('loadConfig reads forge, github.repo, and pollIntervalSeconds from yaml', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, '.pipeline-worker.yml'), 'forge: github\ngithub:\n  repo: acme/widgets\npollIntervalSeconds: 60\n');

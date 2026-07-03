@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { captureDiff } from '../src/git/diff.js';
+import { captureDiff, resetRepo } from '../src/git/diff.js';
 import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree } from '../src/git/worktree.js';
 
 const execFileAsync = promisify(execFile);
@@ -233,5 +233,41 @@ test('syncWithOrigin rebases the worktree onto a moved-ahead origin/main, preser
     rmSync(originDir, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(otherClone, { recursive: true, force: true });
+  }
+});
+
+test('resetRepo discards a tracked edit and deletes the given untracked files, regardless of the checked-out branch name', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    await execFileAsync('git', ['checkout', '-q', '-b', 'some-other-branch'], { cwd: repoRoot });
+
+    writeFileSync(join(repoRoot, 'package.json'), readFileSync(join(repoRoot, 'package.json'), 'utf-8').replace('1.0.0', '1.0.1'));
+    writeFileSync(join(repoRoot, 'new-file.txt'), 'hello from pipeline-worker\n');
+    const { untrackedFiles } = await captureDiff(repoRoot);
+    assert.deepEqual(untrackedFiles, ['new-file.txt']);
+
+    await resetRepo(repoRoot, untrackedFiles);
+
+    assert.match(readFileSync(join(repoRoot, 'package.json'), 'utf-8'), /1\.0\.0/);
+    assert.equal(existsSync(join(repoRoot, 'new-file.txt')), false);
+    const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], { cwd: repoRoot });
+    assert.equal(status.trim(), '');
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('resetRepo leaves untracked files outside the captured list alone', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    writeFileSync(join(repoRoot, 'captured.txt'), 'part of the diff\n');
+    writeFileSync(join(repoRoot, 'unrelated-scratch.txt'), 'not part of the diff\n');
+
+    await resetRepo(repoRoot, ['captured.txt']);
+
+    assert.equal(existsSync(join(repoRoot, 'captured.txt')), false);
+    assert.equal(existsSync(join(repoRoot, 'unrelated-scratch.txt')), true);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
   }
 });

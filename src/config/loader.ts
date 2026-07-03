@@ -36,6 +36,8 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   },
   maxFixAttempts: 5,
   pollIntervalSeconds: 15,
+  branchPattern: 'pipeline-worker/{name}',
+  cleanupOnSuccess: true,
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -61,6 +63,16 @@ function pickName<T extends string>(value: unknown, allowed: readonly T[], fallb
 function positiveNumber(value: unknown, fallback: number): number {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+/** Parses "true"/"false" (case-insensitive), falling back when unset or unrecognized. */
+function boolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (value.toLowerCase() === 'true') return true;
+    if (value.toLowerCase() === 'false') return false;
+  }
+  return fallback;
 }
 
 function resolveConfigPath(repoRoot: string, override?: string): string {
@@ -133,5 +145,7 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
       process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS,
       positiveNumber(parsed.pollIntervalSeconds, DEFAULT_CONFIG.pollIntervalSeconds),
     ),
+    branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || parsed.branchPattern || DEFAULT_CONFIG.branchPattern,
+    cleanupOnSuccess: boolean(process.env.PIPELINE_WORKER_CLEANUP, boolean(parsed.cleanupOnSuccess, DEFAULT_CONFIG.cleanupOnSuccess)),
   };
 }

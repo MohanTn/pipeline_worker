@@ -3,7 +3,8 @@
 import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
 import { selectAgent } from '../agent/index.js';
-import { captureDiff } from '../git/diff.js';
+import { captureDiff, resetRepo } from '../git/diff.js';
+import { buildBranchName } from '../git/branchName.js';
 import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, renameBranch, generateTempBranchName } from '../git/worktree.js';
 import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers } from '../git/commit.js';
 import { captureIntent } from './captureIntent.js';
@@ -55,7 +56,12 @@ async function resolveApplyConflicts(agent: AgentAdapter, worktreePath: string, 
   await stageAll(worktreePath);
 }
 
-export async function runWorkflow(repoRoot: string): Promise<void> {
+export interface RunWorkflowOptions {
+  /** Ticket/issue id to interpolate into config.branchPattern's {ticket} placeholder, if it has one. */
+  ticket?: string;
+}
+
+export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions = {}): Promise<void> {
   const config = loadConfig(repoRoot);
   const forge = createForge(config);
   const agent = selectAgent(config);
@@ -124,20 +130,21 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
       5,
       '🧠',
       'Understanding your changes',
-      `ask ${config.agent} to infer a branch name, commit message, and summary`,
+      `ask ${config.agent} to infer a change type, branch slug, commit message, and summary`,
       () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath),
     );
     note(`${config.agent} says: ${intent.summary}`);
     noteRisk(intent.risk, intent.riskReason);
 
+    const branchName = buildBranchName(config.branchPattern, { type: intent.changeType, ticket: options.ticket, name: intent.branchSlug });
     await runStep(
       6,
       '🌿',
       'Checkout feature branch',
-      `switch to feature branch ${intent.branchName}`,
-      () => renameBranch(worktreePath, intent.branchName),
+      `switch to feature branch ${branchName}`,
+      () => renameBranch(worktreePath, branchName),
     );
-    state = { ...state, branch: intent.branchName, phase: 'intent' };
+    state = { ...state, branch: branchName, phase: 'intent' };
     saveRunState(repoRoot, state);
 
     const checks = await runStep(
@@ -183,6 +190,19 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
     if (finalPhase === 'done') {
       const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
       step('🎉', 'Done', detail);
+      if (config.cleanupOnSuccess) {
+        // The captured changes now live safely on state.branch (pushed and,
+        // per finalPhase === 'done', either merged-clean or CI-verified) —
+        // repoRoot's copy is redundant, so reset it back to HEAD regardless
+        // of what branch it's currently on.
+        await runStep(
+          11,
+          '🧹',
+          'Cleaning up your repo',
+          `reset to HEAD — your changes are now safely on ${state.branch}`,
+          () => resetRepo(repoRoot, untrackedFiles),
+        );
+      }
     } else if (finalPhase === 'escalated') {
       step('🚨', 'Stopped for human review', `see ${mr.webUrl} for what was tried and why`);
       process.exitCode = 1;

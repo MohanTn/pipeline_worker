@@ -23,9 +23,10 @@ program.version(pkg.version, '-v, --version', 'output the installed pipeline-wor
 program
   .command('run', { isDefault: true })
   .description('Capture the current diff, validate it, and drive it through to a green MR/PR')
-  .action(async () => {
+  .option('--ticket <id>', 'ticket/issue id to interpolate into the configured branchPattern\'s {ticket} placeholder')
+  .action(async (opts: { ticket?: string }) => {
     try {
-      await runWorkflow(process.cwd());
+      await runWorkflow(process.cwd(), { ticket: opts.ticket });
     } catch (error) {
       console.error('pipeline-worker run failed:', error instanceof Error ? error.message : error);
       process.exit(1);

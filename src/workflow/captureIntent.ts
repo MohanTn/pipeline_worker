@@ -32,12 +32,15 @@ const RISK_CRITERIA =
   'medium: the change touches a shared/dependent component, but that component is well covered by existing unit tests. ' +
   "high: the change touches existing/critical code paths and needs a human reviewer's attention before merging.";
 
+const CHANGE_TYPES = ['feature', 'bugfix', 'chore'] as const;
+
 const INTENT_SCHEMA = {
   type: 'object',
   properties: {
     intent: { type: 'string', description: 'One short sentence, no line breaks: why this change exists / what problem it solves.' },
     summary: { type: 'string', description: 'One or two sentences (single line, no line breaks) on what this change does and why' },
-    branchName: { type: 'string', description: 'A short kebab-case branch name, prefixed with pipeline-worker/' },
+    changeType: { type: 'string', enum: [...CHANGE_TYPES], description: 'The kind of change, used to compose the branch name.' },
+    branchSlug: { type: 'string', description: 'A short kebab-case slug describing the change — no prefix, path, or ticket id.' },
     commitMessage: {
       type: 'string',
       maxLength: COMMIT_MESSAGE_MAX_LENGTH,
@@ -65,7 +68,7 @@ const INTENT_SCHEMA = {
       description: 'Concrete test scenarios (each a single line) a reviewer should verify before merging.',
     },
   },
-  required: ['intent', 'summary', 'branchName', 'commitMessage', 'fileChanges', 'risk', 'riskReason', 'testScenarios'],
+  required: ['intent', 'summary', 'changeType', 'branchSlug', 'commitMessage', 'fileChanges', 'risk', 'riskReason', 'testScenarios'],
 } as const;
 
 /**
@@ -82,15 +85,19 @@ function singleLine(fieldName: string) {
 }
 
 /**
- * Agent output is untrusted input: validate the shape and constrain the
- * branch name to characters that are safe as a git ref and a URL segment.
- * commitMessage doubles as the MR/PR title (see openMergeRequest.ts), so it
- * must stay a single line short enough to render as one.
+ * Agent output is untrusted input: validate the shape and constrain
+ * branchSlug to characters that are safe as a git ref segment and a URL
+ * segment (the full branch name — prefix, ticket, slug — is composed and
+ * re-validated by git/branchName.ts once orchestrate.ts knows the
+ * configured branchPattern and any --ticket). commitMessage doubles as the
+ * MR/PR title (see openMergeRequest.ts), so it must stay a single line
+ * short enough to render as one.
  */
 const IntentShape = z.object({
   intent: singleLine('intent'),
   summary: singleLine('summary'),
-  branchName: z.string().regex(/^pipeline-worker\/[A-Za-z0-9][A-Za-z0-9._-]*$/, 'branchName must be pipeline-worker/<kebab-case-name>'),
+  changeType: z.enum(CHANGE_TYPES),
+  branchSlug: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'branchSlug must be a kebab-case slug with no prefix, path, or ticket id'),
   commitMessage: z
     .string()
     .min(1)
@@ -121,7 +128,8 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
     "once) for a file that already existed, or Read it directly if it's a new file git diff won't show. " +
     'Then determine the intent behind the change as a whole. ' +
     'Respond with a JSON object matching the given schema: why this change exists, a short summary of what changed, ' +
-    'a kebab-case branch name prefixed with "pipeline-worker/", a short single-line conventional-commit ' +
+    `the kind of change (${CHANGE_TYPES.join('/')}), a short kebab-case branch slug describing the change ` +
+    '(no prefix, path, or ticket id — those are added separately), a short single-line conventional-commit ' +
     `subject (max ${COMMIT_MESSAGE_MAX_LENGTH} characters, no body or bullet list, used verbatim as the MR/PR title), ` +
     'a one-line summary per changed file, a risk level with a one-line justification ' +
     `(${RISK_CRITERIA}), and the concrete test scenarios a reviewer should check before merging.`;
