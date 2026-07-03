@@ -1,12 +1,14 @@
 /**
  * Headless Claude Code adapter. Flags verified against the locally installed
  * `claude` CLI: `-p/--print`, `--output-format json`, `--permission-mode`,
- * `--json-schema`, `--mcp-config`. There is no `--cwd` flag — working
- * directory is controlled by the spawned process's `cwd` option.
+ * `--json-schema`, `--mcp-config`, `--allowedTools`. There is no `--cwd`
+ * flag — working directory is controlled by the spawned process's `cwd`
+ * option.
  *
  * The prompt is written to the child's stdin rather than passed as a CLI
- * argument. captureIntent.ts embeds a full git diff in the prompt, and Linux
- * caps a single exec() argument at ~128KB (MAX_ARG_STRLEN); a large diff
+ * argument. Some invocations (e.g. watchPipeline.ts's CI-fix prompt, which
+ * embeds failing-job logs) can carry many KB of text, and Linux caps a
+ * single exec() argument at ~128KB (MAX_ARG_STRLEN); a large enough prompt
  * blows past that and execFile fails with E2BIG before `claude` even starts.
  * Piping via stdin (verified: `echo "..." | claude -p` reads the prompt from
  * stdin when the positional `prompt` argument is omitted) has no such limit.
@@ -101,6 +103,9 @@ export const claudeAdapter: AgentAdapter = {
     ];
     if (opts.jsonSchema) {
       args.push('--json-schema', JSON.stringify(opts.jsonSchema));
+    }
+    if (opts.allowedTools?.length) {
+      args.push('--allowedTools', ...opts.allowedTools);
     }
     if (opts.mcpConfigPath) {
       args.push('--mcp-config', opts.mcpConfigPath);

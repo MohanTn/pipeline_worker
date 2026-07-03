@@ -61,7 +61,7 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
   const agent = selectAgent(config);
   await printWelcome(config, repoRoot);
 
-  const { diffText, untrackedFiles } = await runStep(
+  const { diffText, changedFiles, untrackedFiles } = await runStep(
     1,
     '📸',
     'Capturing your changes',
@@ -125,7 +125,7 @@ export async function runWorkflow(repoRoot: string): Promise<void> {
       '🧠',
       'Understanding your changes',
       `ask ${config.agent} to infer a branch name, commit message, and summary`,
-      () => captureIntent(agent, diffText, worktreePath),
+      () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath),
     );
     note(`${config.agent} says: ${intent.summary}`);
     noteRisk(intent.risk, intent.riskReason);

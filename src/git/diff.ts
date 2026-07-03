@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 
 export interface CapturedDiff {
   diffText: string;
+  changedFiles: string[];
   untrackedFiles: string[];
 }
 
@@ -25,18 +26,25 @@ export interface CapturedDiff {
  * actual base64 patch data instead of a `Binary files a/... differ` stub —
  * without it, `git apply` in worktree.ts fails with "missing binary patch
  * data" for any binary file in the change set.
+ *
+ * `changedFiles` is captured separately via `--name-only` (a plain path
+ * list, no patch data) so callers that only need to *name* what changed —
+ * e.g. captureIntent.ts, which lets the agent read each file's diff itself
+ * rather than having one embedded in its prompt — never have to hold or
+ * scan the full (potentially many-MB, base64-laden) `diffText`.
  */
 export async function captureDiff(repoRoot: string): Promise<CapturedDiff> {
-  const { stdout: diffText } = await execFileAsync('git', ['diff', 'HEAD', '--full-index', '--binary'], {
-    cwd: repoRoot,
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const [{ stdout: diffText }, { stdout: nameOnlyOut }, { stdout: statusOut }] = await Promise.all([
+    execFileAsync('git', ['diff', 'HEAD', '--full-index', '--binary'], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 }),
+    execFileAsync('git', ['diff', 'HEAD', '--name-only'], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 }),
+    execFileAsync('git', ['status', '--porcelain'], { cwd: repoRoot }),
+  ]);
 
-  const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd: repoRoot });
+  const changedFiles = nameOnlyOut.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
   const untrackedFiles = statusOut
     .split('\n')
     .filter((line) => line.startsWith('?? '))
     .map((line) => line.slice(3).trim());
 
-  return { diffText, untrackedFiles };
+  return { diffText, changedFiles, untrackedFiles };
 }
