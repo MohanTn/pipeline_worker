@@ -1,7 +1,8 @@
 /**
  * Isolated git worktree management. The caller's own working directory is
  * never touched — all workflow steps run inside a disposable worktree that
- * is always removed afterward (see workflow/orchestrate.ts's finally block).
+ * is always removed afterward (see workflow/orchestrate.ts's and cli.ts's
+ * `resume` command's finally blocks).
  */
 
 import { execFile } from 'node:child_process';
@@ -47,11 +48,49 @@ function linkNodeModules(repoRoot: string, worktreePath: string): void {
   symlinkSync(sourceNodeModules, destNodeModules, 'dir');
 }
 
+function newWorktreeDir(): string {
+  const parentDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-'));
+  return join(parentDir, 'worktree');
+}
+
 /** Creates a new worktree off HEAD on a fresh branch, returning its path. */
 export async function createWorktree(repoRoot: string, branchName: string): Promise<string> {
-  const parentDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-'));
-  const worktreePath = join(parentDir, 'worktree');
+  const worktreePath = newWorktreeDir();
   await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], { cwd: repoRoot });
+  return worktreePath;
+}
+
+/**
+ * True when `worktreePath` still exists and is checked out to exactly
+ * `branch` — the narrow case where a crashed run's original worktree
+ * survived (e.g. a SIGKILL that skipped orchestrate.ts's cleanup). Any
+ * failure (path missing, not a git worktree, detached HEAD) is treated as
+ * "not valid" rather than thrown, since the caller's fallback
+ * (checkoutExistingBranch) is always safe to fall back on.
+ */
+export async function isWorktreeOnBranch(worktreePath: string, branch: string): Promise<boolean> {
+  if (!existsSync(worktreePath)) return false;
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: worktreePath });
+    return stdout.trim() === branch;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checks out a branch that already exists on origin (used by `pipeline-worker
+ * resume`, where the original worktree from the crashed run is normally
+ * already gone — see orchestrate.ts's unconditional cleanup). Fetches first
+ * and resets the local branch to match origin/branch with `-B` rather than
+ * reusing whatever local ref might already exist, so the worktree reflects
+ * the branch's actual current state on the forge (what CI is really running
+ * against) instead of a possibly stale/diverged local copy.
+ */
+export async function checkoutExistingBranch(repoRoot: string, branch: string): Promise<string> {
+  const worktreePath = newWorktreeDir();
+  await execFileAsync('git', ['fetch', 'origin', branch], { cwd: repoRoot });
+  await execFileAsync('git', ['worktree', 'add', '-B', branch, worktreePath, `origin/${branch}`], { cwd: repoRoot });
   return worktreePath;
 }
 

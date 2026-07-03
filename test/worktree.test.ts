@@ -6,7 +6,14 @@ import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, ex
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureDiff, resetRepo } from '../src/git/diff.js';
-import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree } from '../src/git/worktree.js';
+import {
+  createWorktree,
+  syncWithOrigin,
+  applyDiffToWorktree,
+  removeWorktree,
+  isWorktreeOnBranch,
+  checkoutExistingBranch,
+} from '../src/git/worktree.js';
 
 const execFileAsync = promisify(execFile);
 const FIXTURE = join(import.meta.dirname, 'fixtures', 'sample-repo');
@@ -268,6 +275,62 @@ test('resetRepo leaves untracked files outside the captured list alone', async (
     assert.equal(existsSync(join(repoRoot, 'captured.txt')), false);
     assert.equal(existsSync(join(repoRoot, 'unrelated-scratch.txt')), true);
   } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('isWorktreeOnBranch is true only when the path exists and HEAD matches the given branch', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-branch-check');
+    try {
+      assert.equal(await isWorktreeOnBranch(worktreePath, 'pipeline-worker/tmp-branch-check'), true);
+      assert.equal(await isWorktreeOnBranch(worktreePath, 'some-other-branch'), false);
+      assert.equal(await isWorktreeOnBranch(join(repoRoot, 'does-not-exist'), 'pipeline-worker/tmp-branch-check'), false);
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checkoutExistingBranch checks out a branch already pushed to origin, resetting a diverged local ref to match it', async () => {
+  const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-origin-'));
+  const repoRoot = await makeSampleRepo();
+  try {
+    await execFileAsync('git', ['init', '-q', '--bare', originDir]);
+    await execFileAsync('git', ['branch', '-M', 'main'], { cwd: repoRoot });
+    await execFileAsync('git', ['remote', 'add', 'origin', originDir], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repoRoot });
+
+    // Push a feature branch to origin — this simulates the branch a crashed
+    // `pipeline-worker run` already opened an MR for.
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feature/resume-test'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'feature.txt'), 'pushed to origin\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: repoRoot });
+    await execFileAsync('git', ['commit', '-q', '-m', 'feature work'], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'feature/resume-test'], { cwd: repoRoot });
+
+    // Diverge the local branch ref from origin, simulating a stale/local-only
+    // commit that must NOT leak into the resumed worktree — resume must
+    // reflect what's actually on the forge (what CI ran against), not
+    // whatever repoRoot's local branch happens to point at. Switch back to
+    // main afterward: `git worktree add -B` refuses a branch that's checked
+    // out elsewhere, and repoRoot itself counts as a worktree.
+    writeFileSync(join(repoRoot, 'feature.txt'), 'diverged local-only change\n');
+    await execFileAsync('git', ['commit', '-q', '-am', 'local-only divergence'], { cwd: repoRoot });
+    await execFileAsync('git', ['checkout', '-q', 'main'], { cwd: repoRoot });
+
+    const worktreePath = await checkoutExistingBranch(repoRoot, 'feature/resume-test');
+    try {
+      assert.equal(await isWorktreeOnBranch(worktreePath, 'feature/resume-test'), true);
+      assert.equal(readFileSync(join(worktreePath, 'feature.txt'), 'utf-8'), 'pushed to origin\n');
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
