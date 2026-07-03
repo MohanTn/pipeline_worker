@@ -151,6 +151,46 @@ test('claudeAdapter omits --model when opts.model is not set', { skip: process.p
   }
 });
 
+test('claudeAdapter passes --allowedTools through to the CLI when opts.allowedTools is set', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeClaude = join(binDir, 'claude');
+  const argsFile = join(topDir, 'args.txt');
+  writeFileSync(fakeClaude, `#!/bin/sh\necho "$@" > "${argsFile}"\necho '{"result":"ok"}'\n`);
+  chmodSync(fakeClaude, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    await claudeAdapter.invoke({ prompt: 'hi', cwd: binDir, allowedTools: ['Read', 'Bash(git diff:*)'] });
+    assert.match(readFileSync(argsFile, 'utf-8'), /--allowedTools Read Bash\(git diff:\*\)/);
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
+test('claudeAdapter omits --allowedTools when opts.allowedTools is not set', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeClaude = join(binDir, 'claude');
+  const argsFile = join(topDir, 'args.txt');
+  writeFileSync(fakeClaude, `#!/bin/sh\necho "$@" > "${argsFile}"\necho '{"result":"ok"}'\n`);
+  chmodSync(fakeClaude, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    await claudeAdapter.invoke({ prompt: 'hi', cwd: binDir });
+    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /--allowedTools/);
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
 test('claudeAdapter delivers the prompt over stdin rather than argv, avoiding E2BIG on large diffs', { skip: process.platform === 'win32' }, async () => {
   const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
   const binDir = join(topDir, 'bin');

@@ -11,6 +11,12 @@ export interface AgentInvokeOptions {
   mcpConfigPath?: string;
   /** Optional permission mode override; adapters default to an auto-accept mode suitable for unattended runs. */
   permissionMode?: string;
+  /**
+   * Optional allowlist restricting which tools the agent may use this turn (e.g. `["Read", "Bash(git diff:*)"]`).
+   * For adapters that can't scope tool access per invocation (e.g. copilot, which always runs with full tool
+   * access), this is ignored — see that adapter's file comment for the implication.
+   */
+  allowedTools?: string[];
   /** Optional model override (e.g. "haiku"), for adapters that support per-invocation model selection. */
   model?: string;
 }

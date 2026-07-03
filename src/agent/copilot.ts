@@ -8,6 +8,9 @@
  *    prompt and the JSON object is extracted from the response text;
  *  - no per-invocation MCP config flag -> Copilot only reads
  *    ~/.copilot/mcp-config.json, so `mcpConfigPath` is ignored with a warning.
+ *  - no per-invocation tool allowlist -> `--allow-all-tools` is always passed,
+ *    so `allowedTools` is ignored; a read-only step (e.g. captureIntent.ts)
+ *    gets full tool access under this adapter instead of being restricted.
  *
  * The prompt is piped over stdin rather than passed via `-p <prompt>`.
  * captureIntent.ts embeds a full git diff in the prompt, and a large diff can

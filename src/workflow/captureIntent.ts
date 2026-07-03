@@ -15,6 +15,18 @@ const COMMIT_MESSAGE_MAX_LENGTH = 72;
  */
 const INTENT_MODEL = 'haiku';
 
+/**
+ * Read-only tools the agent may use to inspect the change set itself (see
+ * captureIntent below): `Read` for new/untracked files (`git diff` shows
+ * nothing for those), `Bash(git diff:*)` for modified tracked files, and
+ * `Grep`/`Glob` for broader repo context when judging risk or test
+ * scenarios. Deliberately excludes Write/Edit and any git subcommand that
+ * can mutate state (commit, checkout, reset, ...) — this step only reports
+ * intent, it must not be able to change the worktree the later
+ * apply/commit/checkout steps depend on.
+ */
+const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)'];
+
 const RISK_CRITERIA =
   'low: the change is isolated to independent components with a small blast radius. ' +
   'medium: the change touches a shared/dependent component, but that component is well covered by existing unit tests. ' +
@@ -90,17 +102,38 @@ const IntentShape = z.object({
   testScenarios: z.array(singleLine('testScenarios[]')).min(1),
 });
 
-export async function captureIntent(agent: AgentAdapter, diffText: string, worktreePath: string): Promise<CapturedIntent> {
+/**
+ * Rather than embedding the (potentially huge — generated lockfiles, binary
+ * assets, etc.) diff text in the prompt, this only lists which files
+ * changed and lets the agent read each one's diff itself with its own
+ * tools, scoped to `worktreePath` (the isolated worktree the change was
+ * already applied into by orchestrate.ts's "Applying your changes" step).
+ * That keeps the prompt itself small and constant-size regardless of how
+ * large any individual file's diff is, and lets the agent skip files it
+ * judges irrelevant to intent (lockfiles, generated assets) instead of
+ * paying to read them.
+ */
+export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string): Promise<CapturedIntent> {
   const prompt =
-    'Read the following git diff and determine the intent behind it. ' +
+    'The following files changed in this git worktree (which is your current working directory):\n' +
+    files.map((file) => `- ${file}`).join('\n') +
+    '\n\nUse your tools to inspect what changed: `git diff HEAD -- <file>` (or `git diff HEAD` for everything at ' +
+    "once) for a file that already existed, or Read it directly if it's a new file git diff won't show. " +
+    'Then determine the intent behind the change as a whole. ' +
     'Respond with a JSON object matching the given schema: why this change exists, a short summary of what changed, ' +
     'a kebab-case branch name prefixed with "pipeline-worker/", a short single-line conventional-commit ' +
     `subject (max ${COMMIT_MESSAGE_MAX_LENGTH} characters, no body or bullet list, used verbatim as the MR/PR title), ` +
     'a one-line summary per changed file, a risk level with a one-line justification ' +
-    `(${RISK_CRITERIA}), and the concrete test scenarios a reviewer should check before merging.\n\n` +
-    `\`\`\`diff\n${diffText}\n\`\`\``;
+    `(${RISK_CRITERIA}), and the concrete test scenarios a reviewer should check before merging.`;
 
-  const result = await agent.invoke({ prompt, cwd: worktreePath, jsonSchema: INTENT_SCHEMA, model: INTENT_MODEL });
+  const result = await agent.invoke({
+    prompt,
+    cwd: worktreePath,
+    jsonSchema: INTENT_SCHEMA,
+    model: INTENT_MODEL,
+    permissionMode: 'default',
+    allowedTools: READ_ONLY_TOOLS,
+  });
   try {
     return IntentShape.parse(JSON.parse(result.text));
   } catch (error) {
