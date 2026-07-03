@@ -9,7 +9,8 @@ import { startServer } from './mcp/server.js';
 import { loadConfig } from './config/loader.js';
 import { createForge } from './forge/index.js';
 import { selectAgent } from './agent/index.js';
-import { loadRunState } from './state/runState.js';
+import { loadRunState, saveRunState } from './state/runState.js';
+import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -60,7 +61,37 @@ program
       const config = loadConfig(repoRoot);
       const forge = createForge(config);
       const agent = selectAgent(config);
-      await watchPipeline(forge, config, agent, state.worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
+
+      // The worktree from the crashed run is almost always already gone by
+      // this point (orchestrate.ts's `finally` removes it on any exception,
+      // and on SIGINT/SIGTERM) — reuse it only in the narrow case it
+      // survived (e.g. a SIGKILL), otherwise recreate it from the branch's
+      // current state on origin.
+      const worktreePath = (await isWorktreeOnBranch(state.worktreePath, state.branch))
+        ? state.worktreePath
+        : await checkoutExistingBranch(repoRoot, state.branch);
+      if (worktreePath !== state.worktreePath) {
+        state.worktreePath = worktreePath;
+        saveRunState(repoRoot, state);
+      }
+
+      let cleanedUp = false;
+      const cleanup = async (): Promise<void> => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        await removeWorktree(repoRoot, worktreePath);
+      };
+      const onSignal = (exitCode: number) => {
+        void cleanup().then(() => process.exit(exitCode));
+      };
+      process.once('SIGINT', () => onSignal(130));
+      process.once('SIGTERM', () => onSignal(143));
+
+      try {
+        await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
+      } finally {
+        await cleanup();
+      }
       console.log(`pipeline-worker: resumed run finished with phase "${state.phase}".`);
     } catch (error) {
       console.error('pipeline-worker resume failed:', error instanceof Error ? error.message : error);
