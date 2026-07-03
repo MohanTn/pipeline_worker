@@ -140,6 +140,20 @@ test('loadConfig defaults intentModel to haiku', () => {
   });
 });
 
+test('loadConfig defaults runLintAndTest to true', () => {
+  withTempDir((dir) => {
+    const config = loadConfig(dir);
+    assert.equal(config.runLintAndTest, true);
+  });
+});
+
+test('PIPELINE_WORKER_RUN_LINT_AND_TEST overrides the default', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = 'false';
+    assert.equal(loadConfig(dir).runLintAndTest, false);
+  });
+});
+
 test('PIPELINE_WORKER_INTENT_MODEL overrides the default', () => {
   withTempDir((dir) => {
     process.env.PIPELINE_WORKER_INTENT_MODEL = 'sonnet';

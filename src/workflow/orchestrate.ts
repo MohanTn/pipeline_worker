@@ -63,6 +63,9 @@ export interface RunWorkflowOptions {
 
 export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions = {}): Promise<void> {
   const config = loadConfig(repoRoot);
+  if (config.forge === 'gitlab' && !options.ticket) {
+    throw new Error('forge is gitlab, which requires a ticket id — pass one with --ticket <id>.');
+  }
   const forge = createForge(config);
   const agent = selectAgent(config);
   await printWelcome(config, repoRoot);

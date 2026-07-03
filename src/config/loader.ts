@@ -35,6 +35,7 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   branchPattern: 'pipeline-worker/{name}',
   cleanupOnSuccess: true,
   intentModel: 'haiku',
+  runLintAndTest: true,
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -139,5 +140,6 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || DEFAULT_CONFIG.branchPattern,
     cleanupOnSuccess: boolean(process.env.PIPELINE_WORKER_CLEANUP, DEFAULT_CONFIG.cleanupOnSuccess),
     intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
+    runLintAndTest: boolean(process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
   };
 }

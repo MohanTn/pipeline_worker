@@ -27,6 +27,8 @@ export interface PipelineWorkerConfig {
   branchPattern: string;
   /** Once the MR/PR is opened and CI is green, reset repoRoot to HEAD — the captured changes now live safely on the branch. */
   cleanupOnSuccess: boolean;
+  /** Run the local lint and test stages before opening the MR/PR; false runs only build, skipping both — e.g. when an earlier workflow already verified them. */
+  runLintAndTest: boolean;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';
