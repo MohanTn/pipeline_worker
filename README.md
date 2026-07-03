@@ -11,10 +11,10 @@ Automate the last mile of your local changes: pipeline-worker takes the uncommit
 3. Asks a coding agent (Claude Code or GitHub Copilot CLI) to infer the intent: change type, branch slug, commit message, summary.
 4. Runs your `build` / `lint` / `test` commands, fail-fast.
 5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`.
-6. Polls the CI pipeline; on failure it hands the failing job logs to the agent, commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
+6. Polls the CI pipeline; on failure it hands the pipeline URL to the agent, which pulls the failed jobs and logs itself via whatever GitLab/GitHub MCP tooling is available (pipeline-worker's own forge MCP server, or an external one the agent already has configured), commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
 7. Once the MR/PR is ready to merge, resets your repo's current branch back to HEAD (see `PIPELINE_WORKER_CLEANUP` below) — your changes now live safely on the feature branch instead of sitting uncommitted locally too.
 
-Polling is plain REST and costs zero agent tokens; the agent is invoked only when a pipeline actually fails, with truncated logs and a token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server for anything more it needs.
+Polling is plain REST and costs zero agent tokens; the agent is invoked only when a pipeline actually fails, and fetches whatever pipeline/job detail it needs through pipeline-worker's token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server (or an external forge MCP server, if the agent has one available).
 
 ## Requirements
 
