@@ -7,15 +7,6 @@ import type { CapturedIntent } from '../types.js';
 const COMMIT_MESSAGE_MAX_LENGTH = 72;
 
 /**
- * Naming a branch/commit/summary from a diff needs no deep reasoning, so a
- * lighter model keeps this step's token cost down. Adapters that don't
- * support per-invocation model selection (e.g. copilot) just ignore this.
- * The CI-fix path (watchPipeline.ts) deliberately does NOT set this — fixing
- * a real failing build needs the stronger default model.
- */
-const INTENT_MODEL = 'haiku';
-
-/**
  * Read-only tools the agent may use to inspect the change set itself (see
  * captureIntent below): `Read` for new/untracked files (`git diff` shows
  * nothing for those), `Bash(git diff:*)` for modified tracked files, and
@@ -119,8 +110,15 @@ const IntentShape = z.object({
  * large any individual file's diff is, and lets the agent skip files it
  * judges irrelevant to intent (lockfiles, generated assets) instead of
  * paying to read them.
+ *
+ * `model` (config's `intentModel`, default "haiku" — see config/loader.ts)
+ * lets a lighter model handle this step to keep its token cost down, since
+ * naming a branch/commit/summary from a diff needs no deep reasoning.
+ * Adapters with no per-invocation model selection (e.g. copilot) ignore it.
+ * The CI-fix path (watchPipeline.ts) deliberately never sets a model override
+ * — fixing a real failing build needs the stronger default model.
  */
-export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string): Promise<CapturedIntent> {
+export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string, model: string): Promise<CapturedIntent> {
   const prompt =
     'The following files changed in this git worktree (which is your current working directory):\n' +
     files.map((file) => `- ${file}`).join('\n') +
@@ -138,7 +136,7 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
     prompt,
     cwd: worktreePath,
     jsonSchema: INTENT_SCHEMA,
-    model: INTENT_MODEL,
+    model,
     permissionMode: 'default',
     allowedTools: READ_ONLY_TOOLS,
   });

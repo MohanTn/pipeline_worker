@@ -8,6 +8,9 @@
  *    prompt and the JSON object is extracted from the response text;
  *  - no per-invocation MCP config flag -> Copilot only reads
  *    ~/.copilot/mcp-config.json, so `mcpConfigPath` is ignored with a warning.
+ *  - no per-invocation model flag -> `opts.model` (e.g. the configured
+ *    `PIPELINE_WORKER_INTENT_MODEL`) is ignored with a warning; switch
+ *    Copilot's model via its own `/model` command or config instead.
  *  - no per-invocation tool allowlist -> `--allow-all-tools` is always passed,
  *    so `allowedTools` is ignored; a read-only step (e.g. captureIntent.ts)
  *    gets full tool access under this adapter instead of being restricted.
@@ -49,6 +52,12 @@ export const copilotAdapter: AgentAdapter = {
       console.error(
         'pipeline-worker: copilot CLI has no per-invocation MCP config flag; ignoring it. ' +
           'Register the server in ~/.copilot/mcp-config.json to give copilot forge access.',
+      );
+    }
+    if (opts.model) {
+      console.error(
+        `pipeline-worker: copilot CLI has no per-invocation model flag; ignoring the configured model "${opts.model}". ` +
+          "Switch copilot's model via its own /model command or config instead.",
       );
     }
 

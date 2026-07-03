@@ -38,57 +38,64 @@ const VALID_PAYLOAD = {
 
 test('captureIntent lists changed files in the prompt instead of embedding a diff, and scopes the agent to read-only tools', async () => {
   const { agent, lastInvoke } = spyAgent(JSON.stringify(VALID_PAYLOAD));
-  await captureIntent(agent, ['src/login.ts', 'src/new-file.ts'], '/repo/worktree');
+  await captureIntent(agent, ['src/login.ts', 'src/new-file.ts'], '/repo/worktree', 'haiku');
 
   const opts = lastInvoke();
   assert.match(opts.prompt, /- src\/login\.ts/);
   assert.match(opts.prompt, /- src\/new-file\.ts/);
   assert.doesNotMatch(opts.prompt, /```diff/);
   assert.equal(opts.cwd, '/repo/worktree');
+  assert.equal(opts.model, 'haiku');
   assert.equal(opts.permissionMode, 'default');
   assert.deepEqual(opts.allowedTools, ['Read', 'Grep', 'Glob', 'Bash(git diff:*)']);
 });
 
+test('captureIntent forwards the given model to the agent so it is configurable per config/env var', async () => {
+  const { agent, lastInvoke } = spyAgent(JSON.stringify(VALID_PAYLOAD));
+  await captureIntent(agent, ['src/login.ts'], '/tmp', 'sonnet');
+  assert.equal(lastInvoke().model, 'sonnet');
+});
+
 test('captureIntent accepts a short single-line commitMessage', async () => {
-  const intent = await captureIntent(fakeAgent(JSON.stringify(VALID_PAYLOAD)), ['src/login.ts'], '/tmp');
+  const intent = await captureIntent(fakeAgent(JSON.stringify(VALID_PAYLOAD)), ['src/login.ts'], '/tmp', 'haiku');
   assert.equal(intent.commitMessage, 'feat: add login page');
 });
 
 test('captureIntent rejects a multi-line commitMessage', async () => {
   const payload = { ...VALID_PAYLOAD, commitMessage: 'fix: things\n\n- bullet one\n- bullet two' };
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp'), /single line/);
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp', 'haiku'), /single line/);
 });
 
 test('captureIntent rejects a commitMessage longer than 72 characters', async () => {
   const payload = { ...VALID_PAYLOAD, commitMessage: 'fix: '.padEnd(80, 'x') };
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp', 'haiku'));
 });
 
 test('captureIntent rejects an invalid risk level', async () => {
   const payload = { ...VALID_PAYLOAD, risk: 'critical' };
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp', 'haiku'));
 });
 
 test('captureIntent rejects an invalid changeType', async () => {
   const payload = { ...VALID_PAYLOAD, changeType: 'refactor' };
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify(payload)), ['src/login.ts'], '/tmp', 'haiku'));
 });
 
 test('captureIntent rejects a branchSlug with a prefix or uppercase characters', async () => {
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, branchSlug: 'pipeline-worker/add-login-page' })), ['src/login.ts'], '/tmp'));
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, branchSlug: 'Add-Login-Page' })), ['src/login.ts'], '/tmp'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, branchSlug: 'pipeline-worker/add-login-page' })), ['src/login.ts'], '/tmp', 'haiku'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, branchSlug: 'Add-Login-Page' })), ['src/login.ts'], '/tmp', 'haiku'));
 });
 
 test('captureIntent rejects empty fileChanges or testScenarios', async () => {
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, fileChanges: [] })), ['src/login.ts'], '/tmp'));
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, testScenarios: [] })), ['src/login.ts'], '/tmp'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, fileChanges: [] })), ['src/login.ts'], '/tmp', 'haiku'));
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, testScenarios: [] })), ['src/login.ts'], '/tmp', 'haiku'));
 });
 
 test('captureIntent rejects multi-line values in fields rendered as a single line', async () => {
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, intent: 'line one\nline two' })), ['src/login.ts'], '/tmp'), /single line/);
-  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, riskReason: 'line one\nline two' })), ['src/login.ts'], '/tmp'), /single line/);
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, intent: 'line one\nline two' })), ['src/login.ts'], '/tmp', 'haiku'), /single line/);
+  await assert.rejects(captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, riskReason: 'line one\nline two' })), ['src/login.ts'], '/tmp', 'haiku'), /single line/);
   await assert.rejects(
-    captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, testScenarios: ['line one\nline two'] })), ['src/login.ts'], '/tmp'),
+    captureIntent(fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, testScenarios: ['line one\nline two'] })), ['src/login.ts'], '/tmp', 'haiku'),
     /single line/,
   );
   await assert.rejects(
@@ -96,6 +103,7 @@ test('captureIntent rejects multi-line values in fields rendered as a single lin
       fakeAgent(JSON.stringify({ ...VALID_PAYLOAD, fileChanges: [{ file: 'a.ts', summary: 'line one\nline two' }] })),
       ['src/login.ts'],
       '/tmp',
+      'haiku',
     ),
     /single line/,
   );

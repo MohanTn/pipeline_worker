@@ -39,6 +39,32 @@ test('copilotAdapter delivers the prompt over stdin rather than argv, avoiding E
   }
 });
 
+test('copilotAdapter ignores opts.model (no per-invocation model flag) but warns instead of failing silently', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeCopilot = join(binDir, 'copilot');
+  const argsFile = join(topDir, 'args.txt');
+  writeFileSync(fakeCopilot, `#!/bin/sh\necho "$@" > "${argsFile}"\ncat > /dev/null\necho 'ok'\n`);
+  chmodSync(fakeCopilot, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  const origConsoleError = console.error;
+  const warnings: unknown[][] = [];
+  console.error = (...args: unknown[]) => warnings.push(args);
+  try {
+    await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir, model: 'sonnet' });
+    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /sonnet|--model/);
+    assert.equal(warnings.length, 1);
+    assert.match(String(warnings[0][0]), /no per-invocation model flag.*sonnet/);
+  } finally {
+    console.error = origConsoleError;
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
 test('copilotAdapter appends the JSON schema to the piped prompt when jsonSchema is set', { skip: process.platform === 'win32' }, async () => {
   const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
   const binDir = join(topDir, 'bin');

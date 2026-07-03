@@ -1,24 +1,20 @@
 /**
- * .pipeline-worker.yml loader. Resolution order per value: environment variable ->
- * .env file at repo root (never overrides real env) -> .pipeline-worker.yml ->
- * built-in default (for build/lint/test: commands auto-detected from the repo's
- * toolchain, see detectChecks.ts; for github.repo: the repo's own `origin`
- * remote, see git/remote.ts). Config file path: explicit override param ->
- * PIPELINE_WORKER_CONFIG env var -> <repoRoot>/.pipeline-worker.yml. Never throws — a
- * missing or unparseable file falls back to defaults (with a warning),
- * mirroring mcp-sonar-analysis's registry.ts read/never-throw contract.
+ * Environment-variable config resolver. Resolution order per value:
+ * environment variable -> .env file at repo root (never overrides real env) ->
+ * built-in default (for build/lint/test: commands auto-detected from the
+ * repo's toolchain, see detectChecks.ts; for github.repo: the repo's own
+ * `origin` remote, see git/remote.ts). Never throws — an unset or invalid
+ * value falls back to the default (with a warning where relevant), mirroring
+ * mcp-sonar-analysis's registry.ts read/never-throw contract.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
-import { load } from 'js-yaml';
 import { detectChecks } from './detectChecks.js';
 import { deriveProjectPath } from '../git/resolveProjectPath.js';
 import { detectGithubRepo } from '../git/remote.js';
 import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
-
-const CONFIG_FILE_NAME = '.pipeline-worker.yml';
 
 const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot'];
 const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
@@ -38,6 +34,7 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   pollIntervalSeconds: 15,
   branchPattern: 'pipeline-worker/{name}',
   cleanupOnSuccess: true,
+  intentModel: 'haiku',
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -75,42 +72,44 @@ function boolean(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
-function resolveConfigPath(repoRoot: string, override?: string): string {
-  return override || process.env.PIPELINE_WORKER_CONFIG || join(repoRoot, CONFIG_FILE_NAME);
+/**
+ * Unlike `||`-based resolution, an env var explicitly set to `''` (e.g.
+ * `PIPELINE_WORKER_BUILD=`) is honored as "skip this stage" rather than
+ * falling through to the detected default — only a genuinely unset var falls
+ * back.
+ */
+function stringOr(value: string | undefined, fallback: string): string {
+  return value !== undefined ? value : fallback;
 }
 
-function readYamlConfig(configPath: string): Partial<PipelineWorkerConfig> {
-  if (!existsSync(configPath)) return {};
-  try {
-    return (load(readFileSync(configPath, 'utf-8')) as Partial<PipelineWorkerConfig>) ?? {};
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Warning: failed to read ${configPath}: ${message}. Falling back to defaults.`);
-    return {};
-  }
+/** GitLab project ids are either numeric or a 'group/subgroup/project' path; numeric strings are coerced, everything else is kept as-is. */
+function resolveProjectId(value: string | undefined, fallback: number | string): number | string {
+  if (!value) return fallback;
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : value;
 }
 
-export function loadConfig(repoRoot: string, override?: string): PipelineWorkerConfig {
-  loadDotEnv(repoRoot); // before resolveConfigPath so PIPELINE_WORKER_CONFIG can also come from .env
-
-  const parsed = readYamlConfig(resolveConfigPath(repoRoot, override));
+export function loadConfig(repoRoot: string): PipelineWorkerConfig {
+  loadDotEnv(repoRoot);
 
   const detected = detectChecks(repoRoot);
-  if (detected.language === 'unknown' && parsed.build === undefined && parsed.lint === undefined && parsed.test === undefined) {
-    console.error(`Warning: could not detect the toolchain of ${repoRoot}; build/lint/test will be skipped. Set them in ${CONFIG_FILE_NAME}.`);
+  if (
+    detected.language === 'unknown' &&
+    process.env.PIPELINE_WORKER_BUILD === undefined &&
+    process.env.PIPELINE_WORKER_LINT === undefined &&
+    process.env.PIPELINE_WORKER_TEST === undefined
+  ) {
+    console.error(
+      `Warning: could not detect the toolchain of ${repoRoot}; build/lint/test will be skipped. ` +
+        'Set PIPELINE_WORKER_BUILD / PIPELINE_WORKER_LINT / PIPELINE_WORKER_TEST to configure them explicitly.',
+    );
   }
 
-  // Each tier is validated independently: an invalid env value falls back to
-  // a valid yaml value, not straight to the built-in default.
+  const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE;
 
-  // Resolve the repoBase: env var wins over YAML value
-  const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE || parsed.gitlab?.repoBase;
-
-  // Resolve projectId: YAML value is authoritative; when unset, fall back to
-  // auto-detecting a string path from repoBase. projectId can legitimately be
-  // a string (a 'group/subgroup/project' path), so it is kept as-is below
-  // rather than coerced through positiveNumber, which is number-only.
-  let resolvedProjectId: number | string = parsed.gitlab?.projectId ?? DEFAULT_CONFIG.gitlab.projectId;
+  // Auto-detect a string path from repoBase when no project id is configured
+  // yet; the env var override below (numeric or string path) always wins.
+  let resolvedProjectId: number | string = DEFAULT_CONFIG.gitlab.projectId;
   if (!resolvedProjectId && repoBase) {
     try {
       resolvedProjectId = deriveProjectPath(repoBase, repoRoot);
@@ -119,33 +118,26 @@ export function loadConfig(repoRoot: string, override?: string): PipelineWorkerC
       console.error(`Warning: ${message}`);
     }
   }
-
-  // The env var override is numeric-only (GitLab numeric project IDs); an
-  // unset or invalid value falls back to the yaml/auto-detected resolution
-  // above, which may be a string path.
-  const envProjectId = positiveNumber(process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID, NaN);
-  const projectId = Number.isNaN(envProjectId) ? resolvedProjectId : envProjectId;
+  const projectId = resolveProjectId(process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID, resolvedProjectId);
 
   return {
-    agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, pickName(parsed.agent, AGENT_NAMES, DEFAULT_CONFIG.agent)),
-    forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, pickName(parsed.forge, FORGE_NAMES, DEFAULT_CONFIG.forge)),
+    agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, DEFAULT_CONFIG.agent),
+    forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, DEFAULT_CONFIG.forge),
     gitlab: {
-      host: process.env.PIPELINE_WORKER_GITLAB_HOST || parsed.gitlab?.host || DEFAULT_CONFIG.gitlab.host,
+      host: process.env.PIPELINE_WORKER_GITLAB_HOST || DEFAULT_CONFIG.gitlab.host,
       projectId,
       repoBase,
     },
     github: {
-      repo: process.env.PIPELINE_WORKER_GITHUB_REPO || parsed.github?.repo || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
+      repo: process.env.PIPELINE_WORKER_GITHUB_REPO || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
     },
-    build: parsed.build ?? detected.build,
-    lint: parsed.lint ?? detected.lint,
-    test: parsed.test ?? detected.test,
-    maxFixAttempts: parsed.maxFixAttempts ?? DEFAULT_CONFIG.maxFixAttempts,
-    pollIntervalSeconds: positiveNumber(
-      process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS,
-      positiveNumber(parsed.pollIntervalSeconds, DEFAULT_CONFIG.pollIntervalSeconds),
-    ),
-    branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || parsed.branchPattern || DEFAULT_CONFIG.branchPattern,
-    cleanupOnSuccess: boolean(process.env.PIPELINE_WORKER_CLEANUP, boolean(parsed.cleanupOnSuccess, DEFAULT_CONFIG.cleanupOnSuccess)),
+    build: stringOr(process.env.PIPELINE_WORKER_BUILD, detected.build),
+    lint: stringOr(process.env.PIPELINE_WORKER_LINT, detected.lint),
+    test: stringOr(process.env.PIPELINE_WORKER_TEST, detected.test),
+    maxFixAttempts: positiveNumber(process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS, DEFAULT_CONFIG.maxFixAttempts),
+    pollIntervalSeconds: positiveNumber(process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS, DEFAULT_CONFIG.pollIntervalSeconds),
+    branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || DEFAULT_CONFIG.branchPattern,
+    cleanupOnSuccess: boolean(process.env.PIPELINE_WORKER_CLEANUP, DEFAULT_CONFIG.cleanupOnSuccess),
+    intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
   };
 }

@@ -66,12 +66,15 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_POLL_INTERVAL_SECONDS` | `15`                         | pipeline poll cadence; use `60` for slow pipelines                            |
 | `PIPELINE_WORKER_BRANCH_PATTERN`        | `pipeline-worker/{name}`     | feature branch naming template — see below                                    |
 | `PIPELINE_WORKER_CLEANUP`               | `true`                       | reset repoRoot to HEAD once the MR/PR is opened and CI is green (`false` to keep your local uncommitted changes as-is) |
-
-`build` / `lint` / `test` local check commands and `maxFixAttempts` (default `5`) are not configurable via env var — see auto-detection below.
+| `PIPELINE_WORKER_INTENT_MODEL`          | `haiku`                      | model used for the intent-capture step (branch/commit/summary); claude only — copilot has no per-invocation model selection and ignores it |
+| `PIPELINE_WORKER_BUILD`                 | auto-detected from toolchain | build command override; set to an empty string to skip the stage                                                             |
+| `PIPELINE_WORKER_LINT`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage                                                              |
+| `PIPELINE_WORKER_TEST`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage                                                              |
+| `PIPELINE_WORKER_MAX_FIX_ATTEMPTS`      | `5`                          | how many CI-fix attempts before escalating to a human                                                                        |
 
 ### Branch naming
 
-`branchPattern` (env var or `.pipeline-worker.yml`) controls the feature branch name, built from three placeholders:
+`PIPELINE_WORKER_BRANCH_PATTERN` controls the feature branch name, built from three placeholders:
 
 | Placeholder | Filled by                                                          |
 | ----------- | ------------------------------------------------------------------- |
@@ -94,7 +97,7 @@ A pattern that includes `{ticket}` requires `--ticket` to be passed; the run fai
 
 ### Check command auto-detection
 
-`build` / `lint` / `test` are picked from the repo's toolchain (first marker found wins; mixed-language repos should set the commands explicitly):
+`build` / `lint` / `test` are picked from the repo's toolchain (first marker found wins; mixed-language repos should set `PIPELINE_WORKER_BUILD` / `PIPELINE_WORKER_LINT` / `PIPELINE_WORKER_TEST` explicitly):
 
 | Toolchain         | Marker                                                 | build            | lint                                | test                                             |
 | ----------------- | ------------------------------------------------------ | ---------------- | ----------------------------------- | ------------------------------------------------ |

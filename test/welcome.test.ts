@@ -14,6 +14,9 @@ function baseConfig(overrides: Partial<PipelineWorkerConfig> = {}): PipelineWork
     test: '',
     maxFixAttempts: 5,
     pollIntervalSeconds: 15,
+    branchPattern: 'pipeline-worker/{name}',
+    cleanupOnSuccess: true,
+    intentModel: 'haiku',
     ...overrides,
   };
 }
@@ -34,8 +37,12 @@ test('repositoryUrl reports unconfigured repos plainly instead of an empty/broke
   assert.equal(repositoryUrl(baseConfig({ forge: 'gitlab', gitlab: { host: '', projectId: 0 } })), '(not configured)');
 });
 
-test('agentDescription notes the lighter model claude uses for intent capture', () => {
+test('agentDescription notes the default model claude uses for intent capture', () => {
   assert.match(agentDescription(baseConfig({ agent: 'claude' })), /haiku/);
+});
+
+test('agentDescription reflects a configured intentModel override', () => {
+  assert.match(agentDescription(baseConfig({ agent: 'claude', intentModel: 'sonnet' })), /sonnet/);
 });
 
 test('agentDescription is plain for copilot, which has no per-invocation model selection', () => {

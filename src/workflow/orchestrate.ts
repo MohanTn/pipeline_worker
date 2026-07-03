@@ -126,29 +126,8 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       await resolveApplyConflicts(agent, worktreePath, applyResult.conflictedFiles);
     }
 
-    const intent = await runStep(
-      5,
-      '🧠',
-      'Understanding your changes',
-      `ask ${config.agent} to infer a change type, branch slug, commit message, and summary`,
-      () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath),
-    );
-    note(`${config.agent} says: ${intent.summary}`);
-    noteRisk(intent.risk, intent.riskReason);
-
-    const branchName = buildBranchName(config.branchPattern, { type: intent.changeType, ticket: options.ticket, name: intent.branchSlug });
-    await runStep(
-      6,
-      '🌿',
-      'Checkout feature branch',
-      `switch to feature branch ${branchName}`,
-      () => renameBranch(worktreePath, branchName),
-    );
-    state = { ...state, branch: branchName, phase: 'intent' };
-    saveRunState(repoRoot, state);
-
     const checks = await runStep(
-      7,
+      5,
       '✅',
       'Running checks',
       'build, lint, and test — whichever your repo has configured',
@@ -164,6 +143,30 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       return;
     }
     state.phase = 'checks';
+    saveRunState(repoRoot, state);
+
+    // Runs last among the pre-push stages (checks pass first) since it's the
+    // most expensive one: no point paying for an AI summary of a change that
+    // build/lint/test already rejected.
+    const intent = await runStep(
+      6,
+      '🧠',
+      'Understanding your changes',
+      `ask ${config.agent} to infer a change type, branch slug, commit message, and summary`,
+      () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath, config.intentModel),
+    );
+    note(`${config.agent} says: ${intent.summary}`);
+    noteRisk(intent.risk, intent.riskReason);
+
+    const branchName = buildBranchName(config.branchPattern, { type: intent.changeType, ticket: options.ticket, name: intent.branchSlug });
+    await runStep(
+      7,
+      '🌿',
+      'Checkout feature branch',
+      `switch to feature branch ${branchName}`,
+      () => renameBranch(worktreePath, branchName),
+    );
+    state = { ...state, branch: branchName, phase: 'intent' };
     saveRunState(repoRoot, state);
 
     await runStep(
