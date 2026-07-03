@@ -30,8 +30,13 @@ test('copilotAdapter delivers the prompt over stdin rather than argv, avoiding E
     const result = await copilotAdapter.invoke({ prompt: bigPrompt, cwd: binDir });
     assert.equal(readFileSync(stdinFile, 'utf-8'), bigPrompt);
     // -p is omitted entirely: GitHub's docs say piped stdin is ignored
-    // whenever -p/--prompt is also given a value.
-    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /-p|--prompt|DIFF-MARKER/);
+    // whenever -p/--prompt is also given a value. Matched as whole
+    // whitespace-delimited tokens so this doesn't false-positive on flags
+    // like --allow-all-paths that merely contain the substring "-p".
+    const argTokens = readFileSync(argsFile, 'utf-8').trim().split(/\s+/);
+    assert.ok(!argTokens.includes('-p'));
+    assert.ok(!argTokens.includes('--prompt'));
+    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /DIFF-MARKER/);
     assert.equal(result.text, 'ok');
   } finally {
     process.env.PATH = origPath;
