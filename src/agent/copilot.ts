@@ -2,8 +2,13 @@
  * Headless GitHub Copilot CLI adapter. Flags verified against GitHub's
  * "Copilot CLI programmatic reference" docs: `-s` (suppress stats/decoration,
  * output only the agent's response), `--no-ask-user`, `--allow-all-tools`
- * (required for unattended fix runs). Known gaps vs the Claude adapter,
- * handled here:
+ * and `--allow-all-paths` — both required for unattended fix runs, since
+ * tool approval and path/directory-trust approval are separate gates in
+ * Copilot CLI. Without `--allow-all-paths`, every run's disposable worktree
+ * is a directory Copilot has never seen before, so any shell command
+ * touching files there (e.g. listing test projects) trips the "trust this
+ * directory?" prompt; with no TTY to answer it, the CLI fails with
+ * permission-denied instead. Known gaps vs the Claude adapter, handled here:
  *  - no structured-output/JSON-schema flag -> the schema is embedded in the
  *    prompt and the JSON object is extracted from the response text;
  *  - no per-invocation MCP config flag -> Copilot only reads
@@ -61,11 +66,15 @@ export const copilotAdapter: AgentAdapter = {
       );
     }
 
-    const invocation = execFileAsync('copilot', ['-s', '--no-ask-user', '--allow-all-tools'], {
-      cwd: opts.cwd,
-      timeout: INVOKE_TIMEOUT_MS,
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    const invocation = execFileAsync(
+      'copilot',
+      ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths'],
+      {
+        cwd: opts.cwd,
+        timeout: INVOKE_TIMEOUT_MS,
+        maxBuffer: 64 * 1024 * 1024,
+      },
+    );
     // stdin is always a pipe here since stdio isn't overridden in execFileAsync's options.
     writePromptToStdin(invocation.child.stdin!, prompt);
     const { stdout } = await invocation;
