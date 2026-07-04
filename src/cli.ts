@@ -2,8 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
 import { Command } from 'commander';
+import { ensureLatestVersion, installVersion } from './version/autoUpdate.js';
 import { runWorkflow } from './workflow/orchestrate.js';
 import { watchPipeline } from './workflow/watchPipeline.js';
 import { startServer } from './mcp/server.js';
@@ -29,6 +29,7 @@ program
   .option('--ticket <id>', 'ticket/issue id to interpolate into the configured branchPattern\'s {ticket} placeholder')
   .action(async (opts: { ticket?: string }) => {
     try {
+      await ensureLatestVersion(pkg.name, pkg.version);
       await runWorkflow(process.cwd(), { ticket: opts.ticket });
     } catch (error) {
       console.error('pipeline-worker run failed:', error instanceof Error ? error.message : error);
@@ -143,14 +144,7 @@ program
   .action(async () => {
     console.log(`pipeline-worker: currently v${pkg.version}, installing latest via npm install -g ${pkg.name}@latest ...`);
     try {
-      await new Promise<void>((resolve, reject) => {
-        // stdio: 'inherit' streams npm's own progress/errors straight to the
-        // user's terminal rather than buffering it — an install can take a
-        // while and users expect to see npm's usual output live.
-        const npm = spawn('npm', ['install', '-g', `${pkg.name}@latest`], { stdio: 'inherit' });
-        npm.on('error', reject);
-        npm.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`npm install exited with code ${code}`))));
-      });
+      await installVersion(pkg.name, 'latest');
     } catch (error) {
       console.error('pipeline-worker update failed:', error instanceof Error ? error.message : error);
       process.exit(1);

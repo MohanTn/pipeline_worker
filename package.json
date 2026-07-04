@@ -29,7 +29,8 @@
   "type": "module",
   "main": "dist/mcp/server.js",
   "bin": {
-    "pipeline-worker": "dist/cli.js"
+    "pipeline-worker": "dist/cli.js",
+    "pw": "dist/cli.js"
   },
   "files": [
     "dist",
