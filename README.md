@@ -118,6 +118,9 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 | `pipeline-worker resume --branch <name>`     | Resume watching/fixing a run after a crash                                |
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
 | `pipeline-worker sessions [--branch <name>]` | List every persisted run in this repo, or show one run's full step-by-step timeline |
+| `pipeline-worker update`                     | Install the latest release from npm (`npm install -g pipeline-worker@latest`) |
+
+Every time a run hands a turn to Claude Code or the Copilot CLI (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>` (or `copilot --resume <id>`) opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
 
 ## How the fix loop stays bounded
 

@@ -191,6 +191,46 @@ test('claudeAdapter omits --allowedTools when opts.allowedTools is not set', { s
   }
 });
 
+test('claudeAdapter surfaces session_id and duration_ms from the CLI\'s JSON envelope', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeClaude = join(binDir, 'claude');
+  writeFileSync(fakeClaude, `#!/bin/sh\ncat > /dev/null\necho '{"result":"ok","session_id":"abc-123","duration_ms":42}'\n`);
+  chmodSync(fakeClaude, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    const result = await claudeAdapter.invoke({ prompt: 'hi', cwd: binDir });
+    assert.equal(result.sessionId, 'abc-123');
+    assert.equal(result.durationMs, 42);
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
+test('claudeAdapter falls back to a wall-clock duration when the JSON envelope omits duration_ms', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeClaude = join(binDir, 'claude');
+  writeFileSync(fakeClaude, `#!/bin/sh\ncat > /dev/null\necho '{"result":"ok"}'\n`);
+  chmodSync(fakeClaude, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    const result = await claudeAdapter.invoke({ prompt: 'hi', cwd: binDir });
+    assert.equal(result.sessionId, undefined);
+    assert.ok(typeof result.durationMs === 'number' && result.durationMs >= 0);
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
 test('claudeAdapter delivers the prompt over stdin rather than argv, avoiding E2BIG on large diffs', { skip: process.platform === 'win32' }, async () => {
   const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
   const binDir = join(topDir, 'bin');

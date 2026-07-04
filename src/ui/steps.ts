@@ -8,6 +8,7 @@
 
 import { styleText } from 'node:util';
 import type { RiskLevel } from '../types.js';
+import type { AgentInvokeResult } from '../agent/types.js';
 
 const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green', medium: 'yellow', high: 'red' };
 
@@ -49,6 +50,20 @@ export function note(text: string): void {
 /** Like note(), but colors the text by risk level (green/yellow/red for low/medium/high). */
 export function noteRisk(risk: RiskLevel, reason: string): void {
   console.log(styleText('dim', '  ') + styleText(RISK_COLOR[risk], `risk: ${risk} — ${reason.replace(/\s*\n\s*/g, ' ')}`));
+}
+
+/**
+ * Reports which agent CLI session handled a turn and how long it took, so a
+ * user who wants to see how a conflict was resolved or a CI failure was
+ * fixed can look it up afterwards (`claude --resume <id>` or, for Copilot,
+ * `copilot --resume <id>` — see agent/copilot.ts on why that id is one we
+ * assigned rather than one the CLI reported). A no-op when the adapter
+ * didn't return a sessionId, which keeps this safe to call unconditionally.
+ */
+export function noteSession(result: AgentInvokeResult): void {
+  if (!result.sessionId) return;
+  const duration = result.durationMs !== undefined ? ` — ${(result.durationMs / 1000).toFixed(1)}s` : '';
+  note(`agent session: ${result.sessionId}${duration}`);
 }
 
 /**

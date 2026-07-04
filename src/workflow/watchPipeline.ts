@@ -29,11 +29,11 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import type { AgentAdapter } from '../agent/types.js';
+import type { AgentAdapter, AgentInvokeResult } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolvedConflictMarkers } from '../git/commit.js';
 import type { ForgeClient } from '../forge/types.js';
 import { recordEvent } from '../state/runState.js';
-import { step, runStep, note } from '../ui/steps.js';
+import { step, runStep, note, noteSession } from '../ui/steps.js';
 import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -242,20 +242,21 @@ async function tryResolveConflicts(
     note(conflictedFiles.join(', '));
 
     const mcpConfigPath = writeAgentMcpConfig();
-    let agentResponse: string;
+    let agentResult: AgentInvokeResult;
     try {
-      agentResponse = await runStep(
+      agentResult = await runStep(
         11,
         '🔧',
         'Resolving conflicts',
         `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-        async () =>
-          (await agent.invoke({ prompt: buildConflictPrompt(conflictedFiles), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' })).text,
+        () => agent.invoke({ prompt: buildConflictPrompt(conflictedFiles), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
       );
     } finally {
       unlinkSync(mcpConfigPath);
     }
+    const agentResponse = agentResult.text;
     note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
+    noteSession(agentResult);
 
     const stillConflicted = findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
     if (stillConflicted.length > 0) {
@@ -370,19 +371,21 @@ export async function watchPipeline(
     }
 
     const mcpConfigPath = writeAgentMcpConfig();
-    let agentResponse: string;
+    let agentResult: AgentInvokeResult;
     try {
-      agentResponse = await runStep(
+      agentResult = await runStep(
         11,
         '🔧',
         'Fixing CI failure',
         `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
-        async () => (await agent.invoke({ prompt: buildFixPrompt(pipeline, config.forge), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' })).text,
+        () => agent.invoke({ prompt: buildFixPrompt(pipeline, config.forge), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
       );
     } finally {
       unlinkSync(mcpConfigPath);
     }
+    const agentResponse = agentResult.text;
     note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
+    noteSession(agentResult);
 
     if (!(await hasChanges(worktreePath))) {
       // Re-pushing an identical tree would never produce a new pipeline; stop here.

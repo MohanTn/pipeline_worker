@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { Command } from 'commander';
 import { runWorkflow } from './workflow/orchestrate.js';
 import { watchPipeline } from './workflow/watchPipeline.js';
@@ -15,7 +16,7 @@ import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './gi
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { version: string };
+const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { name: string; version: string };
 
 const program = new Command();
 
@@ -134,6 +135,27 @@ program
       return;
     }
     printSessionList(listRunStates(repoRoot));
+  });
+
+program
+  .command('update')
+  .description(`Install the latest ${pkg.name} release from npm (npm install -g ${pkg.name}@latest)`)
+  .action(async () => {
+    console.log(`pipeline-worker: currently v${pkg.version}, installing latest via npm install -g ${pkg.name}@latest ...`);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        // stdio: 'inherit' streams npm's own progress/errors straight to the
+        // user's terminal rather than buffering it — an install can take a
+        // while and users expect to see npm's usual output live.
+        const npm = spawn('npm', ['install', '-g', `${pkg.name}@latest`], { stdio: 'inherit' });
+        npm.on('error', reject);
+        npm.on('exit', (code) => (code === 0 ? resolve() : reject(new Error(`npm install exited with code ${code}`))));
+      });
+    } catch (error) {
+      console.error('pipeline-worker update failed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+    console.log(`pipeline-worker: updated — run "${pkg.name} -v" to confirm the installed version.`);
   });
 
 program.parseAsync(process.argv).catch((error) => {
