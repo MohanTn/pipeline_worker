@@ -117,6 +117,7 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 | `pipeline-worker serve`                      | Start the forge MCP server over stdio (used by the agent during fix runs) |
 | `pipeline-worker resume --branch <name>`     | Resume watching/fixing a run after a crash                                |
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
+| `pipeline-worker sessions [--branch <name>]` | List every persisted run in this repo, or show one run's full step-by-step timeline |
 
 ## How the fix loop stays bounded
 

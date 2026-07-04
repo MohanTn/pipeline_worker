@@ -1,5 +1,15 @@
 /** Common interface both the Claude Code and Copilot CLI adapters implement. */
 
+/**
+ * Hard ceiling on a single headless agent invocation, shared by both
+ * adapters. Conflict resolution and CI-fix turns run under acceptEdits with
+ * full tool access (reading/editing multiple files, sometimes re-running
+ * build/test commands), so they can legitimately take much longer than a
+ * plain completion — 15 minutes gives that room while still bounding a hung
+ * unattended run.
+ */
+export const AGENT_INVOKE_TIMEOUT_MS = 900_000;
+
 export interface AgentInvokeOptions {
   /** The instruction given to the agent for this turn. */
   prompt: string;
