@@ -1,6 +1,6 @@
 {
   "name": "pipeline-worker",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "Automated git-worktree workflow: captures intent from a diff via Claude Code or GitHub Copilot CLI, runs build/lint/test, opens a GitLab MR or GitHub PR, and auto-fixes failing pipelines — with a companion forge MCP server (TOON-encoded responses).",
   "license": "MIT",
   "author": "Mohan TN <mohan.tn100@gmail.com>",
