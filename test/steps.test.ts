@@ -17,20 +17,26 @@ function captureLogs(fn: () => void): string[] {
 }
 
 test('noteSession prints nothing when the adapter returned no sessionId', () => {
-  const lines = captureLogs(() => noteSession({ text: 'hi' }));
+  const lines = captureLogs(() => noteSession({ text: 'hi' }, '/tmp/worktree'));
   assert.deepEqual(lines, []);
 });
 
 test('noteSession prints the session id and duration in seconds when both are present', () => {
-  const lines = captureLogs(() => noteSession({ text: 'hi', sessionId: 'abc-123', durationMs: 4200 }));
+  const lines = captureLogs(() => noteSession({ text: 'hi', sessionId: 'abc-123', durationMs: 4200 }, '/tmp/worktree'));
   assert.equal(lines.length, 1);
   assert.match(lines[0], /agent session: abc-123/);
   assert.match(lines[0], /4\.2s/);
 });
 
-test('noteSession prints the session id alone when durationMs is missing', () => {
-  const lines = captureLogs(() => noteSession({ text: 'hi', sessionId: 'abc-123' }));
+test('noteSession omits the duration when durationMs is missing', () => {
+  const lines = captureLogs(() => noteSession({ text: 'hi', sessionId: 'abc-123' }, '/tmp/worktree'));
   assert.equal(lines.length, 1);
   assert.match(lines[0], /agent session: abc-123/);
-  assert.doesNotMatch(lines[0], /s\)?$/);
+  assert.doesNotMatch(lines[0], /\d+\.\ds/);
+});
+
+test('noteSession prints the worktree path to cd into for resuming', () => {
+  const lines = captureLogs(() => noteSession({ text: 'hi', sessionId: 'abc-123' }, '/tmp/pipeline-worker-xyz/worktree'));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /cd \/tmp\/pipeline-worker-xyz\/worktree to resume it there/);
 });
