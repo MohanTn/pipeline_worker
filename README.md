@@ -28,6 +28,8 @@ Polling is plain REST and costs zero agent tokens; the agent is invoked only whe
 npm install -g pipeline-worker
 ```
 
+This installs two equivalent commands, `pipeline-worker` and the shorter `pw` — use whichever you prefer (e.g. `pw run --ticket PROJ-123`).
+
 ## Quick start
 
 Set these once in your shell profile (`~/.zshrc` / `~/.bashrc`) and every
@@ -121,6 +123,8 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
 | `pipeline-worker sessions [--branch <name>]` | List every persisted run in this repo, or show one run's full step-by-step timeline |
 | `pipeline-worker update`                     | Install the latest release from npm (`npm install -g pipeline-worker@latest`) |
+
+Before doing any work, `pipeline-worker run` checks npm for a newer published version and installs it automatically if the locally installed one is out of date (the update takes effect on the next run). This check is best-effort: if npm is unreachable or the install fails, the run proceeds anyway on whatever version is already installed.
 
 Every time a run hands a turn to Claude Code or the Copilot CLI (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>` (or `copilot --resume <id>`) opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
 
