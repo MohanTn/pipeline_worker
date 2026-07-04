@@ -158,6 +158,36 @@ program
     console.log(`pipeline-worker: updated — run "${pkg.name} -v" to confirm the installed version.`);
   });
 
+program.addHelpText(
+  'after',
+  `
+Examples:
+  $ pipeline-worker run
+      Capture your uncommitted changes and drive them to a green MR/PR.
+
+  $ pipeline-worker run --ticket PROJ-123
+      Same, but interpolate PROJ-123 into the configured branchPattern.
+
+  $ pipeline-worker resume --branch pipeline-worker/add-login
+      Resume watching/fixing a previously started run after a crash.
+
+  $ pipeline-worker status --branch pipeline-worker/add-login
+      Print the persisted state of that run.
+
+  $ pipeline-worker sessions
+      List this repo's persisted runs.
+
+  $ pipeline-worker sessions --branch pipeline-worker/add-login
+      Show the full step-by-step timeline for that one run.
+
+  $ pipeline-worker serve
+      Start the forge MCP server over stdio (used internally by coding agents).
+
+  $ pipeline-worker update
+      Install the latest pipeline-worker release from npm.
+`,
+);
+
 program.parseAsync(process.argv).catch((error) => {
   console.error('pipeline-worker: unexpected error:', error instanceof Error ? error.message : error);
   process.exit(1);

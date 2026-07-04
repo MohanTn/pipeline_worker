@@ -1,7 +1,7 @@
-/** Steps 6-7: push the branch and open (or reuse) an MR/PR describing the workflow that produced it. */
+/** Stages 10-11: push the branch and open (or reuse) an MR/PR describing the workflow that produced it. */
 
 import { push } from '../git/commit.js';
-import { runStep, note } from '../ui/steps.js';
+import { runStep, skipStep, note } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { CapturedIntent, CheckResult, MergeRequest } from '../types.js';
 
@@ -42,7 +42,7 @@ export async function openMergeRequest(
 
   const existing = await forge.findExistingMr(branch);
   if (existing) {
-    note(`reusing existing merge request ${existing.webUrl}`);
+    skipStep(11, '🔀', 'Opening merge request', `an MR/PR already exists for this branch — reusing ${existing.webUrl} instead of opening a new one`);
     return existing;
   }
 

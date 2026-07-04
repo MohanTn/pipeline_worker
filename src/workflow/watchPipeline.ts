@@ -1,5 +1,5 @@
 /**
- * Step 8: poll the MR/PR's pipeline (at config.pollIntervalSeconds) until it
+ * Stage 12: poll the MR/PR's pipeline (at config.pollIntervalSeconds) until it
  * succeeds; on failure, hand the pipeline id/URL to the configured agent and
  * let it pull the failed jobs and logs itself via whatever forge MCP tooling
  * is available (pipeline-worker's own, or an external GitLab/GitHub MCP
@@ -181,7 +181,7 @@ async function escalate(forge: ForgeClient, mrIid: number, message: string, stat
   // detail line assumes single-line text (it doesn't collapse newlines the way
   // note() does), so flatten it there while posting the full body to the MR/PR.
   const detail = message.replace(/\s*\n\s*/g, ' ');
-  await runStep(12, '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
+  await runStep('12.7', '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
   state.phase = 'escalated';
   recordEvent(repoRoot, state, detail, 'error');
 }
@@ -224,7 +224,7 @@ async function tryResolveConflicts(
     return false;
   }
 
-  const cleanMerge = await runStep(12, '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
+  const cleanMerge = await runStep('12.2', '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
     await execFileAsync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath });
     try {
       await execFileAsync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath });
@@ -245,7 +245,7 @@ async function tryResolveConflicts(
     let agentResult: AgentInvokeResult;
     try {
       agentResult = await runStep(
-        11,
+        '12.3',
         '🔧',
         'Resolving conflicts',
         `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
@@ -278,7 +278,7 @@ async function tryResolveConflicts(
     await commit(worktreePath, `merge: resolve conflicts with origin/${targetBranch}`);
   }
 
-  await runStep(12, '⬆', 'Pushing the merge', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+  await runStep('12.4', '⬆', 'Pushing the merge', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
   return true;
 }
 
@@ -301,7 +301,7 @@ export async function watchPipeline(
   let previousPipelineId: number | undefined;
   for (;;) {
     const outcome = await runStep(
-      11,
+      '12.1',
       '👀',
       'Watching pipeline',
       `poll CI every ${config.pollIntervalSeconds}s until it finishes`,
@@ -374,7 +374,7 @@ export async function watchPipeline(
     let agentResult: AgentInvokeResult;
     try {
       agentResult = await runStep(
-        11,
+        '12.5',
         '🔧',
         'Fixing CI failure',
         `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
@@ -403,7 +403,7 @@ export async function watchPipeline(
       return;
     }
 
-    await runStep(12, '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
+    await runStep('12.6', '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
       await stageAll(worktreePath);
       await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
       await push(worktreePath, 'origin', branch);
