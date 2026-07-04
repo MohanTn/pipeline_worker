@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "agentStop": [
+      {
+        "type": "command",
+        "command": "node /home/mohan/REPO/pipeline_worker/agent-hooks/claude/hooks/on-stop.mjs",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}

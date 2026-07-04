@@ -134,6 +134,19 @@ test('env vars set branchPattern and cleanupOnSuccess', () => {
   });
 });
 
+test('loadConfig defaults cleanupEarly to false', () => {
+  withTempDir((dir) => {
+    assert.equal(loadConfig(dir).cleanupEarly, false);
+  });
+});
+
+test('env var PIPELINE_WORKER_CLEANUP_EARLY sets cleanupEarly', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_CLEANUP_EARLY = 'true';
+    assert.equal(loadConfig(dir).cleanupEarly, true);
+  });
+});
+
 test('loadConfig defaults intentModel to haiku', () => {
   withTempDir((dir) => {
     assert.equal(loadConfig(dir).intentModel, 'haiku');
@@ -151,6 +164,19 @@ test('PIPELINE_WORKER_RUN_LINT_AND_TEST overrides the default', () => {
   withTempDir((dir) => {
     process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = 'false';
     assert.equal(loadConfig(dir).runLintAndTest, false);
+  });
+});
+
+test('loadConfig defaults updateChangelog to false', () => {
+  withTempDir((dir) => {
+    assert.equal(loadConfig(dir).updateChangelog, false);
+  });
+});
+
+test('PIPELINE_WORKER_UPDATE_CHANGELOG overrides the default', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_UPDATE_CHANGELOG = 'true';
+    assert.equal(loadConfig(dir).updateChangelog, true);
   });
 });
 

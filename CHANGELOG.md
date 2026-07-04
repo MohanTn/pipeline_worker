@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- `PIPELINE_WORKER_UPDATE_CHANGELOG` (default `false`): once checks pass, add a bullet for the change (from the captured intent's summary) under the consuming repo's `CHANGELOG.md` `[Unreleased]` section — creating the file, Keep a Changelog style, if none exists — and include it in the same commit that becomes the MR/PR.
 - Language-agnostic check defaults: `build` / `lint` / `test` are auto-detected from the repo's toolchain — npm scripts (Node/TypeScript), .NET (`dotnet build/format/test`), Go (`go build/vet/test ./...`), Python (`pytest`). Explicit config always wins; an empty command skips the stage.
 
 ### Changed

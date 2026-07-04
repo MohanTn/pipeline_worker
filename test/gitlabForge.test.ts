@@ -34,6 +34,7 @@ function gitlabConfig(host: string): PipelineWorkerConfig {
     pollIntervalSeconds: 30,
     branchPattern: '{type}/{name}',
     cleanupOnSuccess: false,
+    cleanupEarly: false,
   };
 }
 

@@ -25,10 +25,14 @@ export interface PipelineWorkerConfig {
   intentModel: string;
   /** Feature branch naming template. Supports {type}, {ticket}, {name} placeholders; e.g. "{type}/{ticket}/{name}". */
   branchPattern: string;
-  /** Once the MR/PR is opened and CI is green, reset repoRoot to HEAD — the captured changes now live safely on the branch. */
+  /** Once cleanup fires (see cleanupEarly for when), reset repoRoot to HEAD — the captured changes now live safely on the branch. */
   cleanupOnSuccess: boolean;
+  /** If true, cleanup fires as soon as the MR/PR is opened (diff is committed + pushed) instead of waiting for CI to go green — lets repoRoot be reused for a new run immediately while this run's CI-watch/fix loop keeps going independently. */
+  cleanupEarly: boolean;
   /** Run the local lint and test stages before opening the MR/PR; false runs only build, skipping both — e.g. when an earlier workflow already verified them. */
   runLintAndTest: boolean;
+  /** Once checks pass, add a bullet for this change under CHANGELOG.md's [Unreleased] section (creating the file if absent) and include it in the commit. Off by default: not every consuming repo keeps a changelog. */
+  updateChangelog: boolean;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';

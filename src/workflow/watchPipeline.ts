@@ -181,7 +181,7 @@ async function escalate(forge: ForgeClient, mrIid: number, message: string, stat
   // detail line assumes single-line text (it doesn't collapse newlines the way
   // note() does), so flatten it there while posting the full body to the MR/PR.
   const detail = message.replace(/\s*\n\s*/g, ' ');
-  await runStep(11, '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
+  await runStep(12, '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
   state.phase = 'escalated';
   recordEvent(repoRoot, state, detail, 'error');
 }
@@ -224,7 +224,7 @@ async function tryResolveConflicts(
     return false;
   }
 
-  const cleanMerge = await runStep(11, '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
+  const cleanMerge = await runStep(12, '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
     await execFileAsync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath });
     try {
       await execFileAsync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath });
@@ -278,7 +278,7 @@ async function tryResolveConflicts(
     await commit(worktreePath, `merge: resolve conflicts with origin/${targetBranch}`);
   }
 
-  await runStep(11, '⬆', 'Pushing the merge', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+  await runStep(12, '⬆', 'Pushing the merge', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
   return true;
 }
 
@@ -403,7 +403,7 @@ export async function watchPipeline(
       return;
     }
 
-    await runStep(11, '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
+    await runStep(12, '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
       await stageAll(worktreePath);
       await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
       await push(worktreePath, 'origin', branch);
