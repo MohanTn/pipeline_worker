@@ -16,7 +16,7 @@ import { deriveProjectPath } from '../git/resolveProjectPath.js';
 import { detectGithubRepo } from '../git/remote.js';
 import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
 
-const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot'];
+const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot', 'pi'];
 const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
 
 // build/lint/test defaults come from detectChecks(repoRoot) at load time.

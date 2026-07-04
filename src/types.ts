@@ -1,6 +1,6 @@
 /** Single source of truth for pipeline-worker's cross-module data shapes. */
 
-export type AgentName = 'claude' | 'copilot';
+export type AgentName = 'claude' | 'copilot' | 'pi';
 export type ForgeName = 'gitlab' | 'github';
 
 export interface PipelineWorkerConfig {
