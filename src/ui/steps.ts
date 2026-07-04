@@ -72,17 +72,24 @@ export function skipStep(stage: number | string, icon: string, title: string, re
 }
 
 /**
- * Reports which agent CLI session handled a turn and how long it took, so a
- * user who wants to see how a conflict was resolved or a CI failure was
- * fixed can look it up afterwards (`claude --resume <id>` or, for Copilot,
- * `copilot --resume <id>` — see agent/copilot.ts on why that id is one we
- * assigned rather than one the CLI reported). A no-op when the adapter
+ * Reports which agent CLI session handled a turn, how long it took, and the
+ * worktree it ran in, so a user who wants to see how a conflict was resolved
+ * or a CI failure was fixed can look it up afterwards (`claude --resume <id>`
+ * or, for Copilot, `copilot --resume <id>` — see agent/copilot.ts on why that
+ * id is one we assigned rather than one the CLI reported). Session history is
+ * scoped to the working directory the CLI ran in (see agent/claude.ts:
+ * `cwd: opts.cwd` is always the worktree, never the caller's own repo), so
+ * `--resume` only finds the session when run from that same worktree path —
+ * printing the path lets the user `cd` there first. This function has no way
+ * to know which adapter produced `result` (`AgentInvokeResult` doesn't carry
+ * one), so it names the path rather than assembling a `claude`/`copilot`
+ * command that would guess wrong half the time. A no-op when the adapter
  * didn't return a sessionId, which keeps this safe to call unconditionally.
  */
-export function noteSession(result: AgentInvokeResult): void {
+export function noteSession(result: AgentInvokeResult, worktreePath: string): void {
   if (!result.sessionId) return;
   const duration = result.durationMs !== undefined ? ` — ${(result.durationMs / 1000).toFixed(1)}s` : '';
-  note(`agent session: ${result.sessionId}${duration}`);
+  note(`agent session: ${result.sessionId}${duration} — cd ${worktreePath} to resume it there`);
 }
 
 /**

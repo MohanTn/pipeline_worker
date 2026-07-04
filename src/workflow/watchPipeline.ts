@@ -256,7 +256,7 @@ async function tryResolveConflicts(
     }
     const agentResponse = agentResult.text;
     note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
-    noteSession(agentResult);
+    noteSession(agentResult, worktreePath);
 
     const stillConflicted = findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
     if (stillConflicted.length > 0) {
@@ -385,7 +385,7 @@ export async function watchPipeline(
     }
     const agentResponse = agentResult.text;
     note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
-    noteSession(agentResult);
+    noteSession(agentResult, worktreePath);
 
     if (!(await hasChanges(worktreePath))) {
       // Re-pushing an identical tree would never produce a new pipeline; stop here.

@@ -141,7 +141,7 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
     permissionMode: 'default',
     allowedTools: READ_ONLY_TOOLS,
   });
-  noteSession(result);
+  noteSession(result, worktreePath);
   try {
     return IntentShape.parse(JSON.parse(result.text));
   } catch (error) {

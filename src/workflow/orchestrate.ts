@@ -63,7 +63,7 @@ async function resolveApplyConflicts(agent: AgentAdapter, worktreePath: string, 
   );
   const agentResponse = agentResult.text;
   note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
-  noteSession(agentResult);
+  noteSession(agentResult, worktreePath);
 
   const stillConflicted = findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
   if (stillConflicted.length > 0) {
