@@ -16,6 +16,7 @@ function baseConfig(overrides: Partial<PipelineWorkerConfig> = {}): PipelineWork
     pollIntervalSeconds: 15,
     branchPattern: 'pipeline-worker/{name}',
     cleanupOnSuccess: true,
+    cleanupEarly: false,
     intentModel: 'haiku',
     ...overrides,
   };

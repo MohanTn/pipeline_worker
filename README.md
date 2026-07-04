@@ -12,7 +12,7 @@ Automate the last mile of your local changes: pipeline-worker takes the uncommit
 4. Runs your `build` / `lint` / `test` commands, fail-fast.
 5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`.
 6. Polls the CI pipeline; on failure it hands the pipeline URL to the agent, which pulls the failed jobs and logs itself via whatever GitLab/GitHub MCP tooling is available (pipeline-worker's own forge MCP server, or an external one the agent already has configured), commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
-7. Once the MR/PR is ready to merge, resets your repo's current branch back to HEAD (see `PIPELINE_WORKER_CLEANUP` below) — your changes now live safely on the feature branch instead of sitting uncommitted locally too.
+7. Once the MR/PR is ready to merge (or, with `PIPELINE_WORKER_CLEANUP_EARLY`, as soon as the MR/PR is opened), resets your repo's current branch back to HEAD (see `PIPELINE_WORKER_CLEANUP` below) — your changes now live safely on the feature branch instead of sitting uncommitted locally too.
 
 Polling is plain REST and costs zero agent tokens; the agent is invoked only when a pipeline actually fails, and fetches whatever pipeline/job detail it needs through pipeline-worker's token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server (or an external forge MCP server, if the agent has one available).
 
@@ -65,13 +65,15 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_GITHUB_TOKEN`          | falls back to `GITHUB_TOKEN` | GitHub token                                                                  |
 | `PIPELINE_WORKER_POLL_INTERVAL_SECONDS` | `15`                         | pipeline poll cadence; use `60` for slow pipelines                            |
 | `PIPELINE_WORKER_BRANCH_PATTERN`        | `pipeline-worker/{name}`     | feature branch naming template — see below                                    |
-| `PIPELINE_WORKER_CLEANUP`               | `true`                       | reset repoRoot to HEAD once the MR/PR is opened and CI is green (`false` to keep your local uncommitted changes as-is) |
+| `PIPELINE_WORKER_CLEANUP`               | `true`                       | reset repoRoot to HEAD once cleanup fires (see `PIPELINE_WORKER_CLEANUP_EARLY` for when) (`false` to keep your local uncommitted changes as-is) |
+| `PIPELINE_WORKER_CLEANUP_EARLY`         | `false`                      | `true` resets repoRoot as soon as the MR/PR is opened (diff committed + pushed), instead of waiting for CI to go green — frees the repo (and the run lock) for a new `pipeline-worker run` while this run's CI-watch/fix loop keeps going in the background |
 | `PIPELINE_WORKER_INTENT_MODEL`          | `haiku`                      | model used for the intent-capture step (branch/commit/summary); claude only — copilot has no per-invocation model selection and ignores it |
 | `PIPELINE_WORKER_BUILD`                 | auto-detected from toolchain | build command override; set to an empty string to skip the stage                                                             |
 | `PIPELINE_WORKER_LINT`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage                                                              |
 | `PIPELINE_WORKER_TEST`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage                                                              |
 | `PIPELINE_WORKER_MAX_FIX_ATTEMPTS`      | `5`                          | how many CI-fix attempts before escalating to a human                                                                        |
 | `PIPELINE_WORKER_RUN_LINT_AND_TEST`     | `true`                       | run the local lint and test stages (`false` to run only build — for repos where an earlier workflow, e.g. upstream CI, already verified lint/test) |
+| `PIPELINE_WORKER_UPDATE_CHANGELOG`      | `false`                      | once checks pass, add a bullet (from the captured intent's summary) under `CHANGELOG.md`'s `[Unreleased]` section — `feature`/`bugfix`/`chore` map to the `Added`/`Fixed`/`Changed` categories — creating the file, [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style, if the repo has none — and include it in the same commit |
 
 ### Branch naming
 

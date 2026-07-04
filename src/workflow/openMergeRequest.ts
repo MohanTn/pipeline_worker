@@ -38,7 +38,7 @@ export async function openMergeRequest(
   agentName: string,
   checks: CheckResult[],
 ): Promise<MergeRequest> {
-  await runStep(9, '⬆', 'Pushing your branch', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+  await runStep(10, '⬆', 'Pushing your branch', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
 
   const existing = await forge.findExistingMr(branch);
   if (existing) {
@@ -49,7 +49,7 @@ export async function openMergeRequest(
   const description = buildDescription(intent, agentName, checks);
 
   const mr = await runStep(
-    10,
+    11,
     '🔀',
     'Opening merge request',
     `target branch: ${targetBranch}`,

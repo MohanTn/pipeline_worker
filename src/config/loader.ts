@@ -34,8 +34,10 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   pollIntervalSeconds: 15,
   branchPattern: 'pipeline-worker/{name}',
   cleanupOnSuccess: true,
+  cleanupEarly: false,
   intentModel: 'haiku',
   runLintAndTest: true,
+  updateChangelog: false,
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -139,7 +141,9 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     pollIntervalSeconds: positiveNumber(process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS, DEFAULT_CONFIG.pollIntervalSeconds),
     branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || DEFAULT_CONFIG.branchPattern,
     cleanupOnSuccess: boolean(process.env.PIPELINE_WORKER_CLEANUP, DEFAULT_CONFIG.cleanupOnSuccess),
+    cleanupEarly: boolean(process.env.PIPELINE_WORKER_CLEANUP_EARLY, DEFAULT_CONFIG.cleanupEarly),
     intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
     runLintAndTest: boolean(process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
+    updateChangelog: boolean(process.env.PIPELINE_WORKER_UPDATE_CHANGELOG, DEFAULT_CONFIG.updateChangelog),
   };
 }

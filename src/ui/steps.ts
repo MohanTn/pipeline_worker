@@ -13,11 +13,13 @@ import type { AgentInvokeResult } from '../agent/types.js';
 const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green', medium: 'yellow', high: 'red' };
 
 /**
- * The workflow always runs stages 1-10 once in order, then stage 11 (watching
- * the pipeline, and fixing/escalating on failure) until it resolves — so
- * every step, including the CI-fix loop's sub-steps, is stage 11.
+ * The workflow always runs stages 1-11 once in order (stage 8, updating the
+ * changelog, only fires when config.updateChangelog is on), then stage 12
+ * (watching the pipeline, and fixing/escalating on failure) until it
+ * resolves — so every step, including the CI-fix loop's sub-steps, is stage
+ * 12.
  */
-export const TOTAL_STAGES = 11;
+export const TOTAL_STAGES = 12;
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;

@@ -1,0 +1,5 @@
+{
+  "name": "pipeline-worker-trigger",
+  "description": "Automatically runs `pipeline-worker run` in the background whenever Claude Code finishes a turn that leaves uncommitted changes in a git repo.",
+  "version": "0.1.0"
+}

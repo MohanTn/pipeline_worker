@@ -9,6 +9,7 @@ import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, re
 import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers } from '../git/commit.js';
 import { captureIntent } from './captureIntent.js';
 import { runChecks } from './runChecks.js';
+import { updateChangelog } from './updateChangelog.js';
 import { openMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
 import { recordEvent } from '../state/runState.js';
@@ -211,13 +212,27 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       state.phase = 'checks';
       recordEvent(repoRoot, state, `Checks passed (${checks.map((c) => c.name).join(', ')})`);
 
+      if (config.updateChangelog) {
+        await runStep(
+          8,
+          '📝',
+          'Updating changelog',
+          "add a bullet under CHANGELOG.md's [Unreleased] section",
+          async () => {
+            updateChangelog(worktreePath, intent);
+            await stageAll(worktreePath);
+          },
+        );
+      }
+
       await runStep(
-        8,
+        9,
         '💾',
         'Committing changes',
         `commit message: "${intent.commitMessage}"`,
-        // applyDiffToWorktree left everything staged; without this commit the
-        // push would carry no changes and the MR would be empty.
+        // applyDiffToWorktree (and, if enabled, the changelog step above) left
+        // everything staged; without this commit the push would carry no
+        // changes and the MR would be empty.
         () => commit(worktreePath, intent.commitMessage),
       );
 
@@ -225,6 +240,23 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       state.mrIid = mr.iid;
       state.phase = 'mr';
       recordEvent(repoRoot, state, `Opened MR/PR ${mr.webUrl}`);
+
+      if (config.cleanupOnSuccess && config.cleanupEarly) {
+        // The diff is now durably committed and pushed to state.branch with an
+        // MR/PR open — repoRoot's copy is redundant even though CI hasn't run
+        // yet, so free it (and the run lock) for a new `pipeline-worker run`
+        // immediately, rather than making the caller wait out this run's
+        // CI-watch/fix loop below. releaseLock is safe to call again from the
+        // outer `finally` once this run itself finishes.
+        await runStep(
+          12,
+          '🧹',
+          'Cleaning up your repo',
+          `reset to HEAD — your changes are now safely pushed to ${state.branch} (MR open)`,
+          () => resetRepo(repoRoot, untrackedFiles),
+        );
+        releaseLock();
+      }
 
       await watchPipeline(forge, config, agent, worktreePath, state.branch, targetBranch, mr.iid, state, repoRoot);
 
@@ -235,13 +267,14 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       if (finalPhase === 'done') {
         const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
         step('🎉', 'Done', detail);
-        if (config.cleanupOnSuccess) {
+        if (config.cleanupOnSuccess && !config.cleanupEarly) {
           // The captured changes now live safely on state.branch (pushed and,
           // per finalPhase === 'done', either merged-clean or CI-verified) —
           // repoRoot's copy is redundant, so reset it back to HEAD regardless
-          // of what branch it's currently on.
+          // of what branch it's currently on. Skipped when cleanupEarly
+          // already did this right after the MR was opened, above.
           await runStep(
-            11,
+            12,
             '🧹',
             'Cleaning up your repo',
             `reset to HEAD — your changes are now safely on ${state.branch}`,
