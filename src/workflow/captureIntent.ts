@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import type { AgentAdapter } from '../agent/types.js';
 import type { CapturedIntent } from '../types.js';
+import { noteSession } from '../ui/steps.js';
 
 const COMMIT_MESSAGE_MAX_LENGTH = 72;
 
@@ -140,6 +141,7 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
     permissionMode: 'default',
     allowedTools: READ_ONLY_TOOLS,
   });
+  noteSession(result);
   try {
     return IntentShape.parse(JSON.parse(result.text));
   } catch (error) {

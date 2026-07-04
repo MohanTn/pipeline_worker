@@ -36,6 +36,15 @@ export interface AgentInvokeResult {
   text: string;
   /** The parsed structured payload, when the adapter's output format returns one. */
   raw?: unknown;
+  /**
+   * Identifier for the underlying agent CLI's own session, so a user can look
+   * up what it did later — `claude --resume <id>` or, for Copilot (which has
+   * no way to report the session id it picked itself), the `--name` we chose
+   * for it, resumable via `copilot --resume <id>`.
+   */
+  sessionId?: string;
+  /** Wall-clock duration of this invocation in milliseconds. */
+  durationMs?: number;
 }
 
 export interface AgentAdapter {

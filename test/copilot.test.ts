@@ -44,6 +44,31 @@ test('copilotAdapter delivers the prompt over stdin rather than argv, avoiding E
   }
 });
 
+test('copilotAdapter passes a unique --name and reports it back as sessionId, since the CLI has no way to report its own session id', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeCopilot = join(binDir, 'copilot');
+  const argsFile = join(topDir, 'args.txt');
+  writeFileSync(fakeCopilot, `#!/bin/sh\necho "$@" > "${argsFile}"\ncat > /dev/null\necho 'ok'\n`);
+  chmodSync(fakeCopilot, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    const result = await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir });
+    const args = readFileSync(argsFile, 'utf-8').trim().split(/\s+/);
+    const nameIndex = args.indexOf('--name');
+    assert.ok(nameIndex !== -1);
+    assert.equal(args[nameIndex + 1], result.sessionId);
+    assert.match(result.sessionId ?? '', /^pipeline-worker-/);
+    assert.ok(typeof result.durationMs === 'number' && result.durationMs >= 0);
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
 test('copilotAdapter ignores opts.model (no per-invocation model flag) but warns instead of failing silently', { skip: process.platform === 'win32' }, async () => {
   const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
   const binDir = join(topDir, 'bin');

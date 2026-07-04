@@ -112,6 +112,7 @@ export const claudeAdapter: AgentAdapter = {
       args.push('--model', opts.model);
     }
 
+    const start = Date.now();
     let stdout: string;
     try {
       const invocation = execFileAsync('claude', args, {
@@ -129,12 +130,16 @@ export const claudeAdapter: AgentAdapter = {
     }
 
     try {
-      const parsed = JSON.parse(stdout) as { result?: string };
-      return { text: parsed.result ?? stdout, raw: parsed };
+      // duration_ms/session_id come straight from the CLI's own JSON envelope
+      // (see the module comment's `claude -p --output-format json` sample);
+      // falling back to our own wall-clock reading only covers the
+      // never-observed case where that envelope omits duration_ms.
+      const parsed = JSON.parse(stdout) as { result?: string; session_id?: string; duration_ms?: number };
+      return { text: parsed.result ?? stdout, raw: parsed, sessionId: parsed.session_id, durationMs: parsed.duration_ms ?? Date.now() - start };
     } catch {
       // --output-format json should always produce parseable JSON; fall back
       // to the raw stream rather than throwing, since the invocation itself succeeded.
-      return { text: stdout };
+      return { text: stdout, durationMs: Date.now() - start };
     }
   },
 };

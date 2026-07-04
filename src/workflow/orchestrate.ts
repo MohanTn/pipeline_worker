@@ -13,7 +13,7 @@ import { openMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
 import { recordEvent } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
-import { step, runStep, note, noteRisk } from '../ui/steps.js';
+import { step, runStep, note, noteRisk, noteSession } from '../ui/steps.js';
 import { printWelcome } from '../ui/welcome.js';
 import type { AgentAdapter } from '../agent/types.js';
 import type { RunPhase, RunState } from '../types.js';
@@ -53,14 +53,16 @@ function buildApplyConflictPrompt(conflictedFiles: string[]): string {
  * fail the run clearly instead so the user can intervene manually.
  */
 async function resolveApplyConflicts(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[]): Promise<void> {
-  const agentResponse = await runStep(
+  const agentResult = await runStep(
     4,
     '🔧',
     'Resolving conflicts',
     `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-    async () => (await agent.invoke({ prompt: buildApplyConflictPrompt(conflictedFiles), cwd: worktreePath, permissionMode: 'acceptEdits' })).text,
+    () => agent.invoke({ prompt: buildApplyConflictPrompt(conflictedFiles), cwd: worktreePath, permissionMode: 'acceptEdits' }),
   );
+  const agentResponse = agentResult.text;
   note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
+  noteSession(agentResult);
 
   const stillConflicted = findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
   if (stillConflicted.length > 0) {

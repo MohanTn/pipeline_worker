@@ -19,6 +19,12 @@
  *  - no per-invocation tool allowlist -> `--allow-all-tools` is always passed,
  *    so `allowedTools` is ignored; a read-only step (e.g. captureIntent.ts)
  *    gets full tool access under this adapter instead of being restricted.
+ *  - no way to learn the session id the CLI picked for itself in
+ *    non-interactive mode (open feature request: github/copilot-cli#807) ->
+ *    every invocation is given an explicit `--name`, which `copilot --resume
+ *    <name>` (or `/resume` in an interactive session) can look up later, so
+ *    callers still get a stable identifier to report even though it isn't
+ *    the CLI's own internal session id.
  *
  * The prompt is piped over stdin rather than passed via `-p <prompt>`.
  * captureIntent.ts embeds a full git diff in the prompt, and a large diff can
@@ -31,6 +37,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult } from './types.js';
 import { writePromptToStdin } from './stdinPrompt.js';
 
@@ -64,9 +71,11 @@ export const copilotAdapter: AgentAdapter = {
       );
     }
 
+    const sessionName = `pipeline-worker-${randomUUID()}`;
+    const start = Date.now();
     const invocation = execFileAsync(
       'copilot',
-      ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths'],
+      ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths', '--name', sessionName],
       {
         cwd: opts.cwd,
         timeout: AGENT_INVOKE_TIMEOUT_MS,
@@ -77,6 +86,10 @@ export const copilotAdapter: AgentAdapter = {
     writePromptToStdin(invocation.child.stdin!, prompt);
     const { stdout } = await invocation;
 
-    return { text: opts.jsonSchema ? extractJsonObject(stdout) : stdout.trim() };
+    return {
+      text: opts.jsonSchema ? extractJsonObject(stdout) : stdout.trim(),
+      sessionId: sessionName,
+      durationMs: Date.now() - start,
+    };
   },
 };
