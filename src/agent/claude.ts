@@ -23,12 +23,10 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { AgentAdapter, AgentInvokeOptions, AgentInvokeResult } from './types.js';
+import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult } from './types.js';
 import { writePromptToStdin } from './stdinPrompt.js';
 
 const execFileAsync = promisify(execFile);
-
-const INVOKE_TIMEOUT_MS = 300_000;
 
 /**
  * Tail-truncation cap for stdout/stderr in the rejection message. Mirrors
@@ -118,7 +116,7 @@ export const claudeAdapter: AgentAdapter = {
     try {
       const invocation = execFileAsync('claude', args, {
         cwd: opts.cwd,
-        timeout: INVOKE_TIMEOUT_MS,
+        timeout: AGENT_INVOKE_TIMEOUT_MS,
         maxBuffer: 64 * 1024 * 1024,
       });
       // stdin is always a pipe here since stdio isn't overridden in execFileAsync's options.

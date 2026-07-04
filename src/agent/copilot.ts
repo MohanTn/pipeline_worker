@@ -31,12 +31,10 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { AgentAdapter, AgentInvokeOptions, AgentInvokeResult } from './types.js';
+import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult } from './types.js';
 import { writePromptToStdin } from './stdinPrompt.js';
 
 const execFileAsync = promisify(execFile);
-
-const INVOKE_TIMEOUT_MS = 300_000;
 
 /** Pulls the outermost JSON object out of a text answer that may have prose around it. */
 function extractJsonObject(text: string): string {
@@ -71,7 +69,7 @@ export const copilotAdapter: AgentAdapter = {
       ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths'],
       {
         cwd: opts.cwd,
-        timeout: INVOKE_TIMEOUT_MS,
+        timeout: AGENT_INVOKE_TIMEOUT_MS,
         maxBuffer: 64 * 1024 * 1024,
       },
     );

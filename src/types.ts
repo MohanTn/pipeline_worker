@@ -33,6 +33,14 @@ export interface PipelineWorkerConfig {
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';
 
+/** One entry in RunState.history — a timestamped narration of what happened during the run, for `pipeline-worker sessions`. */
+export interface RunHistoryEntry {
+  at: string; // ISO 8601
+  phase: RunPhase;
+  level: 'info' | 'error';
+  message: string;
+}
+
 export interface RunState {
   branch: string;
   targetBranch: string;
@@ -41,6 +49,12 @@ export interface RunState {
   pipelineId?: number;
   attempt: number;
   phase: RunPhase;
+  /** ISO 8601 timestamp of when this run was first created. Absent on state files written before this field existed. */
+  startedAt?: string;
+  /** ISO 8601 timestamp of the most recent state write. Absent on state files written before this field existed. */
+  updatedAt?: string;
+  /** Chronological log of phase transitions, escalations, and errors. Absent on state files written before this field existed. */
+  history?: RunHistoryEntry[];
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high';

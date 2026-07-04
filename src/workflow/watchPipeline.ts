@@ -32,7 +32,7 @@ import { promisify } from 'node:util';
 import type { AgentAdapter } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolvedConflictMarkers } from '../git/commit.js';
 import type { ForgeClient } from '../forge/types.js';
-import { saveRunState } from '../state/runState.js';
+import { recordEvent } from '../state/runState.js';
 import { step, runStep, note } from '../ui/steps.js';
 import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState } from '../types.js';
 
@@ -183,7 +183,7 @@ async function escalate(forge: ForgeClient, mrIid: number, message: string, stat
   const detail = message.replace(/\s*\n\s*/g, ' ');
   await runStep(11, '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
   state.phase = 'escalated';
-  saveRunState(repoRoot, state);
+  recordEvent(repoRoot, state, detail, 'error');
 }
 
 /**
@@ -206,7 +206,7 @@ async function tryResolveConflicts(
   repoRoot: string,
 ): Promise<boolean> {
   state.attempt += 1;
-  saveRunState(repoRoot, state);
+  recordEvent(repoRoot, state, `Merge conflicts detected; attempt ${state.attempt}/${config.maxFixAttempts} — merging origin/${targetBranch} into ${branch}`);
 
   step('⚠️', 'Merge conflicts detected', `attempt ${state.attempt}/${config.maxFixAttempts} — merging origin/${targetBranch} into ${branch}`);
   if (state.attempt > config.maxFixAttempts) {
@@ -295,7 +295,7 @@ export async function watchPipeline(
   const intervalMs = config.pollIntervalSeconds * 1000;
   const ciConfigured = hasCiConfig(worktreePath, config.forge);
   state.phase = 'watch';
-  saveRunState(repoRoot, state);
+  recordEvent(repoRoot, state, 'Started watching pipeline');
 
   let previousPipelineId: number | undefined;
   for (;;) {
@@ -319,18 +319,18 @@ export async function watchPipeline(
       // 2-hour safety window would otherwise time out.
       step('ℹ️', 'No CI pipeline found', `no pipeline was detected for the MR/PR within ${NO_PIPELINE_GRACE_MS / 1000}s — nothing to watch`);
       state.phase = 'done';
-      saveRunState(repoRoot, state);
+      recordEvent(repoRoot, state, 'No CI pipeline found for this MR/PR — nothing to watch');
       return;
     }
 
     const pipeline = outcome.pipeline;
     note(`pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
     state.pipelineId = pipeline.id;
-    saveRunState(repoRoot, state);
+    recordEvent(repoRoot, state, `Pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
 
     if (pipeline.status === 'success') {
       state.phase = 'done';
-      saveRunState(repoRoot, state);
+      recordEvent(repoRoot, state, 'Pipeline succeeded');
       return;
     }
 
@@ -351,7 +351,7 @@ export async function watchPipeline(
     }
 
     state.attempt += 1;
-    saveRunState(repoRoot, state);
+    recordEvent(repoRoot, state, `Pipeline failed; attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
 
     step('💥', 'Pipeline failed', `attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
     if (state.attempt > config.maxFixAttempts) {

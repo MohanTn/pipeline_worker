@@ -9,7 +9,8 @@ import { startServer } from './mcp/server.js';
 import { loadConfig } from './config/loader.js';
 import { createForge } from './forge/index.js';
 import { selectAgent } from './agent/index.js';
-import { loadRunState, saveRunState } from './state/runState.js';
+import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
+import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 
@@ -72,7 +73,7 @@ program
         : await checkoutExistingBranch(repoRoot, state.branch);
       if (worktreePath !== state.worktreePath) {
         state.worktreePath = worktreePath;
-        saveRunState(repoRoot, state);
+        recordEvent(repoRoot, state, `Recreated worktree at ${worktreePath}`);
       }
 
       let cleanedUp = false;
@@ -89,6 +90,10 @@ program
 
       try {
         await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');
+        throw error;
       } finally {
         await cleanup();
       }
@@ -111,6 +116,24 @@ program
       return;
     }
     console.log(buildEnvelope({ status: 'success', data: state }));
+  });
+
+program
+  .command('sessions')
+  .description("List this repo's persisted pipeline-worker runs, or inspect one run's full timeline")
+  .option('--branch <name>', 'show the full step-by-step timeline for one run instead of listing all')
+  .action((opts: { branch?: string }) => {
+    const repoRoot = process.cwd();
+    if (opts.branch) {
+      const state = loadRunState(repoRoot, opts.branch);
+      if (!state) {
+        console.error(`pipeline-worker: no session found for branch ${opts.branch}.`);
+        process.exit(1);
+      }
+      printSessionDetail({ branch: state.branch, state });
+      return;
+    }
+    printSessionList(listRunStates(repoRoot));
   });
 
 program.parseAsync(process.argv).catch((error) => {
