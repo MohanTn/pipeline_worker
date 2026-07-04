@@ -13,13 +13,18 @@ import type { AgentInvokeResult } from '../agent/types.js';
 const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green', medium: 'yellow', high: 'red' };
 
 /**
- * The workflow always runs stages 1-11 once in order (stage 8, updating the
- * changelog, only fires when config.updateChangelog is on), then stage 12
- * (watching the pipeline, and fixing/escalating on failure) until it
- * resolves — so every step, including the CI-fix loop's sub-steps, is stage
- * 12.
+ * The workflow always runs stages 1-13 in order. Some stages are opt-in or
+ * conditional on runtime state and are announced via skipStep() with a
+ * reason instead of running when their condition isn't met (stage 8:
+ * config.updateChangelog; stage 11: reused when an MR/PR already exists;
+ * stage 13: config.cleanupOnSuccess) — so the numbering stays sequential and
+ * a skipped stage is still visible instead of silently vanishing.
+ *
+ * Stage 12 (watching the pipeline, and fixing/escalating on failure) loops
+ * and branches internally, so its sub-steps are numbered 12.1-12.7 (see
+ * watchPipeline.ts) rather than each claiming the bare "12".
  */
-export const TOTAL_STAGES = 12;
+export const TOTAL_STAGES = 13;
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;
@@ -28,7 +33,8 @@ function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function stageHeader(stage: number, icon: string, title: string): string {
+/** stage accepts a decimal string (e.g. "12.3") for a sub-step of a numbered stage — see TOTAL_STAGES. */
+function stageHeader(stage: number | string, icon: string, title: string): string {
   return styleText(['bold', 'cyan'], `[${stage}/${TOTAL_STAGES}] ${icon} ${title}`);
 }
 
@@ -55,6 +61,17 @@ export function noteRisk(risk: RiskLevel, reason: string): void {
 }
 
 /**
+ * Announces a numbered stage that did not run this time, and why, so the
+ * printed sequence stays gap-free instead of a conditional stage silently
+ * vanishing from between its neighbors (which reads as a bug, not a choice).
+ */
+export function skipStep(stage: number | string, icon: string, title: string, reason: string): void {
+  console.log();
+  console.log(styleText('dim', `[${stage}/${TOTAL_STAGES}] ${icon} ${title} (skipped)`));
+  console.log(styleText('dim', `  ${reason.replace(/\s*\n\s*/g, ' ')}`));
+}
+
+/**
  * Reports which agent CLI session handled a turn and how long it took, so a
  * user who wants to see how a conflict was resolved or a CI failure was
  * fixed can look it up afterwards (`claude --resume <id>` or, for Copilot,
@@ -76,7 +93,7 @@ export function noteSession(result: AgentInvokeResult): void {
  * stdout isn't a TTY (CI logs, redirected files) since carriage-return
  * spinners would just garble those.
  */
-export async function runStep<T>(stage: number, icon: string, title: string, detail: string, task: () => Promise<T>): Promise<T> {
+export async function runStep<T>(stage: number | string, icon: string, title: string, detail: string, task: () => Promise<T>): Promise<T> {
   console.log(); // blank line for clear separation between stages
   console.log(stageHeader(stage, icon, title));
 

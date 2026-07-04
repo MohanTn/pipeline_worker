@@ -1,4 +1,4 @@
-/** Top-level control flow wiring the user's 8-step workflow together. */
+/** Top-level control flow wiring the user's workflow stages together — see ui/steps.ts's TOTAL_STAGES for the full numbered sequence. */
 
 import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
@@ -14,7 +14,7 @@ import { openMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
 import { recordEvent } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
-import { step, runStep, note, noteRisk, noteSession } from '../ui/steps.js';
+import { step, runStep, skipStep, note, noteRisk, noteSession } from '../ui/steps.js';
 import { printWelcome } from '../ui/welcome.js';
 import type { AgentAdapter } from '../agent/types.js';
 import type { RunPhase, RunState } from '../types.js';
@@ -55,7 +55,7 @@ function buildApplyConflictPrompt(conflictedFiles: string[]): string {
  */
 async function resolveApplyConflicts(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[]): Promise<void> {
   const agentResult = await runStep(
-    4,
+    '4.1',
     '🔧',
     'Resolving conflicts',
     `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
@@ -223,6 +223,8 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
             await stageAll(worktreePath);
           },
         );
+      } else {
+        skipStep(8, '📝', 'Updating changelog', 'config.updateChangelog is disabled');
       }
 
       await runStep(
@@ -247,9 +249,12 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
         // yet, so free it (and the run lock) for a new `pipeline-worker run`
         // immediately, rather than making the caller wait out this run's
         // CI-watch/fix loop below. releaseLock is safe to call again from the
-        // outer `finally` once this run itself finishes.
+        // outer `finally` once this run itself finishes. This runs before
+        // stage 12 (watching the pipeline) even though it's numbered 13 —
+        // it's the same stage 13 that would otherwise run after stage 12
+        // finishes, just moved earlier by config.cleanupEarly.
         await runStep(
-          12,
+          13,
           '🧹',
           'Cleaning up your repo',
           `reset to HEAD — your changes are now safely pushed to ${state.branch} (MR open)`,
@@ -267,19 +272,21 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       if (finalPhase === 'done') {
         const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
         step('🎉', 'Done', detail);
-        if (config.cleanupOnSuccess && !config.cleanupEarly) {
-          // The captured changes now live safely on state.branch (pushed and,
-          // per finalPhase === 'done', either merged-clean or CI-verified) —
-          // repoRoot's copy is redundant, so reset it back to HEAD regardless
-          // of what branch it's currently on. Skipped when cleanupEarly
-          // already did this right after the MR was opened, above.
-          await runStep(
-            12,
-            '🧹',
-            'Cleaning up your repo',
-            `reset to HEAD — your changes are now safely on ${state.branch}`,
-            () => resetRepo(repoRoot, untrackedFiles),
-          );
+        if (config.cleanupOnSuccess) {
+          // Only run stage 13 here when it hasn't already run early, above —
+          // no skip announcement needed in that case, since it did run, just
+          // sooner than usual, not never.
+          if (!config.cleanupEarly) {
+            await runStep(
+              13,
+              '🧹',
+              'Cleaning up your repo',
+              `reset to HEAD — your changes are now safely on ${state.branch}`,
+              () => resetRepo(repoRoot, untrackedFiles),
+            );
+          }
+        } else {
+          skipStep(13, '🧹', 'Cleaning up your repo', 'config.cleanupOnSuccess is disabled — leaving your changes on the local repo for you to inspect');
         }
       } else if (finalPhase === 'escalated') {
         step('🚨', 'Stopped for human review', `see ${mr.webUrl} for what was tried and why`);
