@@ -26,6 +26,21 @@ function formatTimestamp(iso: string | undefined): string {
   return iso ? new Date(iso).toLocaleString() : 'unknown';
 }
 
+function formatBranchColumn(branch: string): string {
+  return branch.length > 40 ? `${branch.slice(0, 37)}...` : branch.padEnd(40);
+}
+
+function formatMrColumn(mrIid: number | undefined): string {
+  return mrIid !== undefined ? `#${mrIid}` : '-';
+}
+
+function formatSessionRow(session: RunSession): string {
+  const { state } = session;
+  const branch = formatBranchColumn(state.branch);
+  const mr = formatMrColumn(state.mrIid);
+  return `${branch} ${formatPhase(state.phase)} ${String(state.attempt).padEnd(8)} ${mr.padEnd(7)} ${formatTimestamp(state.updatedAt)}`;
+}
+
 /** `pipeline-worker sessions` with no --branch: one line per persisted run, most recently updated first. */
 export function printSessionList(sessions: RunSession[]): void {
   if (sessions.length === 0) {
@@ -33,10 +48,8 @@ export function printSessionList(sessions: RunSession[]): void {
     return;
   }
   console.log(styleText('bold', `${'BRANCH'.padEnd(40)} ${'PHASE'.padEnd(9)} ATTEMPT  MR/PR   UPDATED`));
-  for (const { state } of sessions) {
-    const branch = state.branch.length > 40 ? `${state.branch.slice(0, 37)}...` : state.branch.padEnd(40);
-    const mr = state.mrIid !== undefined ? `#${state.mrIid}` : '-';
-    console.log(`${branch} ${formatPhase(state.phase)} ${String(state.attempt).padEnd(8)} ${mr.padEnd(7)} ${formatTimestamp(state.updatedAt)}`);
+  for (const session of sessions) {
+    console.log(formatSessionRow(session));
   }
   console.log();
   console.log(styleText('dim', "Run `pipeline-worker sessions --branch <name>` for a run's full timeline."));
@@ -44,11 +57,22 @@ export function printSessionList(sessions: RunSession[]): void {
 
 const LEVEL_ICON: Record<'info' | 'error', string> = { info: 'ℹ️ ', error: '❌' };
 
+function formatOptionalMetaParts(state: RunSession['state']): { mrPart: string; pipelinePart: string } {
+  return {
+    mrPart: state.mrIid !== undefined ? `  mr/pr: #${state.mrIid}` : '',
+    pipelinePart: state.pipelineId !== undefined ? `  pipeline: ${state.pipelineId}` : '',
+  };
+}
+
+function formatHistoryEntry(entry: NonNullable<RunSession['state']['history']>[number]): string {
+  const message = entry.level === 'error' ? styleText('red', entry.message) : entry.message;
+  return `  ${LEVEL_ICON[entry.level]} ${styleText('dim', formatTimestamp(entry.at))} ${styleText('dim', `[${entry.phase}]`)} ${message}`;
+}
+
 /** `pipeline-worker sessions --branch <name>`: one run's metadata plus its full step-by-step history. */
 export function printSessionDetail(session: RunSession): void {
   const { state } = session;
-  const mrPart = state.mrIid !== undefined ? `  mr/pr: #${state.mrIid}` : '';
-  const pipelinePart = state.pipelineId !== undefined ? `  pipeline: ${state.pipelineId}` : '';
+  const { mrPart, pipelinePart } = formatOptionalMetaParts(state);
 
   console.log(styleText('bold', `Session: ${state.branch}`));
   console.log(styleText('dim', `  target: ${state.targetBranch}`));
@@ -66,7 +90,6 @@ export function printSessionDetail(session: RunSession): void {
   console.log();
   console.log(styleText('bold', 'Timeline:'));
   for (const entry of history) {
-    const message = entry.level === 'error' ? styleText('red', entry.message) : entry.message;
-    console.log(`  ${LEVEL_ICON[entry.level]} ${styleText('dim', formatTimestamp(entry.at))} ${styleText('dim', `[${entry.phase}]`)} ${message}`);
+    console.log(formatHistoryEntry(entry));
   }
 }

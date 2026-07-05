@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Changed
 
+- This refactoring breaks down large functions into focused, well-named helpers across multiple modules: orchestrate.ts, watchPipeline.ts, lock.ts, cli.ts, and autoUpdate.ts. Additionally, common code between GitHub and GitLab forge implementations is extracted into a new shared module. A new signal cleanup utility module is introduced to handle SIGINT/SIGTERM consistently across both orchestrate and resume flows.
 - Removed the shipped `.env.example` / `.pipeline-worker.yml.example` templates. Real environment variables already take precedence over both files, so exporting `PIPELINE_WORKER_*` once in your shell profile now covers global setup across every repo — see the README Quick start. Per-repo `.env` / `.pipeline-worker.yml` are still supported as optional local overrides.
 
 ## [0.1.0] - 2026-07-01

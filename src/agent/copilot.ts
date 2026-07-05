@@ -50,26 +50,32 @@ function extractJsonObject(text: string): string {
   return start !== -1 && end > start ? text.slice(start, end + 1) : text;
 }
 
+/** Embeds a JSON-Schema instruction in the prompt text — Copilot CLI has no native structured-output flag (see module comment). */
+function buildCopilotPrompt(prompt: string, jsonSchema?: object): string {
+  if (!jsonSchema) return prompt;
+  return `${prompt}\n\nRespond with ONLY a single JSON object matching this JSON Schema — no prose, no code fences:\n${JSON.stringify(jsonSchema)}`;
+}
+
+/** Warns about the two AgentInvokeOptions Copilot CLI has no per-invocation flag for (see module comment). */
+function warnUnsupportedOptions(opts: AgentInvokeOptions): void {
+  if (opts.mcpConfigPath) {
+    console.error(
+      'pipeline-worker: copilot CLI has no per-invocation MCP config flag; ignoring it. ' +
+        'Register the server in ~/.copilot/mcp-config.json to give copilot forge access.',
+    );
+  }
+  if (opts.model) {
+    console.error(
+      `pipeline-worker: copilot CLI has no per-invocation model flag; ignoring the configured model "${opts.model}". ` +
+        "Switch copilot's model via its own /model command or config instead.",
+    );
+  }
+}
+
 export const copilotAdapter: AgentAdapter = {
   async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
-    let prompt = opts.prompt;
-    if (opts.jsonSchema) {
-      prompt +=
-        '\n\nRespond with ONLY a single JSON object matching this JSON Schema — no prose, no code fences:\n' +
-        JSON.stringify(opts.jsonSchema);
-    }
-    if (opts.mcpConfigPath) {
-      console.error(
-        'pipeline-worker: copilot CLI has no per-invocation MCP config flag; ignoring it. ' +
-          'Register the server in ~/.copilot/mcp-config.json to give copilot forge access.',
-      );
-    }
-    if (opts.model) {
-      console.error(
-        `pipeline-worker: copilot CLI has no per-invocation model flag; ignoring the configured model "${opts.model}". ` +
-          "Switch copilot's model via its own /model command or config instead.",
-      );
-    }
+    const prompt = buildCopilotPrompt(opts.prompt, opts.jsonSchema);
+    warnUnsupportedOptions(opts);
 
     const sessionName = `pipeline-worker-${randomUUID()}`;
     const start = Date.now();

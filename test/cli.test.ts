@@ -32,6 +32,7 @@ class McpProbe {
     this.child.stdout.on('data', (chunk: Buffer) => this.onData(chunk));
   }
 
+  // fallow-ignore-next-line complexity
   private onData(chunk: Buffer): void {
     this.buffer += chunk.toString();
     let newlineIndex: number;

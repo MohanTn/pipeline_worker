@@ -7,14 +7,15 @@
 
 import type { PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
 import type { CreateMrArgs, ForgeClient } from './types.js';
+import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
 
-export interface GitlabAuth {
+interface GitlabAuth {
   host: string;
   projectId: number | string;
   token: string;
 }
 
-export function resolveGitlabAuth(config: PipelineWorkerConfig): GitlabAuth {
+function resolveGitlabAuth(config: PipelineWorkerConfig): GitlabAuth {
   // config.gitlab.host/projectId are already env/.env-resolved by
   // config/loader.ts; the token is read directly from the environment here.
   const host = config.gitlab.host;
@@ -33,19 +34,16 @@ async function gitlabRequest(auth: GitlabAuth, path: string, init?: RequestInit)
   // so slashes don't collide with the API route structure.
   const projectSegment = typeof auth.projectId === 'string' ? encodeURIComponent(auth.projectId) : auth.projectId;
   const url = `${auth.host.replace(/\/$/, '')}/api/v4/projects/${projectSegment}${path}`;
-  const res = await fetch(url, {
-    ...init,
-    headers: {
+  return forgeFetch(
+    'GitLab API',
+    path,
+    url,
+    {
       'PRIVATE-TOKEN': auth.token,
       'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
     },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`GitLab API ${init?.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText} — ${body}`);
-  }
-  return res;
+    init,
+  );
 }
 
 function toMergeRequest(raw: any): MergeRequest {
@@ -76,7 +74,7 @@ export function createGitlabForge(config: PipelineWorkerConfig): ForgeClient {
         `/merge_requests?source_branch=${encodeURIComponent(sourceBranch)}&state=opened`,
       );
       const list = (await res.json()) as any[];
-      return list.length > 0 ? toMergeRequest(list[0]) : undefined;
+      return firstOrUndefined(list, toMergeRequest);
     },
 
     async createMergeRequest(args: CreateMrArgs): Promise<MergeRequest> {
@@ -119,8 +117,7 @@ export function createGitlabForge(config: PipelineWorkerConfig): ForgeClient {
         method: 'POST',
         body: JSON.stringify({ body }),
       });
-      const note = (await res.json()) as { id: number };
-      return { id: note.id };
+      return parseIdResponse(res);
     },
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {

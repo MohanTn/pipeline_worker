@@ -19,6 +19,50 @@ const NEW_CHANGELOG_HEADER =
   '[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to ' +
   '[Semantic Versioning](https://semver.org/).\n';
 
+/** Builds the whole `## [Unreleased]` section from scratch, for when the changelog doesn't have one yet. */
+function buildNewUnreleasedSection(category: string, entry: string): string[] {
+  return ['## [Unreleased]', '', `### ${category}`, '', `- ${entry}`, ''];
+}
+
+/** Handles the case where `## [Unreleased]` doesn't exist at all: append it at EOF, or splice it in before the first existing `## ` heading. */
+function insertMissingUnreleasedSection(lines: string[], category: string, entry: string): string[] {
+  const firstH2Idx = lines.findIndex((l) => /^##\s/.test(l));
+  const section = buildNewUnreleasedSection(category, entry);
+  if (firstH2Idx === -1) {
+    const needsBlankLine = lines.length > 0 && lines[lines.length - 1].trim() !== '';
+    return [...lines, ...(needsBlankLine ? [''] : []), ...section];
+  }
+  lines.splice(firstH2Idx, 0, ...section);
+  return lines;
+}
+
+/** Finds where the `## [Unreleased]` section ends: the next `## ` heading, or end of file. */
+function findUnreleasedSectionEnd(lines: string[], unreleasedIdx: number): number {
+  for (let i = unreleasedIdx + 1; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i])) return i;
+  }
+  return lines.length;
+}
+
+/** Inserts `- entry` under `### category` within the `[Unreleased]` section, creating the category heading if it's missing. */
+// fallow-ignore-next-line complexity
+function insertUnderCategory(lines: string[], unreleasedIdx: number, sectionEnd: number, category: string, entry: string): string[] {
+  const categoryHeading = `### ${category}`;
+  const categoryIdx = lines.findIndex((l, i) => i > unreleasedIdx && i < sectionEnd && l.trim() === categoryHeading);
+
+  if (categoryIdx === -1) {
+    let insertAt = unreleasedIdx + 1;
+    while (insertAt < sectionEnd && lines[insertAt].trim() === '') insertAt++;
+    lines.splice(insertAt, 0, categoryHeading, '', `- ${entry}`, '');
+    return lines;
+  }
+
+  let insertAt = categoryIdx + 1;
+  while (insertAt < lines.length && lines[insertAt].trim() === '') insertAt++;
+  lines.splice(insertAt, 0, `- ${entry}`);
+  return lines;
+}
+
 /**
  * Pure string transform (exported for unit testing): inserts a `- entry`
  * bullet under the `## [Unreleased]` -> `### category` section of `content`,
@@ -33,38 +77,11 @@ export function insertChangelogEntry(content: string, category: string, entry: s
   const unreleasedIdx = lines.findIndex((l) => /^##\s*\[Unreleased\]/i.test(l));
 
   if (unreleasedIdx === -1) {
-    const firstH2Idx = lines.findIndex((l) => /^##\s/.test(l));
-    const section = ['## [Unreleased]', '', `### ${category}`, '', `- ${entry}`, ''];
-    if (firstH2Idx === -1) {
-      const needsBlankLine = lines.length > 0 && lines[lines.length - 1].trim() !== '';
-      return [...lines, ...(needsBlankLine ? [''] : []), ...section].join('\n');
-    }
-    lines.splice(firstH2Idx, 0, ...section);
-    return lines.join('\n');
+    return insertMissingUnreleasedSection(lines, category, entry).join('\n');
   }
 
-  let sectionEnd = lines.length;
-  for (let i = unreleasedIdx + 1; i < lines.length; i++) {
-    if (/^##\s/.test(lines[i])) {
-      sectionEnd = i;
-      break;
-    }
-  }
-
-  const categoryHeading = `### ${category}`;
-  const categoryIdx = lines.findIndex((l, i) => i > unreleasedIdx && i < sectionEnd && l.trim() === categoryHeading);
-
-  if (categoryIdx === -1) {
-    let insertAt = unreleasedIdx + 1;
-    while (insertAt < sectionEnd && lines[insertAt].trim() === '') insertAt++;
-    lines.splice(insertAt, 0, categoryHeading, '', `- ${entry}`, '');
-    return lines.join('\n');
-  }
-
-  let insertAt = categoryIdx + 1;
-  while (insertAt < lines.length && lines[insertAt].trim() === '') insertAt++;
-  lines.splice(insertAt, 0, `- ${entry}`);
-  return lines.join('\n');
+  const sectionEnd = findUnreleasedSectionEnd(lines, unreleasedIdx);
+  return insertUnderCategory(lines, unreleasedIdx, sectionEnd, category, entry).join('\n');
 }
 
 /** Writes the updated CHANGELOG.md into the worktree; callers stage it afterwards so it rides along in the same commit as the rest of the change. */

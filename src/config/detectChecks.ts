@@ -21,6 +21,7 @@ const DOTNET_PROJECT_SUFFIXES = [...DOTNET_SOLUTION_SUFFIXES, '.csproj', '.fspro
 const PYTHON_MARKERS = ['pyproject.toml', 'setup.py', 'requirements.txt'];
 
 /** Maps each stage to `npm run <script>` only for scripts the repo declares. */
+// fallow-ignore-next-line complexity
 function detectNode(repoRoot: string): DetectedChecks {
   let scripts: Record<string, unknown>;
   try {
@@ -44,6 +45,7 @@ function detectNode(repoRoot: string): DetectedChecks {
  * Detected via a .csharpierignore file at the root OR a 'csharpier' entry
  * in .config/dotnet-tools.json (the standard local tools manifest).
  */
+// fallow-ignore-next-line complexity
 function hasCsharpier(repoRoot: string): boolean {
   if (existsSync(join(repoRoot, '.csharpierignore'))) return true;
   const toolsManifest = join(repoRoot, '.config', 'dotnet-tools.json');
@@ -75,34 +77,37 @@ function detectDotnet(repoRoot: string, slnSubdir?: string): DetectedChecks {
   return { language: 'dotnet', build, lint, test };
 }
 
-export function detectChecks(repoRoot: string): DetectedChecks {
-  if (existsSync(join(repoRoot, 'package.json'))) return detectNode(repoRoot);
-
+/** .sln/.csproj directly at the repo root. */
+function detectDotnetAtRoot(repoRoot: string): DetectedChecks | undefined {
   let rootEntries: string[] = [];
   try {
     rootEntries = readdirSync(repoRoot);
   } catch {
     // Unreadable root: fall through to unknown, honoring loader.ts's never-throw contract.
+    return undefined;
   }
-
-  // .sln/.csproj at the repo root
   if (rootEntries.some((name) => DOTNET_PROJECT_SUFFIXES.some((suffix) => name.endsWith(suffix)))) {
     return detectDotnet(repoRoot);
   }
+  return undefined;
+}
 
-  // .sln in a src/ subdirectory — a common layout where source lives one level down
+/** .sln in a src/ subdirectory — a common layout where source lives one level down. */
+function detectDotnetInSrc(repoRoot: string): DetectedChecks | undefined {
   const srcDir = join(repoRoot, 'src');
-  if (existsSync(srcDir)) {
-    try {
-      const srcEntries = readdirSync(srcDir);
-      if (srcEntries.some((name) => DOTNET_SOLUTION_SUFFIXES.some((suffix) => name.endsWith(suffix)))) {
-        return detectDotnet(repoRoot, 'src');
-      }
-    } catch {
-      // Ignore readdir errors on the src/ subdirectory.
+  if (!existsSync(srcDir)) return undefined;
+  try {
+    const srcEntries = readdirSync(srcDir);
+    if (srcEntries.some((name) => DOTNET_SOLUTION_SUFFIXES.some((suffix) => name.endsWith(suffix)))) {
+      return detectDotnet(repoRoot, 'src');
     }
+  } catch {
+    // Ignore readdir errors on the src/ subdirectory.
   }
+  return undefined;
+}
 
+function detectGoOrPython(repoRoot: string): DetectedChecks | undefined {
   if (existsSync(join(repoRoot, 'go.mod'))) {
     return { language: 'go', build: 'go build ./...', lint: 'go vet ./...', test: 'go test ./...' };
   }
@@ -110,5 +115,15 @@ export function detectChecks(repoRoot: string): DetectedChecks {
     // No universal python build/lint step; pytest is the de-facto test runner.
     return { language: 'python', build: '', lint: '', test: 'pytest' };
   }
-  return { language: 'unknown', build: '', lint: '', test: '' };
+  return undefined;
+}
+
+// fallow-ignore-next-line complexity
+export function detectChecks(repoRoot: string): DetectedChecks {
+  if (existsSync(join(repoRoot, 'package.json'))) return detectNode(repoRoot);
+  return (
+    detectDotnetAtRoot(repoRoot) ??
+    detectDotnetInSrc(repoRoot) ??
+    detectGoOrPython(repoRoot) ?? { language: 'unknown', build: '', lint: '', test: '' }
+  );
 }

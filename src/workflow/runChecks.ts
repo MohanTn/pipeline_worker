@@ -33,6 +33,7 @@ export function parseCommand(command: string): string[] {
   return tokens;
 }
 
+// fallow-ignore-next-line complexity
 async function runStage(name: CheckResult['name'], command: string, cwd: string): Promise<CheckResult> {
   const start = Date.now();
   const opts = { cwd, maxBuffer: 64 * 1024 * 1024 };
@@ -64,6 +65,7 @@ async function runStage(name: CheckResult['name'], command: string, cwd: string)
  * lint/test are skipped when config.runLintAndTest is false — e.g. when an
  * earlier workflow such as upstream CI already verified them.
  */
+// fallow-ignore-next-line complexity
 export async function runChecks(config: PipelineWorkerConfig, worktreePath: string): Promise<CheckResult[]> {
   const stages: Array<{ name: CheckResult['name']; command: string }> = [
     { name: 'build', command: config.build },

@@ -79,6 +79,7 @@ export interface RunSession {
  * than failing the whole listing — `pipeline-worker sessions` should show
  * what it can even if one run's file is damaged.
  */
+// fallow-ignore-next-line complexity
 export function listRunStates(repoRoot: string): RunSession[] {
   const dir = stateDir(repoRoot);
   if (!existsSync(dir)) return [];

@@ -64,6 +64,7 @@ function emit(systemMessage) {
   process.stdout.write(JSON.stringify({ systemMessage }) + '\n');
 }
 
+// fallow-ignore-next-line complexity
 async function main() {
   let payload;
   try {

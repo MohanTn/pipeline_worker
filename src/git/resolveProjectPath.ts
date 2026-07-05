@@ -12,7 +12,7 @@ import { relative, sep } from 'node:path';
  * Handles both PascalCase ("RetailMediaPortal" → "retail-media-portal") and
  * already-hyphenated names ("Store-Media-Api" → "store-media-api").
  */
-export function toKebabCase(segment: string): string {
+function toKebabCase(segment: string): string {
   return segment
     .replace(/([a-z\d])([A-Z])/g, '$1-$2')
     .replace(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
