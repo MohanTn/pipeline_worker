@@ -33,6 +33,19 @@ function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+/**
+ * Keeps a spinner redraw to a single physical row. Without this, a line
+ * longer than the terminal's column count auto-wraps, and the `\r\x1b[K`
+ * redraw in runStep() below only rewinds/clears the row the cursor is on —
+ * not the wrapped continuation from the previous frame — so each tick
+ * appends a new line instead of animating in place.
+ */
+export function truncateToWidth(text: string, width: number): string {
+  if (width <= 0 || text.length <= width) return text;
+  if (width === 1) return text.slice(0, 1);
+  return `${text.slice(0, width - 1)}…`;
+}
+
 /** stage accepts a decimal string (e.g. "12.3") for a sub-step of a numbered stage — see TOTAL_STAGES. */
 function stageHeader(stage: number | string, icon: string, title: string): string {
   return styleText(['bold', 'cyan'], `[${stage}/${TOTAL_STAGES}] ${icon} ${title}`);
@@ -119,7 +132,9 @@ export async function runStep<T>(stage: number | string, icon: string, title: st
   const start = Date.now();
   let frame = 0;
   const render = (glyph: string, color: 'dim' | 'green' | 'red' = 'dim'): void => {
-    process.stdout.write(`\r\x1b[K${styleText(color, `  ${glyph} ${detail} (${formatElapsed(Date.now() - start)})`)}`);
+    const line = `  ${glyph} ${detail} (${formatElapsed(Date.now() - start)})`;
+    const width = process.stdout.columns ?? line.length;
+    process.stdout.write(`\r\x1b[K${styleText(color, truncateToWidth(line, width))}`);
   };
   render(SPINNER_FRAMES[0]);
   const timer = setInterval(() => {

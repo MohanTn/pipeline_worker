@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- Added truncateToWidth() utility function to prevent spinner detail text from exceeding terminal width, preventing unwanted line wrapping. Integrated into runStep() render function to apply terminal-width-aware truncation.
+
 ### Added
 
 - `pw` as a shorter alias for the `pipeline-worker` command (both installed by `npm install -g pipeline-worker`).
