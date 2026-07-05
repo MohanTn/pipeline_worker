@@ -8,7 +8,7 @@ Automate the last mile of your local changes: pipeline-worker takes the uncommit
 
 1. Captures your staged + unstaged changes (your working tree is only read, not modified, up through this point).
 2. Replays them in a disposable git worktree.
-3. Asks a coding agent (Claude Code or GitHub Copilot CLI) to infer the intent: change type, branch slug, commit message, summary.
+3. Asks a coding agent (Claude Code, [Pi](https://pi.dev), or GitHub Copilot CLI) to infer the intent: change type, branch slug, commit message, summary.
 4. Runs your `build` / `lint` / `test` commands, fail-fast.
 5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`.
 6. Polls the CI pipeline; on failure it hands the pipeline URL to the agent, which pulls the failed jobs and logs itself via whatever GitLab/GitHub MCP tooling is available (pipeline-worker's own forge MCP server, or an external one the agent already has configured), commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
@@ -19,8 +19,19 @@ Polling is plain REST and costs zero agent tokens; the agent is invoked only whe
 ## Requirements
 
 - Node.js >= 20.12 and git
-- One coding agent CLI on your PATH: [Claude Code](https://claude.com/claude-code) (`claude`) or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (`copilot`)
+- One coding agent CLI on your PATH: [Claude Code](https://claude.com/claude-code) (`claude`), [Pi](https://pi.dev) (`pi`), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (`copilot`)
 - A GitLab or GitHub token with API access to the repo
+
+### Agents
+
+| CLI | `PIPELINE_WORKER_AGENT` | Setup | Per-invocation model selection |
+| --- | ----------------------- | ----- | ------------------------------ |
+| [Claude Code](https://claude.com/claude-code) | `claude` | `npm install -g @anthropic-ai/claude-code` | ✅ (`--model`) |
+| [Pi](https://pi.dev) | `pi` | `npm install -g @earendil-works/pi-coding-agent` | ✅ (`--model`) — any provider/model |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) | `copilot` | Install via [GitHub's docs](https://docs.github.com/en/copilot/how-tos/copilot-cli) | ❌ (uses its own configured model) |
+
+Pi supports models from any provider — Anthropic, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, etc.
+Configure your provider/api-key via pi's own setup (`/login`), env vars, or `--provider` in the adapter.
 
 ## Install
 
@@ -36,7 +47,7 @@ Set these once in your shell profile (`~/.zshrc` / `~/.bashrc`) and every
 repo on the machine picks them up — no per-repo setup needed:
 
 ```sh
-export PIPELINE_WORKER_AGENT=claude
+export PIPELINE_WORKER_AGENT=claude     # or pi, or copilot
 export PIPELINE_WORKER_FORGE=gitlab
 export PIPELINE_WORKER_GITLAB_HOST=https://gitlab.example.com
 export PIPELINE_WORKER_GITLAB_TOKEN=glpat-xxxxx
@@ -57,7 +68,7 @@ pipeline-worker is configured entirely through real environment variables — se
 
 | Env var                                 | Default                      | Meaning                                                                       |
 | --------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
-| `PIPELINE_WORKER_AGENT`                 | `claude`                     | `claude` or `copilot`                                                         |
+| `PIPELINE_WORKER_AGENT`                 | `claude`                     | `claude`, `pi`, or `copilot`                                                         |
 | `PIPELINE_WORKER_FORGE`                 | `gitlab`                     | `gitlab` or `github`                                                          |
 | `PIPELINE_WORKER_GITLAB_HOST`           | —                            | e.g. `https://gitlab.example.com`                                             |
 | `PIPELINE_WORKER_GITLAB_PROJECT_ID`     | —                            | numeric project id                                                            |
@@ -69,7 +80,7 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_BRANCH_PATTERN`        | `pipeline-worker/{name}`     | feature branch naming template — see below                                    |
 | `PIPELINE_WORKER_CLEANUP`               | `true`                       | reset repoRoot to HEAD once cleanup fires (see `PIPELINE_WORKER_CLEANUP_EARLY` for when) (`false` to keep your local uncommitted changes as-is) |
 | `PIPELINE_WORKER_CLEANUP_EARLY`         | `false`                      | `true` resets repoRoot as soon as the MR/PR is opened (diff committed + pushed), instead of waiting for CI to go green — frees the repo (and the run lock) for a new `pipeline-worker run` while this run's CI-watch/fix loop keeps going in the background |
-| `PIPELINE_WORKER_INTENT_MODEL`          | `haiku`                      | model used for the intent-capture step (branch/commit/summary); claude only — copilot has no per-invocation model selection and ignores it |
+| `PIPELINE_WORKER_INTENT_MODEL`          | `haiku`                      | model used for the intent-capture step (branch/commit/summary); claude and pi support per-invocation model selection — copilot ignores it |
 | `PIPELINE_WORKER_BUILD`                 | auto-detected from toolchain | build command override; set to an empty string to skip the stage                                                             |
 | `PIPELINE_WORKER_LINT`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage                                                              |
 | `PIPELINE_WORKER_TEST`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage                                                              |
@@ -126,7 +137,7 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 
 Before doing any work, `pipeline-worker run` checks npm for a newer published version and installs it automatically if the locally installed one is out of date (the update takes effect on the next run). This check is best-effort: if npm is unreachable or the install fails, the run proceeds anyway on whatever version is already installed.
 
-Every time a run hands a turn to Claude Code or the Copilot CLI (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>` (or `copilot --resume <id>`) opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
+Every time a run hands a turn to the agent (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>`, `pi --session <id>`, or `copilot --resume <id>` opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
 
 ## How the fix loop stays bounded
 
