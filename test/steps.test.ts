@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { noteSession } from '../src/ui/steps.js';
+import { noteSession, truncateToWidth } from '../src/ui/steps.js';
 
 function captureLogs(fn: () => void): string[] {
   const lines: string[] = [];
@@ -39,4 +39,21 @@ test('noteSession prints the worktree path to cd into for resuming', () => {
   const lines = captureLogs(() => noteSession({ text: 'hi', sessionId: 'abc-123' }, '/tmp/pipeline-worker-xyz/worktree'));
   assert.equal(lines.length, 1);
   assert.match(lines[0], /cd \/tmp\/pipeline-worker-xyz\/worktree to resume it there/);
+});
+
+test('truncateToWidth leaves text at or under the given width untouched', () => {
+  assert.equal(truncateToWidth('short line', 80), 'short line');
+  assert.equal(truncateToWidth('exact', 5), 'exact');
+});
+
+test('truncateToWidth shortens text over width and appends an ellipsis, without exceeding width', () => {
+  const result = truncateToWidth('a very long spinner detail line that would wrap', 20);
+  assert.equal(result.length, 20);
+  assert.equal(result, 'a very long spinner…');
+});
+
+test('truncateToWidth handles a width of 1 and non-positive widths without throwing', () => {
+  assert.equal(truncateToWidth('hello', 1), 'h');
+  assert.equal(truncateToWidth('hello', 0), 'hello');
+  assert.equal(truncateToWidth('hello', -5), 'hello');
 });
