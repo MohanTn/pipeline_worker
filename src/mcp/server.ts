@@ -15,6 +15,7 @@ import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
 import type { ForgeClient } from '../forge/types.js';
 import { buildEnvelope, errorEnvelope } from '../toon/envelope.js';
+import type { PipelineStatus } from '../types.js';
 
 function toolResult(text: string, isError = false): CallToolResult {
   return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
@@ -35,6 +36,12 @@ function wrap<Args>(handler: (forge: ForgeClient, args: Args) => Promise<string>
 }
 
 const fullFlag = z.boolean().describe('Skip truncation and return the full payload').optional();
+
+function describeNextPipelineAction(status: PipelineStatus): string | undefined {
+  if (status === 'failed') return 'call get_failed_jobs with this pipeline id';
+  if (status === 'running' || status === 'pending') return 'poll again shortly';
+  return undefined;
+}
 
 export async function createServer() {
   const server = new McpServer({ name: 'pipeline-worker-forge', version: '0.1.0' });
@@ -68,13 +75,7 @@ export async function createServer() {
       if (!latest) {
         return buildEnvelope({ status: 'success', counts: { pipelines: 0 }, next: 'no pipeline yet, poll again shortly' });
       }
-      const next =
-        latest.status === 'failed'
-          ? 'call get_failed_jobs with this pipeline id'
-          : latest.status === 'running' || latest.status === 'pending'
-            ? 'poll again shortly'
-            : undefined;
-      return buildEnvelope({ status: 'success', data: latest, next });
+      return buildEnvelope({ status: 'success', data: latest, next: describeNextPipelineAction(latest.status) });
     }),
   );
 

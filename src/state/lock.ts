@@ -31,44 +31,61 @@ function removeIfPresent(path: string): void {
   }
 }
 
+function readLockHolderPid(path: string): number | undefined {
+  const heldPid = Number.parseInt(readFileSync(path, 'utf-8').trim(), 10);
+  return Number.isInteger(heldPid) ? heldPid : undefined;
+}
+
 /**
- * Acquires the lock, throwing if another live process already holds it. A
- * lock left behind by a process that's no longer running (crash, kill -9) is
- * treated as stale and reclaimed. Returns a release function; safe to call
- * more than once.
- *
- * The final write uses the 'wx' flag (fails with EEXIST if the path already
- * exists) as the actual mutual-exclusion guard — the existsSync/liveness
- * check above is only a fast path to produce a clear "who's holding it"
- * error message, since it's inherently racy against another process doing
- * the same check concurrently.
+ * Throws if the lock is held by a still-alive process; otherwise removes a
+ * stale lock left by one that's no longer running (crash, kill -9). This is
+ * only a fast path for a clear "who's holding it" error message — it's
+ * inherently racy against another process doing the same check concurrently,
+ * so writeLockFileExclusive below is the actual mutual-exclusion guard.
  */
-export function acquireLock(repoRoot: string): () => void {
-  const dir = join(repoRoot, '.pipeline-worker');
-  mkdirSync(dir, { recursive: true });
-  const path = lockPath(repoRoot);
-
-  if (existsSync(path)) {
-    const heldPid = Number.parseInt(readFileSync(path, 'utf-8').trim(), 10);
-    if (Number.isInteger(heldPid) && isProcessAlive(heldPid)) {
-      throw new Error(
-        `pipeline-worker: another run (pid ${heldPid}) is already in progress in this repo. ` +
-          'Wait for it to finish, or if it crashed without cleaning up, remove .pipeline-worker/run.lock.',
-      );
-    }
-    removeIfPresent(path);
+function assertLockNotHeld(path: string): void {
+  if (!existsSync(path)) return;
+  const heldPid = readLockHolderPid(path);
+  if (heldPid !== undefined && isProcessAlive(heldPid)) {
+    throw new Error(
+      `pipeline-worker: another run (pid ${heldPid}) is already in progress in this repo. ` +
+        'Wait for it to finish, or if it crashed without cleaning up, remove .pipeline-worker/run.lock.',
+    );
   }
+  removeIfPresent(path);
+}
 
+/** The 'wx' flag fails with EEXIST if the path already exists — this, not assertLockNotHeld's check above, is what actually closes the race between two concurrent acquirers. */
+function writeLockFileExclusive(path: string): void {
   try {
     writeFileSync(path, String(process.pid), { flag: 'wx' });
   } catch {
     throw new Error('pipeline-worker: another run just started in this repo — try again.');
   }
+}
 
+function makeIdempotentReleaser(path: string): () => void {
   let released = false;
   return () => {
     if (released) return;
     released = true;
     removeIfPresent(path);
   };
+}
+
+/**
+ * Acquires the lock, throwing if another live process already holds it. A
+ * lock left behind by a process that's no longer running (crash, kill -9) is
+ * treated as stale and reclaimed. Returns a release function; safe to call
+ * more than once.
+ */
+export function acquireLock(repoRoot: string): () => void {
+  const dir = join(repoRoot, '.pipeline-worker');
+  mkdirSync(dir, { recursive: true });
+  const path = lockPath(repoRoot);
+
+  assertLockNotHeld(path);
+  writeLockFileExclusive(path);
+
+  return makeIdempotentReleaser(path);
 }

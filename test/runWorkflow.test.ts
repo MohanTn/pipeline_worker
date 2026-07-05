@@ -23,6 +23,7 @@ beforeEach(() => {
   }
 });
 
+// fallow-ignore-next-line complexity
 afterEach(() => {
   for (const key of Object.keys(process.env)) {
     if (key.startsWith(ENV_PREFIX)) delete process.env[key];

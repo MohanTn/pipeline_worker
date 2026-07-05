@@ -37,6 +37,27 @@ export function installVersion(pkgName: string, versionOrTag: string): Promise<v
   return runNpm(['install', '-g', `${pkgName}@${versionOrTag}`], 'inherit').then(() => undefined);
 }
 
+async function tryFetchLatestVersion(pkgName: string, currentVersion: string): Promise<string | undefined> {
+  try {
+    return await fetchLatestVersion(pkgName);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: could not check npm for a newer ${pkgName} version (${message}). Continuing with v${currentVersion}.`);
+    return undefined;
+  }
+}
+
+async function tryInstallVersion(pkgName: string, latest: string, currentVersion: string): Promise<boolean> {
+  try {
+    await installVersion(pkgName, latest);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: failed to auto-update ${pkgName} to v${latest} (${message}). Continuing with v${currentVersion}.`);
+    return false;
+  }
+}
+
 /**
  * Checks npm for the latest published version of `pkgName` and installs it
  * globally if it differs from `currentVersion`. Returns the newly installed
@@ -46,24 +67,13 @@ export function installVersion(pkgName: string, versionOrTag: string): Promise<v
  * workflow that's about to start.
  */
 export async function ensureLatestVersion(pkgName: string, currentVersion: string): Promise<string | undefined> {
-  let latest: string;
-  try {
-    latest = await fetchLatestVersion(pkgName);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Warning: could not check npm for a newer ${pkgName} version (${message}). Continuing with v${currentVersion}.`);
-    return undefined;
-  }
-  if (latest === currentVersion) return undefined;
+  const latest = await tryFetchLatestVersion(pkgName, currentVersion);
+  if (latest === undefined || latest === currentVersion) return undefined;
 
   console.log(`pipeline-worker: v${currentVersion} installed, v${latest} available on npm — installing...`);
-  try {
-    await installVersion(pkgName, latest);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Warning: failed to auto-update ${pkgName} to v${latest} (${message}). Continuing with v${currentVersion}.`);
-    return undefined;
-  }
+  const installed = await tryInstallVersion(pkgName, latest, currentVersion);
+  if (!installed) return undefined;
+
   console.log(`pipeline-worker: updated to v${latest} (takes effect on the next run) — continuing this run with v${currentVersion}.`);
   return latest;
 }

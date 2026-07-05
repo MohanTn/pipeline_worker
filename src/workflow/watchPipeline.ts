@@ -33,7 +33,7 @@ import type { AgentAdapter, AgentInvokeResult } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolvedConflictMarkers } from '../git/commit.js';
 import type { ForgeClient } from '../forge/types.js';
 import { recordEvent } from '../state/runState.js';
-import { step, runStep, note, noteSession } from '../ui/steps.js';
+import { step, runStep, note, reportAgentInvocation } from '../ui/steps.js';
 import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -93,6 +93,29 @@ export type PollOutcome = { kind: 'pipeline'; pipeline: Pipeline } | { kind: 'co
  * config file must never be declared "no CI" just because its pipeline is
  * slow to register — it should keep polling the full window instead.
  */
+/**
+ * Undefined previousPipelineId means no pipeline has been confirmed yet for
+ * this MR/PR; give the forge a short grace window to register one before
+ * concluding there's no CI to watch. Only armed when ciConfigured is false —
+ * a repo with a real CI config file can never reach this conclusion, no
+ * matter how many polls come back empty.
+ */
+function computeInitialGracePolls(
+  ciConfigured: boolean,
+  previousPipelineId: number | undefined,
+  noPipelineGraceMs: number,
+  intervalMs: number,
+): number | undefined {
+  return !ciConfigured && previousPipelineId === undefined ? Math.max(1, Math.ceil(noPipelineGraceMs / intervalMs)) : undefined;
+}
+
+/** The latest pipeline, if it's both new (not previousPipelineId) and terminal — the condition pollForNextAction is waiting on. */
+function checkTerminalPipeline(pipelines: Pipeline[], previousPipelineId: number | undefined): Pipeline | undefined {
+  const latest = pipelines[0];
+  return latest && latest.id !== previousPipelineId && TERMINAL_STATUSES.includes(latest.status) ? latest : undefined;
+}
+
+// fallow-ignore-next-line complexity
 export async function pollForNextAction(
   forge: ForgeClient,
   mrIid: number,
@@ -102,16 +125,7 @@ export async function pollForNextAction(
   ciConfigured: boolean = false,
 ): Promise<PollOutcome> {
   const maxPolls = Math.max(1, Math.ceil(MAX_POLL_WINDOW_MS / intervalMs));
-  // Undefined previousPipelineId means no pipeline has been confirmed yet
-  // for this MR/PR; give the forge a short grace window to register one
-  // before concluding there's no CI to watch. Only armed when ciConfigured
-  // is false — a repo with a real CI config file can never reach this
-  // conclusion, no matter how many polls come back empty. Also disarmed for
-  // good the moment any pipeline is observed (even non-terminal) — that
-  // alone proves CI is configured, so a later transient empty response must
-  // never be counted.
-  let noPipelineGracePolls =
-    !ciConfigured && previousPipelineId === undefined ? Math.max(1, Math.ceil(noPipelineGraceMs / intervalMs)) : undefined;
+  let noPipelineGracePolls = computeInitialGracePolls(ciConfigured, previousPipelineId, noPipelineGraceMs, intervalMs);
   let emptyPolls = 0;
   for (let i = 0; i < maxPolls; i++) {
     if (await forge.hasMergeConflicts(mrIid)) {
@@ -119,11 +133,11 @@ export async function pollForNextAction(
     }
 
     const pipelines = await forge.getMrPipelines(mrIid);
-    const latest = pipelines[0];
-    if (latest && latest.id !== previousPipelineId && TERMINAL_STATUSES.includes(latest.status)) {
-      return { kind: 'pipeline', pipeline: latest };
+    const terminal = checkTerminalPipeline(pipelines, previousPipelineId);
+    if (terminal) {
+      return { kind: 'pipeline', pipeline: terminal };
     }
-    if (latest) {
+    if (pipelines[0]) {
       noPipelineGracePolls = undefined; // CI is confirmed to exist; never re-arm the no-pipeline check
     } else if (noPipelineGracePolls !== undefined) {
       emptyPolls += 1;
@@ -186,6 +200,46 @@ async function escalate(forge: ForgeClient, mrIid: number, message: string, stat
   recordEvent(repoRoot, state, detail, 'error');
 }
 
+/** Attempts `git merge origin/targetBranch`; true means it succeeded and auto-committed, false means conflicts are left in the working tree. */
+async function attemptCleanMerge(worktreePath: string, targetBranch: string): Promise<boolean> {
+  return runStep('12.2', '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
+    await execFileAsync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath });
+    try {
+      await execFileAsync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath });
+      return true; // merge succeeded and auto-committed; nothing left to resolve
+    } catch {
+      return false; // conflicts left in the working tree, merge in progress
+    }
+  });
+}
+
+/** Asks the agent to resolve the given conflicted files, returning whichever still have unresolved markers afterward. */
+async function resolveConflictsWithAgent(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[]): Promise<string[]> {
+  note(conflictedFiles.join(', '));
+
+  const mcpConfigPath = writeAgentMcpConfig();
+  let agentResult: AgentInvokeResult;
+  try {
+    agentResult = await runStep(
+      '12.3',
+      '🔧',
+      'Resolving conflicts',
+      `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
+      () => agent.invoke({ prompt: buildConflictPrompt(conflictedFiles), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
+    );
+  } finally {
+    unlinkSync(mcpConfigPath);
+  }
+  reportAgentInvocation(agentResult, worktreePath);
+
+  return findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
+}
+
+async function finalizeMergeResolution(worktreePath: string, targetBranch: string): Promise<void> {
+  await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+  await commit(worktreePath, `merge: resolve conflicts with origin/${targetBranch}`);
+}
+
 /**
  * Merges origin/targetBranch into the worktree's branch to clear a confirmed
  * merge conflict, asking the agent to resolve any real conflict markers.
@@ -194,6 +248,7 @@ async function escalate(forge: ForgeClient, mrIid: number, message: string, stat
  * human" from the same budget. Returns false when it escalated instead of
  * resolving (caller should stop the run in that case).
  */
+// fallow-ignore-next-line complexity
 async function tryResolveConflicts(
   forge: ForgeClient,
   agent: AgentAdapter,
@@ -224,41 +279,15 @@ async function tryResolveConflicts(
     return false;
   }
 
-  const cleanMerge = await runStep('12.2', '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
-    await execFileAsync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath });
-    try {
-      await execFileAsync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath });
-      return true; // merge succeeded and auto-committed; nothing left to resolve
-    } catch {
-      return false; // conflicts left in the working tree, merge in progress
-    }
-  });
+  const cleanMerge = await attemptCleanMerge(worktreePath, targetBranch);
 
   if (!cleanMerge) {
     const conflictedFiles = await listConflictedFiles(worktreePath);
     if (conflictedFiles.length === 0) {
       throw new Error(`git merge origin/${targetBranch} failed for a reason other than conflicts — check the worktree for details`);
     }
-    note(conflictedFiles.join(', '));
 
-    const mcpConfigPath = writeAgentMcpConfig();
-    let agentResult: AgentInvokeResult;
-    try {
-      agentResult = await runStep(
-        '12.3',
-        '🔧',
-        'Resolving conflicts',
-        `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-        () => agent.invoke({ prompt: buildConflictPrompt(conflictedFiles), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
-      );
-    } finally {
-      unlinkSync(mcpConfigPath);
-    }
-    const agentResponse = agentResult.text;
-    note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
-    noteSession(agentResult, worktreePath);
-
-    const stillConflicted = findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
+    const stillConflicted = await resolveConflictsWithAgent(agent, worktreePath, conflictedFiles);
     if (stillConflicted.length > 0) {
       await escalate(
         forge,
@@ -274,14 +303,135 @@ async function tryResolveConflicts(
       return false;
     }
 
-    await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
-    await commit(worktreePath, `merge: resolve conflicts with origin/${targetBranch}`);
+    await finalizeMergeResolution(worktreePath, targetBranch);
   }
 
   await runStep('12.4', '⬆', 'Pushing the merge', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
   return true;
 }
 
+/** No CI ran at all (repo has no workflow configured for this MR/PR) — there's nothing to poll for, so stop instead of spinning until the 2-hour safety window would otherwise time out. */
+async function handleNoPipelineOutcome(state: RunState, repoRoot: string): Promise<void> {
+  step('ℹ️', 'No CI pipeline found', `no pipeline was detected for the MR/PR within ${NO_PIPELINE_GRACE_MS / 1000}s — nothing to watch`);
+  state.phase = 'done';
+  recordEvent(repoRoot, state, 'No CI pipeline found for this MR/PR — nothing to watch');
+}
+
+/** What watchPipeline's outer polling loop should do next, since only it can act on `continue`/`return`. */
+type PipelineOutcomeResult = { action: 'stop' } | { action: 'continue'; previousPipelineId: number };
+
+/** Attempts one CI fix: diagnose/fix via the agent, then commit and push. Shares state.attempt/config.maxFixAttempts with the conflict-resolution loop. */
+async function runCiFixAttempt(
+  forge: ForgeClient,
+  config: PipelineWorkerConfig,
+  agent: AgentAdapter,
+  worktreePath: string,
+  branch: string,
+  mrIid: number,
+  pipeline: Pipeline,
+  state: RunState,
+  repoRoot: string,
+): Promise<PipelineOutcomeResult> {
+  state.attempt += 1;
+  recordEvent(repoRoot, state, `Pipeline failed; attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
+
+  step('💥', 'Pipeline failed', `attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
+  if (state.attempt > config.maxFixAttempts) {
+    await escalate(
+      forge,
+      mrIid,
+      formatEscalationNote(
+        `Automated fix attempts exhausted (${state.attempt - 1} attempt(s))`,
+        [`❌ CI pipeline: still failing — ${pipeline.webUrl}`],
+        'Needs a human to take over.',
+      ),
+      state,
+      repoRoot,
+    );
+    return { action: 'stop' };
+  }
+
+  const mcpConfigPath = writeAgentMcpConfig();
+  let agentResult: AgentInvokeResult;
+  try {
+    agentResult = await runStep(
+      '12.5',
+      '🔧',
+      'Fixing CI failure',
+      `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
+      () => agent.invoke({ prompt: buildFixPrompt(pipeline, config.forge), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
+    );
+  } finally {
+    unlinkSync(mcpConfigPath);
+  }
+  reportAgentInvocation(agentResult, worktreePath);
+
+  if (!(await hasChanges(worktreePath))) {
+    // Re-pushing an identical tree would never produce a new pipeline; stop here.
+    await escalate(
+      forge,
+      mrIid,
+      formatEscalationNote(
+        'Fix attempt produced no changes',
+        [`❌ CI pipeline: still failing — ${pipeline.webUrl}`, `⚠️ Agent fix attempt ${state.attempt} made no changes to push`],
+        'Escalating to a human.',
+      ),
+      state,
+      repoRoot,
+    );
+    return { action: 'stop' };
+  }
+
+  await runStep('12.6', '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
+    await stageAll(worktreePath);
+    await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
+    await push(worktreePath, 'origin', branch);
+  });
+  return { action: 'continue', previousPipelineId: pipeline.id };
+}
+
+/** Dispatches on a terminal pipeline's status: done (success), escalate (canceled/skipped), or attempt a CI fix (failed). */
+async function handlePipelineTerminal(
+  forge: ForgeClient,
+  config: PipelineWorkerConfig,
+  agent: AgentAdapter,
+  worktreePath: string,
+  branch: string,
+  mrIid: number,
+  pipeline: Pipeline,
+  state: RunState,
+  repoRoot: string,
+): Promise<PipelineOutcomeResult> {
+  note(`pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
+  state.pipelineId = pipeline.id;
+  recordEvent(repoRoot, state, `Pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
+
+  if (pipeline.status === 'success') {
+    state.phase = 'done';
+    recordEvent(repoRoot, state, 'Pipeline succeeded');
+    return { action: 'stop' };
+  }
+
+  if (pipeline.status !== 'failed') {
+    // canceled/skipped: there are no failing jobs to fix — don't spend agent tokens.
+    await escalate(
+      forge,
+      mrIid,
+      formatEscalationNote(
+        'Pipeline ended without a clear pass/fail',
+        [`⚠️ CI pipeline: \`${pipeline.status}\` — ${pipeline.webUrl}`],
+        'Nothing to auto-fix — needs a human decision.',
+      ),
+      state,
+      repoRoot,
+    );
+    return { action: 'stop' };
+  }
+
+  return runCiFixAttempt(forge, config, agent, worktreePath, branch, mrIid, pipeline, state, repoRoot);
+}
+
+// fallow-ignore-next-line complexity
 export async function watchPipeline(
   forge: ForgeClient,
   config: PipelineWorkerConfig,
@@ -315,99 +465,12 @@ export async function watchPipeline(
     }
 
     if (outcome.kind === 'no-pipeline') {
-      // No CI ran at all (repo has no workflow configured for this MR/PR) —
-      // there's nothing to poll for, so stop instead of spinning until the
-      // 2-hour safety window would otherwise time out.
-      step('ℹ️', 'No CI pipeline found', `no pipeline was detected for the MR/PR within ${NO_PIPELINE_GRACE_MS / 1000}s — nothing to watch`);
-      state.phase = 'done';
-      recordEvent(repoRoot, state, 'No CI pipeline found for this MR/PR — nothing to watch');
+      await handleNoPipelineOutcome(state, repoRoot);
       return;
     }
 
-    const pipeline = outcome.pipeline;
-    note(`pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
-    state.pipelineId = pipeline.id;
-    recordEvent(repoRoot, state, `Pipeline ${pipeline.id}: ${pipeline.status} — ${pipeline.webUrl}`);
-
-    if (pipeline.status === 'success') {
-      state.phase = 'done';
-      recordEvent(repoRoot, state, 'Pipeline succeeded');
-      return;
-    }
-
-    if (pipeline.status !== 'failed') {
-      // canceled/skipped: there are no failing jobs to fix — don't spend agent tokens.
-      await escalate(
-        forge,
-        mrIid,
-        formatEscalationNote(
-          'Pipeline ended without a clear pass/fail',
-          [`⚠️ CI pipeline: \`${pipeline.status}\` — ${pipeline.webUrl}`],
-          'Nothing to auto-fix — needs a human decision.',
-        ),
-        state,
-        repoRoot,
-      );
-      return;
-    }
-
-    state.attempt += 1;
-    recordEvent(repoRoot, state, `Pipeline failed; attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
-
-    step('💥', 'Pipeline failed', `attempt ${state.attempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
-    if (state.attempt > config.maxFixAttempts) {
-      await escalate(
-        forge,
-        mrIid,
-        formatEscalationNote(
-          `Automated fix attempts exhausted (${state.attempt - 1} attempt(s))`,
-          [`❌ CI pipeline: still failing — ${pipeline.webUrl}`],
-          'Needs a human to take over.',
-        ),
-        state,
-        repoRoot,
-      );
-      return;
-    }
-
-    const mcpConfigPath = writeAgentMcpConfig();
-    let agentResult: AgentInvokeResult;
-    try {
-      agentResult = await runStep(
-        '12.5',
-        '🔧',
-        'Fixing CI failure',
-        `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
-        () => agent.invoke({ prompt: buildFixPrompt(pipeline, config.forge), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
-      );
-    } finally {
-      unlinkSync(mcpConfigPath);
-    }
-    const agentResponse = agentResult.text;
-    note(`agent: ${agentResponse.slice(0, 300).trim()}${agentResponse.length > 300 ? '…' : ''}`);
-    noteSession(agentResult, worktreePath);
-
-    if (!(await hasChanges(worktreePath))) {
-      // Re-pushing an identical tree would never produce a new pipeline; stop here.
-      await escalate(
-        forge,
-        mrIid,
-        formatEscalationNote(
-          'Fix attempt produced no changes',
-          [`❌ CI pipeline: still failing — ${pipeline.webUrl}`, `⚠️ Agent fix attempt ${state.attempt} made no changes to push`],
-          'Escalating to a human.',
-        ),
-        state,
-        repoRoot,
-      );
-      return;
-    }
-
-    await runStep('12.6', '⬆', 'Pushing the fix', `commit and push attempt ${state.attempt} to ${branch}`, async () => {
-      await stageAll(worktreePath);
-      await commit(worktreePath, `fix: address CI failure (attempt ${state.attempt})`);
-      await push(worktreePath, 'origin', branch);
-    });
-    previousPipelineId = pipeline.id;
+    const result = await handlePipelineTerminal(forge, config, agent, worktreePath, branch, mrIid, outcome.pipeline, state, repoRoot);
+    if (result.action === 'stop') return;
+    previousPipelineId = result.previousPipelineId;
   }
 }

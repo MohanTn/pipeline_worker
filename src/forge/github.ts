@@ -8,15 +8,17 @@
 
 import type { PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
 import type { CreateMrArgs, ForgeClient } from './types.js';
+import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
 
-export interface GithubAuth {
+interface GithubAuth {
   apiUrl: string;
   /** "owner/name" slug. */
   repo: string;
   token: string;
 }
 
-export function resolveGithubAuth(config: PipelineWorkerConfig): GithubAuth {
+// fallow-ignore-next-line complexity
+function resolveGithubAuth(config: PipelineWorkerConfig): GithubAuth {
   // config.github.repo is already env/.env-resolved by config/loader.ts; the
   // token and the API URL override are read directly from the environment here.
   const apiUrl = process.env.PIPELINE_WORKER_GITHUB_API_URL || 'https://api.github.com';
@@ -32,21 +34,18 @@ export function resolveGithubAuth(config: PipelineWorkerConfig): GithubAuth {
 }
 
 async function githubRequest(auth: GithubAuth, path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(`${auth.apiUrl}/repos/${auth.repo}${path}`, {
-    ...init,
-    headers: {
+  return forgeFetch(
+    'GitHub API',
+    path,
+    `${auth.apiUrl}/repos/${auth.repo}${path}`,
+    {
       Authorization: `Bearer ${auth.token}`,
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
       'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
     },
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`GitHub API ${init?.method ?? 'GET'} ${path} failed: ${res.status} ${res.statusText} — ${body}`);
-  }
-  return res;
+    init,
+  );
 }
 
 function toMergeRequest(raw: any): MergeRequest {
@@ -66,6 +65,7 @@ export interface WorkflowRun {
   html_url: string;
 }
 
+// fallow-ignore-next-line complexity
 function runStatus(run: WorkflowRun): PipelineStatus {
   if (run.status !== 'completed') return 'running';
   switch (run.conclusion) {
@@ -88,6 +88,7 @@ function runStatus(run: WorkflowRun): PipelineStatus {
  * else any failed -> failed (its id is what getFailedJobs needs); else any
  * canceled -> canceled; else success unless every run was skipped.
  */
+// fallow-ignore-next-line complexity
 export function aggregateRuns(runs: WorkflowRun[]): Pipeline | undefined {
   if (runs.length === 0) return undefined;
   const byStatus = (wanted: PipelineStatus) => runs.find((run) => runStatus(run) === wanted);
@@ -112,7 +113,7 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
         `/pulls?head=${encodeURIComponent(`${owner}:${sourceBranch}`)}&state=open`,
       );
       const list = (await res.json()) as any[];
-      return list.length > 0 ? toMergeRequest(list[0]) : undefined;
+      return firstOrUndefined(list, toMergeRequest);
     },
 
     async createMergeRequest(args: CreateMrArgs): Promise<MergeRequest> {
@@ -163,8 +164,7 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
         method: 'POST',
         body: JSON.stringify({ body }),
       });
-      const note = (await res.json()) as { id: number };
-      return { id: note.id };
+      return parseIdResponse(res);
     },
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {

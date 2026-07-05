@@ -67,79 +67,104 @@ function formatStreamBlock(label: string, raw: string | undefined): string {
   return `--- ${label} ---\n[... ${dropped} chars truncated, showing last ${MAX_ERROR_OUTPUT_CHARS} ...]\n${trimmed.slice(-MAX_ERROR_OUTPUT_CHARS)}`;
 }
 
-export function formatProcessError(err: ExecErrorShape): string {
-  let cause: string;
-  if (err.signal) {
-    cause = `killed by signal ${err.signal}`;
-  } else if (err.code !== undefined && err.code !== null) {
-    cause = `exited with code ${err.code}`;
-  } else {
-    cause = 'failed with no exit code or signal reported';
+function describeCause(err: ExecErrorShape): string {
+  if (err.signal) return `killed by signal ${err.signal}`;
+  if (err.code !== undefined && err.code !== null) return `exited with code ${err.code}`;
+  return 'failed with no exit code or signal reported';
+}
+
+function hasMeaningfulOutput(err: ExecErrorShape): boolean {
+  return !!(err.stdout && err.stdout.trim().length > 0) || !!(err.stderr && err.stderr.trim().length > 0);
+}
+
+/**
+ * Falls back to the underlying Node error message only when neither captured
+ * stream has content — typical of spawn-time failures like ENOENT, where the
+ * message is the only context we have.
+ */
+function underlyingMessageLine(err: ExecErrorShape): string | undefined {
+  if (err.message && err.message.trim().length > 0 && !hasMeaningfulOutput(err)) {
+    return `(underlying: ${err.message.trim()})`;
   }
-  const lines: string[] = [`claude ${cause}.`];
+  return undefined;
+}
+
+export function formatProcessError(err: ExecErrorShape): string {
+  const lines: string[] = [`claude ${describeCause(err)}.`];
   for (const [label, raw] of [['stdout', err.stdout], ['stderr', err.stderr]] as const) {
     const block = formatStreamBlock(label, raw);
     if (block) lines.push(block);
   }
-  // Only fall through to the underlying Node error message when neither
-  // captured stream has content — typical of spawn-time failures like
-  // ENOENT, where the message is the only context we have.
-  const hasStdout = !!(err.stdout && err.stdout.trim().length > 0);
-  const hasStderr = !!(err.stderr && err.stderr.trim().length > 0);
-  if (err.message && err.message.trim().length > 0 && !hasStdout && !hasStderr) {
-    lines.push(`(underlying: ${err.message.trim()})`);
-  }
+  const underlying = underlyingMessageLine(err);
+  if (underlying) lines.push(underlying);
   return lines.join('\n');
+}
+
+// fallow-ignore-next-line complexity
+function buildClaudeArgs(opts: AgentInvokeOptions): string[] {
+  const args = [
+    '-p',
+    '--output-format', 'json',
+    '--permission-mode', opts.permissionMode ?? 'acceptEdits',
+  ];
+  if (opts.jsonSchema) {
+    args.push('--json-schema', JSON.stringify(opts.jsonSchema));
+  }
+  if (opts.allowedTools?.length) {
+    args.push('--allowedTools', ...opts.allowedTools);
+  }
+  if (opts.mcpConfigPath) {
+    args.push('--mcp-config', opts.mcpConfigPath);
+  }
+  if (opts.model) {
+    args.push('--model', opts.model);
+  }
+  return args;
+}
+
+/**
+ * Spawns `claude` and pipes the prompt to its stdin. Kept as one atomic
+ * function: `.child.stdin` must be grabbed synchronously between creating
+ * the execFileAsync invocation and awaiting it, so this sequence can't be
+ * split across function boundaries without breaking that ordering.
+ */
+async function runClaudeProcess(args: string[], opts: AgentInvokeOptions): Promise<string> {
+  try {
+    const invocation = execFileAsync('claude', args, {
+      cwd: opts.cwd,
+      timeout: AGENT_INVOKE_TIMEOUT_MS,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    // stdin is always a pipe here since stdio isn't overridden in execFileAsync's options.
+    writePromptToStdin(invocation.child.stdin!, opts.prompt);
+    const result = await invocation;
+    return result.stdout;
+  } catch (rawErr) {
+    const err = rawErr as ExecErrorShape;
+    throw new Error(formatProcessError(err));
+  }
+}
+
+function parseClaudeResult(stdout: string, start: number): AgentInvokeResult {
+  try {
+    // duration_ms/session_id come straight from the CLI's own JSON envelope
+    // (see the module comment's `claude -p --output-format json` sample);
+    // falling back to our own wall-clock reading only covers the
+    // never-observed case where that envelope omits duration_ms.
+    const parsed = JSON.parse(stdout) as { result?: string; session_id?: string; duration_ms?: number };
+    return { text: parsed.result ?? stdout, raw: parsed, sessionId: parsed.session_id, durationMs: parsed.duration_ms ?? Date.now() - start };
+  } catch {
+    // --output-format json should always produce parseable JSON; fall back
+    // to the raw stream rather than throwing, since the invocation itself succeeded.
+    return { text: stdout, durationMs: Date.now() - start };
+  }
 }
 
 export const claudeAdapter: AgentAdapter = {
   async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
-    const args = [
-      '-p',
-      '--output-format', 'json',
-      '--permission-mode', opts.permissionMode ?? 'acceptEdits',
-    ];
-    if (opts.jsonSchema) {
-      args.push('--json-schema', JSON.stringify(opts.jsonSchema));
-    }
-    if (opts.allowedTools?.length) {
-      args.push('--allowedTools', ...opts.allowedTools);
-    }
-    if (opts.mcpConfigPath) {
-      args.push('--mcp-config', opts.mcpConfigPath);
-    }
-    if (opts.model) {
-      args.push('--model', opts.model);
-    }
-
+    const args = buildClaudeArgs(opts);
     const start = Date.now();
-    let stdout: string;
-    try {
-      const invocation = execFileAsync('claude', args, {
-        cwd: opts.cwd,
-        timeout: AGENT_INVOKE_TIMEOUT_MS,
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      // stdin is always a pipe here since stdio isn't overridden in execFileAsync's options.
-      writePromptToStdin(invocation.child.stdin!, opts.prompt);
-      const result = await invocation;
-      stdout = result.stdout;
-    } catch (rawErr) {
-      const err = rawErr as ExecErrorShape;
-      throw new Error(formatProcessError(err));
-    }
-
-    try {
-      // duration_ms/session_id come straight from the CLI's own JSON envelope
-      // (see the module comment's `claude -p --output-format json` sample);
-      // falling back to our own wall-clock reading only covers the
-      // never-observed case where that envelope omits duration_ms.
-      const parsed = JSON.parse(stdout) as { result?: string; session_id?: string; duration_ms?: number };
-      return { text: parsed.result ?? stdout, raw: parsed, sessionId: parsed.session_id, durationMs: parsed.duration_ms ?? Date.now() - start };
-    } catch {
-      // --output-format json should always produce parseable JSON; fall back
-      // to the raw stream rather than throwing, since the invocation itself succeeded.
-      return { text: stdout, durationMs: Date.now() - start };
-    }
+    const stdout = await runClaudeProcess(args, opts);
+    return parseClaudeResult(stdout, start);
   },
 };

@@ -24,7 +24,7 @@ const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green'
  * and branches internally, so its sub-steps are numbered 12.1-12.7 (see
  * watchPipeline.ts) rather than each claiming the bare "12".
  */
-export const TOTAL_STAGES = 13;
+const TOTAL_STAGES = 13;
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;
@@ -90,6 +90,13 @@ export function noteSession(result: AgentInvokeResult, worktreePath: string): vo
   if (!result.sessionId) return;
   const duration = result.durationMs !== undefined ? ` — ${(result.durationMs / 1000).toFixed(1)}s` : '';
   note(`agent session: ${result.sessionId}${duration} — cd ${worktreePath} to resume it there`);
+}
+
+/** Prints an agent's response (truncated) followed by its resumable session info — the shared tail of every conflict/CI-fix agent invocation. */
+export function reportAgentInvocation(result: AgentInvokeResult, worktreePath: string): void {
+  const text = result.text;
+  note(`agent: ${text.slice(0, 300).trim()}${text.length > 300 ? '…' : ''}`);
+  noteSession(result, worktreePath);
 }
 
 /**

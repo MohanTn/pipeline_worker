@@ -115,15 +115,52 @@ export interface ApplyDiffResult {
 }
 
 /**
+ * Applies the captured diff via `git apply --3way`, returning conflicted
+ * files if the 3-way merge left conflict markers (empty when diffText is
+ * blank, or the diff applied cleanly). Uses `--3way` because the diff was
+ * captured against repoRoot's HEAD *before* syncWithOrigin rebased the
+ * worktree onto the latest origin, so a plain `git apply` can fail outright
+ * once origin has moved; `--3way` falls back to a real three-way merge using
+ * the blobs recorded in the diff, leaving standard conflict markers (like a
+ * merge conflict) instead of a hard failure. Kept as one function: the
+ * catch/rethrow decision below depends on the same `error` the try produced,
+ * so splitting the two would need to pass the error back out artificially.
+ */
+async function applyDiffPatch(worktreePath: string, diffText: string): Promise<string[]> {
+  if (diffText.trim().length === 0) return [];
+
+  const diffFile = join(tmpdir(), `pipeline-worker-diff-${randomUUID()}.patch`);
+  writeFileSync(diffFile, diffText, 'utf-8');
+  try {
+    await execFileAsync('git', ['apply', '--3way', '--index', diffFile], { cwd: worktreePath });
+    return [];
+  } catch (error) {
+    const conflictedFiles = await listConflictedFiles(worktreePath);
+    if (conflictedFiles.length === 0) throw error; // not a recoverable conflict — surface the real error
+    return conflictedFiles;
+  } finally {
+    unlinkSync(diffFile);
+  }
+}
+
+function copyUntrackedFiles(repoRoot: string, worktreePath: string, untrackedFiles: string[]): void {
+  for (const relativePath of untrackedFiles) {
+    const src = join(repoRoot, relativePath);
+    const dest = join(worktreePath, relativePath);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(src, dest, { recursive: true });
+  }
+}
+
+async function stageUntrackedIfNeeded(worktreePath: string, untrackedFiles: string[], conflictedFiles: string[]): Promise<void> {
+  if (untrackedFiles.length > 0 && conflictedFiles.length === 0) {
+    await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+  }
+}
+
+/**
  * Applies a captured diff (staged+unstaged) and copies untracked files into
  * the worktree, so it ends up with exactly the caller's original change set.
- *
- * Uses `--3way`: the diff was captured against repoRoot's HEAD *before*
- * syncWithOrigin rebased the worktree onto the latest origin, so a plain
- * `git apply` can fail outright once origin has moved. `--3way` falls back
- * to a real three-way merge using the blobs recorded in the diff, leaving
- * standard conflict markers (like a merge conflict) instead of a hard
- * failure — the caller resolves them the same way as any other conflict.
  */
 export async function applyDiffToWorktree(
   worktreePath: string,
@@ -131,34 +168,10 @@ export async function applyDiffToWorktree(
   untrackedFiles: string[],
   repoRoot: string,
 ): Promise<ApplyDiffResult> {
-  let conflictedFiles: string[] = [];
-
-  if (diffText.trim().length > 0) {
-    const diffFile = join(tmpdir(), `pipeline-worker-diff-${randomUUID()}.patch`);
-    writeFileSync(diffFile, diffText, 'utf-8');
-    try {
-      await execFileAsync('git', ['apply', '--3way', '--index', diffFile], { cwd: worktreePath });
-    } catch (error) {
-      conflictedFiles = await listConflictedFiles(worktreePath);
-      if (conflictedFiles.length === 0) throw error; // not a recoverable conflict — surface the real error
-    } finally {
-      unlinkSync(diffFile);
-    }
-  }
-
-  for (const relativePath of untrackedFiles) {
-    const src = join(repoRoot, relativePath);
-    const dest = join(worktreePath, relativePath);
-    mkdirSync(dirname(dest), { recursive: true });
-    cpSync(src, dest, { recursive: true });
-  }
-
-  if (untrackedFiles.length > 0 && conflictedFiles.length === 0) {
-    await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
-  }
-
+  const conflictedFiles = await applyDiffPatch(worktreePath, diffText);
+  copyUntrackedFiles(repoRoot, worktreePath, untrackedFiles);
+  await stageUntrackedIfNeeded(worktreePath, untrackedFiles, conflictedFiles);
   linkNodeModules(repoRoot, worktreePath);
-
   return { conflicted: conflictedFiles.length > 0, conflictedFiles };
 }
 
@@ -172,6 +185,7 @@ const RENAME_BRANCH_MAX_ATTEMPTS = 5;
  * inferring the same descriptive slug), retries with a short random suffix
  * appended instead of failing the run outright.
  */
+// fallow-ignore-next-line complexity
 export async function renameBranch(worktreePath: string, newBranchName: string): Promise<string> {
   let candidate = newBranchName;
   for (let attempt = 1; attempt <= RENAME_BRANCH_MAX_ATTEMPTS; attempt++) {
@@ -193,6 +207,7 @@ export async function renameBranch(worktreePath: string, newBranchName: string):
  * in. Tolerates its own failures (logs + continues) so a cleanup problem
  * never masks the real error from the workflow that called it.
  */
+// fallow-ignore-next-line complexity
 export async function removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
   try {
     await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoRoot });

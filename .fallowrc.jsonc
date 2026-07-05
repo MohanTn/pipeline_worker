@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/config-schema.json",
+  // agent-hooks/**/*.mjs are invoked by hook configs via subprocess (command
+  // strings in hooks.json / pipeline-worker-trigger.json), not via import, so
+  // fallow's import-graph analysis can't otherwise see they're reachable.
+  "entry": ["agent-hooks/**/*.mjs"]
+}

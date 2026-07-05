@@ -41,6 +41,7 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
+// fallow-ignore-next-line complexity
 function loadDotEnv(repoRoot: string): void {
   const envPath = join(repoRoot, '.env');
   if (!existsSync(envPath)) return;
@@ -66,6 +67,7 @@ function positiveNumber(value: unknown, fallback: number): number {
 }
 
 /** Parses "true"/"false" (case-insensitive), falling back when unset or unrecognized. */
+// fallow-ignore-next-line complexity
 function boolean(value: unknown, fallback: boolean): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -92,10 +94,9 @@ function resolveProjectId(value: string | undefined, fallback: number | string):
   return Number.isFinite(num) && num > 0 ? num : value;
 }
 
-export function loadConfig(repoRoot: string): PipelineWorkerConfig {
-  loadDotEnv(repoRoot);
-
-  const detected = detectChecks(repoRoot);
+/** Warns once when no toolchain was auto-detected and none of the build/lint/test env overrides are set — checks will otherwise silently be skipped. */
+// fallow-ignore-next-line complexity
+function warnIfToolchainUndetected(repoRoot: string, detected: ReturnType<typeof detectChecks>): void {
   if (
     detected.language === 'unknown' &&
     process.env.PIPELINE_WORKER_BUILD === undefined &&
@@ -107,11 +108,11 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
         'Set PIPELINE_WORKER_BUILD / PIPELINE_WORKER_LINT / PIPELINE_WORKER_TEST to configure them explicitly.',
     );
   }
+}
 
-  const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE;
-
-  // Auto-detect a string path from repoBase when no project id is configured
-  // yet; the env var override below (numeric or string path) always wins.
+/** Auto-detects a string path from repoBase when no project id is configured yet; the env var override (numeric or string path) always wins. */
+// fallow-ignore-next-line complexity
+function resolveGitlabProjectId(repoRoot: string, repoBase: string | undefined): number | string {
   let resolvedProjectId: number | string = DEFAULT_CONFIG.gitlab.projectId;
   if (!resolvedProjectId && repoBase) {
     try {
@@ -121,19 +122,36 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
       console.error(`Warning: ${message}`);
     }
   }
-  const projectId = resolveProjectId(process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID, resolvedProjectId);
+  return resolveProjectId(process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID, resolvedProjectId);
+}
+
+function buildGitlabSection(repoRoot: string, repoBase: string | undefined): PipelineWorkerConfig['gitlab'] {
+  return {
+    host: process.env.PIPELINE_WORKER_GITLAB_HOST || DEFAULT_CONFIG.gitlab.host,
+    projectId: resolveGitlabProjectId(repoRoot, repoBase),
+    repoBase,
+  };
+}
+
+function buildGithubSection(repoRoot: string): PipelineWorkerConfig['github'] {
+  return {
+    repo: process.env.PIPELINE_WORKER_GITHUB_REPO || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
+  };
+}
+
+export function loadConfig(repoRoot: string): PipelineWorkerConfig {
+  loadDotEnv(repoRoot);
+
+  const detected = detectChecks(repoRoot);
+  warnIfToolchainUndetected(repoRoot, detected);
+
+  const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE;
 
   return {
     agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, DEFAULT_CONFIG.agent),
     forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, DEFAULT_CONFIG.forge),
-    gitlab: {
-      host: process.env.PIPELINE_WORKER_GITLAB_HOST || DEFAULT_CONFIG.gitlab.host,
-      projectId,
-      repoBase,
-    },
-    github: {
-      repo: process.env.PIPELINE_WORKER_GITHUB_REPO || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
-    },
+    gitlab: buildGitlabSection(repoRoot, repoBase),
+    github: buildGithubSection(repoRoot),
     build: stringOr(process.env.PIPELINE_WORKER_BUILD, detected.build),
     lint: stringOr(process.env.PIPELINE_WORKER_LINT, detected.lint),
     test: stringOr(process.env.PIPELINE_WORKER_TEST, detected.test),

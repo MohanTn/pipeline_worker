@@ -14,6 +14,60 @@ import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
+import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
+import type { ForgeClient } from './forge/types.js';
+import type { AgentAdapter } from './agent/types.js';
+import type { PipelineWorkerConfig, RunState } from './types.js';
+
+/** loadRunState's RunState with mrIid narrowed to present — the shape resume actually operates on, once loadResumableState's guard passes. */
+type ResumableRunState = RunState & { mrIid: number };
+
+/** Loads persisted state for `branch`, or prints an error and exits(1) if there's nothing resumable (no state file, or no MR/PR recorded yet). */
+function loadResumableState(repoRoot: string, branch: string): ResumableRunState {
+  const state = loadRunState(repoRoot, branch);
+  if (!state || state.mrIid === undefined) {
+    console.error(`pipeline-worker: no resumable run found for branch ${branch} (no merge request recorded yet).`);
+    process.exit(1);
+  }
+  return state as ResumableRunState;
+}
+
+/**
+ * The worktree from the crashed run is almost always already gone by this
+ * point (orchestrate.ts's `finally` removes it on any exception, and on
+ * SIGINT/SIGTERM) — reuse it only in the narrow case it survived (e.g. a
+ * SIGKILL), otherwise recreate it from the branch's current state on origin.
+ */
+async function resolveResumeWorktree(repoRoot: string, state: ResumableRunState): Promise<string> {
+  const worktreePath = (await isWorktreeOnBranch(state.worktreePath, state.branch))
+    ? state.worktreePath
+    : await checkoutExistingBranch(repoRoot, state.branch);
+  if (worktreePath !== state.worktreePath) {
+    state.worktreePath = worktreePath;
+    recordEvent(repoRoot, state, `Recreated worktree at ${worktreePath}`);
+  }
+  return worktreePath;
+}
+
+async function runResumeWatch(
+  forge: ForgeClient,
+  config: PipelineWorkerConfig,
+  agent: AgentAdapter,
+  worktreePath: string,
+  state: ResumableRunState,
+  repoRoot: string,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  try {
+    await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');
+    throw error;
+  } finally {
+    await cleanup();
+  }
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { name: string; version: string };
@@ -56,49 +110,19 @@ program
   .action(async (opts: { branch: string }) => {
     try {
       const repoRoot = process.cwd();
-      const state = loadRunState(repoRoot, opts.branch);
-      if (!state || state.mrIid === undefined) {
-        console.error(`pipeline-worker: no resumable run found for branch ${opts.branch} (no merge request recorded yet).`);
-        process.exit(1);
-      }
+      const state = loadResumableState(repoRoot, opts.branch);
       const config = loadConfig(repoRoot);
       const forge = createForge(config);
       const agent = selectAgent(config);
 
-      // The worktree from the crashed run is almost always already gone by
-      // this point (orchestrate.ts's `finally` removes it on any exception,
-      // and on SIGINT/SIGTERM) — reuse it only in the narrow case it
-      // survived (e.g. a SIGKILL), otherwise recreate it from the branch's
-      // current state on origin.
-      const worktreePath = (await isWorktreeOnBranch(state.worktreePath, state.branch))
-        ? state.worktreePath
-        : await checkoutExistingBranch(repoRoot, state.branch);
-      if (worktreePath !== state.worktreePath) {
-        state.worktreePath = worktreePath;
-        recordEvent(repoRoot, state, `Recreated worktree at ${worktreePath}`);
-      }
+      const worktreePath = await resolveResumeWorktree(repoRoot, state);
 
-      let cleanedUp = false;
-      const cleanup = async (): Promise<void> => {
-        if (cleanedUp) return;
-        cleanedUp = true;
-        await removeWorktree(repoRoot, worktreePath);
-      };
-      const onSignal = (exitCode: number) => {
+      const { cleanup } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
+      registerExitSignals((exitCode) => {
         void cleanup().then(() => process.exit(exitCode));
-      };
-      process.once('SIGINT', () => onSignal(130));
-      process.once('SIGTERM', () => onSignal(143));
+      });
 
-      try {
-        await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');
-        throw error;
-      } finally {
-        await cleanup();
-      }
+      await runResumeWatch(forge, config, agent, worktreePath, state, repoRoot, cleanup);
       console.log(`pipeline-worker: resumed run finished with phase "${state.phase}".`);
     } catch (error) {
       console.error('pipeline-worker resume failed:', error instanceof Error ? error.message : error);
