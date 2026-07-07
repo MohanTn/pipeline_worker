@@ -52,6 +52,18 @@ export async function captureDiff(repoRoot: string): Promise<CapturedDiff> {
 }
 
 /**
+ * Names the files that changed since `ref` (typically a merge-base commit —
+ * see git/commit.ts's mergeBase), for the `resume` branch-adoption path
+ * (adoptBranch.ts) where the change set is already committed rather than
+ * sitting uncommitted in repoRoot. Mirrors captureDiff's own `--name-only`
+ * call above, just parameterized on the ref instead of hardcoded `HEAD`.
+ */
+export async function changedFilesSinceRef(worktreePath: string, ref: string): Promise<string[]> {
+  const { stdout } = await execFileAsync('git', ['diff', '--name-only', ref], { cwd: worktreePath, maxBuffer: 64 * 1024 * 1024 });
+  return stdout.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+}
+
+/**
  * Discards repoRoot's now-redundant uncommitted changes once they're safely
  * captured on the opened MR/PR: `git reset --hard HEAD` undoes tracked
  * edits (whatever branch repoRoot happens to be on), then `untrackedFiles`

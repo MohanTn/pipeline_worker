@@ -39,3 +39,8 @@ test('buildDescription marks a failed check with ❌', () => {
   const description = buildDescription(INTENT, 'claude', [{ name: 'build', ok: false, stdout: '', stderr: '', durationMs: 500 }]);
   assert.match(description, /\*\*Checks:\*\*\n- ❌ build \(0\.5s\)/);
 });
+
+test('buildDescription renders a placeholder instead of an empty list when no checks were run locally (resume\'s branch-adoption path refreshing an existing MR/PR)', () => {
+  const description = buildDescription(INTENT, 'claude', []);
+  assert.match(description, /\*\*Checks:\*\*\n_Not run locally for this update — see the CI pipeline below\._/);
+});

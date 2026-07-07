@@ -130,12 +130,19 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 | -------------------------------------------- | ------------------------------------------------------------------------- |
 | `pipeline-worker` (or `pipeline-worker run`) `[--ticket <id>]` | Capture the current diff and drive it to a green MR/PR        |
 | `pipeline-worker serve`                      | Start the forge MCP server over stdio (used by the agent during fix runs) |
-| `pipeline-worker resume --branch <name>`     | Resume watching/fixing a run after a crash                                |
+| `pipeline-worker resume --branch <name>` `[--target <branch>]` | Resume watching/fixing a run after a crash, or adopt a branch pipeline-worker has no record of |
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
 | `pipeline-worker sessions [--branch <name>]` | List every persisted run in this repo, or show one run's full step-by-step timeline |
 | `pipeline-worker update`                     | Install the latest release from npm (`npm install -g pipeline-worker@latest`) |
 
 Before doing any work, `pipeline-worker run` checks npm for a newer published version and installs it automatically if the locally installed one is out of date (the update takes effect on the next run). This check is best-effort: if npm is unreachable or the install fails, the run proceeds anyway on whatever version is already installed.
+
+### Adopting a branch pipeline-worker never ran on
+
+`pipeline-worker resume --branch <name>` also works for a branch pipeline-worker has no persisted state for at all — e.g. one you committed and pushed by hand. It checks out the branch and checks the forge for an open PR/MR for it:
+
+- **No PR/MR yet:** runs it like a fresh `pipeline-worker run` from this point on — build/lint/test checks (aborting the same way a normal run does on failure), intent capture, then opens the MR/PR — targeting `--target <branch>` if given, or origin's auto-detected default branch otherwise.
+- **PR/MR already open:** re-captures intent from the branch's actual diff, overwrites the PR/MR's description with it (using the PR/MR's own target branch — no guessing needed), and resumes the normal watch/fix loop: poll CI, and on failure pull the failed jobs' logs, hand them to the agent to fix, commit, push, and repoll.
 
 Every time a run hands a turn to the agent (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>`, `pi --session <id>`, or `copilot --resume <id>` opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
 

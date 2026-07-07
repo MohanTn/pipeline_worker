@@ -90,6 +90,10 @@ export function createGitlabForge(config: PipelineWorkerConfig): ForgeClient {
       return toMergeRequest(await res.json());
     },
 
+    async updateMrDescription(mrIid: number, description: string): Promise<void> {
+      await gitlabRequest(auth, `/merge_requests/${mrIid}`, { method: 'PUT', body: JSON.stringify({ description }) });
+    },
+
     async getMrPipelines(mrIid: number): Promise<Pipeline[]> {
       const res = await gitlabRequest(auth, `/merge_requests/${mrIid}/pipelines`);
       const list = (await res.json()) as any[];

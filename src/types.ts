@@ -61,6 +61,9 @@ export interface RunState {
   history?: RunHistoryEntry[];
 }
 
+/** RunState with mrIid narrowed to present — the shape `pipeline-worker resume` operates on, once an MR/PR is known to exist. */
+export type ResumableRunState = RunState & { mrIid: number };
+
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type ChangeType = 'feature' | 'bugfix' | 'chore';
 

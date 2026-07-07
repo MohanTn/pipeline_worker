@@ -118,12 +118,18 @@ const IntentShape = z.object({
  * Adapters with no per-invocation model selection (e.g. copilot) ignore it.
  * The CI-fix path (watchPipeline.ts) deliberately never sets a model override
  * — fixing a real failing build needs the stronger default model.
+ *
+ * `baseRef` defaults to `HEAD`, matching a normal run's uncommitted diff. The
+ * `resume` branch-adoption path (adoptBranch.ts) passes a fixed merge-base
+ * commit instead (see git/commit.ts's mergeBase), since there the change set
+ * is already committed on the branch — `git diff HEAD` there would show
+ * nothing.
  */
-export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string, model: string): Promise<CapturedIntent> {
+export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string, model: string, baseRef = 'HEAD'): Promise<CapturedIntent> {
   const prompt =
     'The following files changed in this git worktree (which is your current working directory):\n' +
     files.map((file) => `- ${file}`).join('\n') +
-    '\n\nUse your tools to inspect what changed: `git diff HEAD -- <file>` (or `git diff HEAD` for everything at ' +
+    `\n\nUse your tools to inspect what changed: \`git diff ${baseRef} -- <file>\` (or \`git diff ${baseRef}\` for everything at ` +
     "once) for a file that already existed, or Read it directly if it's a new file git diff won't show. " +
     'Then determine the intent behind the change as a whole. ' +
     'Respond with a JSON object matching the given schema: why this change exists, a short summary of what changed, ' +

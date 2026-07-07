@@ -5,8 +5,15 @@ import { runStep, skipStep, note } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { CapturedIntent, CheckResult, MergeRequest } from '../types.js';
 
-/** ✅/❌ per check, mirroring the pass/fail glyphs cli.ts prints for the same stage (see ui/steps.ts). */
+/**
+ * ✅/❌ per check, mirroring the pass/fail glyphs cli.ts prints for the same
+ * stage (see ui/steps.ts). An empty list means the `resume` branch-adoption
+ * path is refreshing an existing MR/PR's description without re-running
+ * local checks (see adoptBranch.ts) — that's not a check that failed to run,
+ * so it gets its own placeholder rather than an empty section.
+ */
 function formatChecks(checks: CheckResult[]): string {
+  if (checks.length === 0) return '_Not run locally for this update — see the CI pipeline below._';
   return checks.map((c) => `- ${c.ok ? '✅' : '❌'} ${c.name} (${(c.durationMs / 1000).toFixed(1)}s)`).join('\n');
 }
 

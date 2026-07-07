@@ -13,19 +13,21 @@ import { selectAgent } from './agent/index.js';
 import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
+import { adoptBranch } from './workflow/adoptBranch.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
 import type { ForgeClient } from './forge/types.js';
 import type { AgentAdapter } from './agent/types.js';
-import type { PipelineWorkerConfig, RunState } from './types.js';
+import type { PipelineWorkerConfig, ResumableRunState, RunState } from './types.js';
 
-/** loadRunState's RunState with mrIid narrowed to present — the shape resume actually operates on, once loadResumableState's guard passes. */
-type ResumableRunState = RunState & { mrIid: number };
-
-/** Loads persisted state for `branch`, or prints an error and exits(1) if there's nothing resumable (no state file, or no MR/PR recorded yet). */
-function loadResumableState(repoRoot: string, branch: string): ResumableRunState {
-  const state = loadRunState(repoRoot, branch);
-  if (!state || state.mrIid === undefined) {
+/**
+ * A state file exists for `branch` but has no MR/PR recorded yet — there's
+ * nothing to resume (orchestrate.ts's cleanup only preserves the worktree
+ * from the 'mr'/'watch' phases onward, so a pre-MR crash leaves nothing
+ * behind to continue). Prints an error and exits(1).
+ */
+function requireMrRecorded(branch: string, state: RunState): ResumableRunState {
+  if (state.mrIid === undefined) {
     console.error(`pipeline-worker: no resumable run found for branch ${branch} (no merge request recorded yet).`);
     process.exit(1);
   }
@@ -105,17 +107,28 @@ program
 
 program
   .command('resume')
-  .description('Resume watching/fixing a previously started run after a crash')
-  .requiredOption('--branch <name>', 'branch name of the run to resume')
-  .action(async (opts: { branch: string }) => {
+  .description(
+    'Resume watching/fixing a previously started run after a crash, or adopt a branch pipeline-worker has no record of ' +
+      '(checks the forge for an open PR/MR and either opens one or refreshes its description before watching CI)',
+  )
+  .requiredOption('--branch <name>', 'branch name of the run to resume or adopt')
+  .option(
+    '--target <branch>',
+    "base branch for a newly opened PR/MR when adopting a branch with no existing one (default: origin's auto-detected default branch)",
+  )
+  .action(async (opts: { branch: string; target?: string }) => {
     try {
       const repoRoot = process.cwd();
-      const state = loadResumableState(repoRoot, opts.branch);
       const config = loadConfig(repoRoot);
       const forge = createForge(config);
       const agent = selectAgent(config);
 
-      const worktreePath = await resolveResumeWorktree(repoRoot, state);
+      const existingState = loadRunState(repoRoot, opts.branch);
+      const state = existingState
+        ? requireMrRecorded(opts.branch, existingState)
+        : await adoptBranch(repoRoot, config, forge, agent, opts.branch, opts.target);
+
+      const worktreePath = existingState ? await resolveResumeWorktree(repoRoot, state) : state.worktreePath;
 
       const { cleanup } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
       registerExitSignals((exitCode) => {
@@ -188,6 +201,11 @@ Examples:
 
   $ pipeline-worker resume --branch pipeline-worker/add-login
       Resume watching/fixing a previously started run after a crash.
+
+  $ pipeline-worker resume --branch some-branch-you-pushed-by-hand
+      Adopt a branch pipeline-worker never ran on: open a PR/MR against origin's
+      default branch if none exists yet, or refresh an existing one's description
+      and resume watching its CI. Pass --target <branch> to override the base branch.
 
   $ pipeline-worker status --branch pipeline-worker/add-login
       Print the persisted state of that run.

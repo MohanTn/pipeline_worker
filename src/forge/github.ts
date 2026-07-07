@@ -129,6 +129,10 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       return toMergeRequest(await res.json());
     },
 
+    async updateMrDescription(mrIid: number, description: string): Promise<void> {
+      await githubRequest(auth, `/pulls/${mrIid}`, { method: 'PATCH', body: JSON.stringify({ body: description }) });
+    },
+
     async getMrPipelines(mrIid: number): Promise<Pipeline[]> {
       const prRes = await githubRequest(auth, `/pulls/${mrIid}`);
       const pr = (await prRes.json()) as { head: { sha: string } };

@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Added branch adoption feature to `pipeline-worker resume --branch <name>`, allowing it to check out external branches (committed/pushed by hand) and either open a new PR/MR or refresh an existing one's description before resuming the watch loop. Includes new forge methods for updating MR descriptions, git utilities for merge-base and committed file diffs, and comprehensive workflow for both adoption paths.
 - `pw` as a shorter alias for the `pipeline-worker` command (both installed by `npm install -g pipeline-worker`).
 - `pipeline-worker run` now checks npm for a newer published version before starting and installs it automatically if the locally installed one is out of date. Best-effort: an unreachable registry or failed install is logged as a warning and the run proceeds on the currently installed version.
 - `PIPELINE_WORKER_UPDATE_CHANGELOG` (default `false`): once checks pass, add a bullet for the change (from the captured intent's summary) under the consuming repo's `CHANGELOG.md` `[Unreleased]` section — creating the file, Keep a Changelog style, if none exists — and include it in the same commit that becomes the MR/PR.

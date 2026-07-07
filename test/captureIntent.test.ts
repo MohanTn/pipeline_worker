@@ -56,6 +56,19 @@ test('captureIntent forwards the given model to the agent so it is configurable 
   assert.equal(lastInvoke().model, 'sonnet');
 });
 
+test('captureIntent defaults its diff instructions to HEAD', async () => {
+  const { agent, lastInvoke } = spyAgent(JSON.stringify(VALID_PAYLOAD));
+  await captureIntent(agent, ['src/login.ts'], '/tmp', 'haiku');
+  assert.match(lastInvoke().prompt, /git diff HEAD -- <file>/);
+});
+
+test('captureIntent uses a custom baseRef in its diff instructions, for the resume branch-adoption path where changes are already committed', async () => {
+  const { agent, lastInvoke } = spyAgent(JSON.stringify(VALID_PAYLOAD));
+  await captureIntent(agent, ['src/login.ts'], '/tmp', 'haiku', 'a1b2c3d');
+  assert.match(lastInvoke().prompt, /git diff a1b2c3d -- <file>/);
+  assert.doesNotMatch(lastInvoke().prompt, /git diff HEAD/);
+});
+
 test('captureIntent accepts a short single-line commitMessage', async () => {
   const intent = await captureIntent(fakeAgent(JSON.stringify(VALID_PAYLOAD)), ['src/login.ts'], '/tmp', 'haiku');
   assert.equal(intent.commitMessage, 'feat: add login page');

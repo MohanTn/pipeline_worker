@@ -21,6 +21,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     createMergeRequest: async () => {
       throw new Error('not used');
     },
+    updateMrDescription: async () => {},
     getMrPipelines: async () => [],
     getFailedJobs: async () => [],
     getJobLog: async () => '',
