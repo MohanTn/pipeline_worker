@@ -62,6 +62,34 @@ test('hasMergeConflicts is true for GitLab "cannot_be_merged" (confirmed conflic
   }
 });
 
+test('updateMrDescription PUTs /merge_requests/{iid} with the new description', async () => {
+  const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      requests.push({ method: req.method, path: req.url, body: raw ? JSON.parse(raw) : undefined });
+      res.setHeader('content-type', 'application/json');
+      res.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    await withGitlabEnv(async () => {
+      const forge = createGitlabForge(gitlabConfig(`http://127.0.0.1:${port}`));
+      await forge.updateMrDescription(7, 'refreshed description');
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, 'PUT');
+    assert.equal(requests[0].path, '/api/v4/projects/1/merge_requests/7');
+    assert.deepEqual(requests[0].body, { description: 'refreshed description' });
+  } finally {
+    server.close();
+  }
+});
+
 for (const status of ['can_be_merged', 'unchecked', 'checking', 'cannot_be_merged_recheck', undefined]) {
   test(`hasMergeConflicts is false for GitLab merge_status ${JSON.stringify(status)} (not a confirmed conflict)`, async () => {
     const { server, port } = await startMrStub(status);

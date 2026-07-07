@@ -54,6 +54,19 @@ export async function currentBranch(cwd: string): Promise<string> {
   return stdout.trim();
 }
 
+/**
+ * The commit where HEAD diverged from `ref`. Used by the `resume` branch-
+ * adoption path (adoptBranch.ts) to pin captureIntent's diff instructions to
+ * a single fixed commit — `git diff <mergeBaseSha> -- <file>` — so the agent
+ * sees exactly the adopted branch's own changes regardless of how many
+ * commits it has, the same way a normal run's `git diff HEAD -- <file>` shows
+ * exactly its (single, uncommitted) change set.
+ */
+export async function mergeBase(worktreePath: string, ref: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['merge-base', ref, 'HEAD'], { cwd: worktreePath });
+  return stdout.trim();
+}
+
 /** Reads git config user.name/user.email for display purposes; never throws — unset config just reads as ''. */
 export async function getGitUser(cwd: string): Promise<{ name: string; email: string }> {
   async function readConfig(key: string): Promise<string> {

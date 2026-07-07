@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getGitUser, listConflictedFiles, findUnresolvedConflictMarkers } from '../src/git/commit.js';
+import { getGitUser, listConflictedFiles, findUnresolvedConflictMarkers, mergeBase } from '../src/git/commit.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +69,33 @@ test('findUnresolvedConflictMarkers reports the file as resolved once markers ar
 
     assert.deepEqual(await listConflictedFiles(dir), ['f.txt']); // index is stale — still shows unmerged
     assert.deepEqual(findUnresolvedConflictMarkers(dir, ['f.txt']), []); // content is actually clean
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('mergeBase returns the commit where HEAD diverged from the given ref, not either tip', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-mergebase-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+    writeFileSync(join(dir, 'f.txt'), 'base\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
+    const { stdout: baseSha } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: dir });
+
+    await execFileAsync('git', ['checkout', '-q', '-b', 'main-ahead'], { cwd: dir });
+    writeFileSync(join(dir, 'main-only.txt'), 'main moved on\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'main moved on'], { cwd: dir });
+
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feature', baseSha.trim()], { cwd: dir });
+    writeFileSync(join(dir, 'feature-only.txt'), 'feature work\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'feature work'], { cwd: dir });
+
+    assert.equal(await mergeBase(dir, 'main-ahead'), baseSha.trim());
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

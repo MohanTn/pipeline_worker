@@ -161,8 +161,13 @@ async function captureIntentAndBranch(
   return { intent, actualBranchName };
 }
 
-/** Stage 7: run build/lint/test, reporting and recording the outcome. Returns null (already logged/recorded, exitCode set) when a check failed. */
-async function runAndReportChecks(config: PipelineWorkerConfig, worktreePath: string, state: RunState, repoRoot: string): Promise<CheckResult[] | null> {
+/**
+ * Stage 7: run build/lint/test, reporting and recording the outcome. Returns
+ * null (already logged/recorded, exitCode set) when a check failed. Exported
+ * for reuse by adoptBranch.ts's "no PR/MR yet" path, which runs this exact
+ * stage before opening a new PR/MR for a branch pipeline-worker never created.
+ */
+export async function runAndReportChecks(config: PipelineWorkerConfig, worktreePath: string, state: RunState, repoRoot: string): Promise<CheckResult[] | null> {
   const checks = await runStep(
     7,
     '✅',
@@ -185,8 +190,11 @@ async function runAndReportChecks(config: PipelineWorkerConfig, worktreePath: st
   return checks;
 }
 
-/** Stage 8 (optional): add a changelog bullet for this change, or announce the skip when disabled. */
-async function maybeUpdateChangelog(config: PipelineWorkerConfig, worktreePath: string, intent: CapturedIntent): Promise<void> {
+/**
+ * Stage 8 (optional): add a changelog bullet for this change, or announce the
+ * skip when disabled. Exported for reuse by adoptBranch.ts.
+ */
+export async function maybeUpdateChangelog(config: PipelineWorkerConfig, worktreePath: string, intent: CapturedIntent): Promise<void> {
   if (config.updateChangelog) {
     await runStep(
       8,

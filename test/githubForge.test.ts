@@ -99,6 +99,34 @@ test('hasMergeConflicts is true for GitHub "dirty" (confirmed conflict)', async 
   }
 });
 
+test('updateMrDescription PATCHes /pulls/{iid} with the new body', async () => {
+  const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      requests.push({ method: req.method, path: req.url, body: raw ? JSON.parse(raw) : undefined });
+      res.setHeader('content-type', 'application/json');
+      res.end('{}');
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      await forge.updateMrDescription(42, 'new description');
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, 'PATCH');
+    assert.equal(requests[0].path, '/repos/acme/widgets/pulls/42');
+    assert.deepEqual(requests[0].body, { body: 'new description' });
+  } finally {
+    server.close();
+  }
+});
+
 for (const state of ['clean', 'unstable', 'blocked', 'behind', 'draft', 'unknown', undefined]) {
   test(`hasMergeConflicts is false for GitHub mergeable_state ${JSON.stringify(state)} (not a real conflict)`, async () => {
     const { server, port } = await startPrStub(state);
