@@ -19,6 +19,18 @@ export async function push(worktreePath: string, remote: string, branch: string)
   await execFileAsync('git', ['push', '--set-upstream', remote, branch], { cwd: worktreePath });
 }
 
+/**
+ * Force-pushes with `--force-with-lease`, never plain `--force`: the lease
+ * refuses the push if `remote`'s branch has moved since we last observed it
+ * (a stray commit from elsewhere, a human pushing a fixup), failing loudly
+ * instead of silently discarding that work. Used only by the opt-in
+ * squash-on-merge step (git/squash.ts), the one operation in this tool that
+ * rewrites already-pushed history.
+ */
+export async function forcePushWithLease(worktreePath: string, remote: string, branch: string): Promise<void> {
+  await execFileAsync('git', ['push', '--force-with-lease', remote, branch], { cwd: worktreePath });
+}
+
 /** True when the worktree has staged, unstaged, or untracked changes. */
 export async function hasChanges(worktreePath: string): Promise<boolean> {
   const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });

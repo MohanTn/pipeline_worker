@@ -6,7 +6,8 @@ import { selectAgent } from '../agent/index.js';
 import { captureDiff, resetRepo } from '../git/diff.js';
 import { buildBranchName } from '../git/branchName.js';
 import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, renameBranch, generateTempBranchName } from '../git/worktree.js';
-import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers } from '../git/commit.js';
+import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers, forcePushWithLease } from '../git/commit.js';
+import { squashCommitsSinceMergeBase } from '../git/squash.js';
 import { captureIntent } from './captureIntent.js';
 import { runChecks } from './runChecks.js';
 import { updateChangelog } from './updateChangelog.js';
@@ -233,7 +234,7 @@ async function commitAndOpenMr(
     () => commit(worktreePath, intent.commitMessage),
   );
 
-  const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent, checks);
+  const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent, checks, config.autoMergeOnGreen, config.mergeMethod);
   state.mrIid = mr.iid;
   state.phase = 'mr';
   recordEvent(repoRoot, state, `Opened MR/PR ${mr.webUrl}`);
@@ -260,6 +261,30 @@ async function maybeCleanupEarly(config: PipelineWorkerConfig, repoRoot: string,
   }
 }
 
+/**
+ * Opt-in (config.squashOnMerge): collapses every commit this run made on the
+ * branch into one, titled from the captured intent, then force-pushes.
+ * Best-effort — never fails an otherwise-successful run. In particular, if
+ * config.autoMergeOnGreen is also on, the forge may have already merged (and
+ * possibly deleted) the branch via its own webhook before this runs; that
+ * shows up here as a push failure and is logged as a no-op, not an error.
+ */
+async function maybeSquashCommits(config: PipelineWorkerConfig, worktreePath: string, branch: string, targetBranch: string, intent: CapturedIntent): Promise<void> {
+  if (!config.squashOnMerge) {
+    skipStep('12.8', '📚', 'Squashing run commits', 'config.squashOnMerge is disabled');
+    return;
+  }
+  try {
+    await runStep('12.8', '📚', 'Squashing run commits', `collapsing into one commit: "${intent.commitMessage}"`, async () => {
+      await squashCommitsSinceMergeBase(worktreePath, targetBranch, intent.commitMessage);
+      await forcePushWithLease(worktreePath, 'origin', branch);
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    noteRisk('low', `could not squash run commits (${message}) — likely already merged; leaving history as-is`);
+  }
+}
+
 /** After watchPipeline settles: report the final outcome and run stage 13's cleanup if it hasn't already run early. */
 // fallow-ignore-next-line complexity
 async function finalizeRun(
@@ -269,8 +294,13 @@ async function finalizeRun(
   state: RunState,
   repoRoot: string,
   untrackedFiles: string[],
+  worktreePath: string,
+  targetBranch: string,
+  intent: CapturedIntent,
 ): Promise<void> {
   if (finalPhase === 'done') {
+    await maybeSquashCommits(config, worktreePath, state.branch, targetBranch, intent);
+
     const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
     step('🎉', 'Done', detail);
     if (config.cleanupOnSuccess) {
@@ -324,7 +354,7 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       () => createWorktree(repoRoot, tempBranch),
     );
 
-    let state: RunState = { branch: tempBranch, targetBranch, worktreePath, attempt: 0, phase: 'diff' };
+    let state: RunState = { branch: tempBranch, targetBranch, worktreePath, ciFixAttempt: 0, conflictAttempt: 0, phase: 'diff' };
     recordEvent(repoRoot, state, `Created worktree at ${worktreePath} (temp branch ${tempBranch})`);
 
     const { cleanup, markDone } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
@@ -372,7 +402,7 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       // boundary so TS uses the declared RunPhase return type instead of the
       // 'mr' literal it narrowed state.phase to just before the call.
       const finalPhase = readPhase(state);
-      await finalizeRun(finalPhase, config, mr, state, repoRoot, untrackedFiles);
+      await finalizeRun(finalPhase, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');

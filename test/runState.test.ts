@@ -7,7 +7,7 @@ import { saveRunState, loadRunState, recordEvent, listRunStates } from '../src/s
 import type { RunState } from '../src/types.js';
 
 function baseState(overrides: Partial<RunState> = {}): RunState {
-  return { branch: 'feature/x', targetBranch: 'main', worktreePath: '/tmp/wt', attempt: 0, phase: 'diff', ...overrides };
+  return { branch: 'feature/x', targetBranch: 'main', worktreePath: '/tmp/wt', ciFixAttempt: 0, conflictAttempt: 0, phase: 'diff', ...overrides };
 }
 
 function tmpRepo(): string {
@@ -23,6 +23,36 @@ test('saveRunState/loadRunState round-trip, leaving no leftover temp file behind
 
     const files = readdirSync(join(dir, '.pipeline-worker', 'state'));
     assert.deepEqual(files, ['feature_x.json']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadRunState migrates a legacy state file that only has `attempt` into both new counters', () => {
+  const dir = tmpRepo();
+  try {
+    saveRunState(dir, baseState({ branch: 'feature/legacy' }));
+    const path = join(dir, '.pipeline-worker', 'state', 'feature_legacy.json');
+    writeFileSync(
+      path,
+      JSON.stringify({ branch: 'feature/legacy', targetBranch: 'main', worktreePath: '/tmp/wt', attempt: 3, phase: 'watch' }),
+    );
+    const state = loadRunState(dir, 'feature/legacy');
+    assert.equal(state?.ciFixAttempt, 3);
+    assert.equal(state?.conflictAttempt, 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadRunState leaves ciFixAttempt/conflictAttempt untouched when already present', () => {
+  const dir = tmpRepo();
+  try {
+    const state = baseState({ ciFixAttempt: 2, conflictAttempt: 1 });
+    saveRunState(dir, state);
+    const loaded = loadRunState(dir, state.branch);
+    assert.equal(loaded?.ciFixAttempt, 2);
+    assert.equal(loaded?.conflictAttempt, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

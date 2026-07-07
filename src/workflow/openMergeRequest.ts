@@ -1,9 +1,9 @@
 /** Stages 10-11: push the branch and open (or reuse) an MR/PR describing the workflow that produced it. */
 
 import { push } from '../git/commit.js';
-import { runStep, skipStep, note } from '../ui/steps.js';
+import { runStep, skipStep, note, noteRisk } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
-import type { CapturedIntent, CheckResult, MergeRequest } from '../types.js';
+import type { CapturedIntent, CheckResult, MergeMethod, MergeRequest } from '../types.js';
 
 /**
  * ✅/❌ per check, mirroring the pass/fail glyphs cli.ts prints for the same
@@ -36,6 +36,26 @@ export function buildDescription(intent: CapturedIntent, agentName: string, chec
   );
 }
 
+/**
+ * Best-effort: repo settings (GitHub's "Allow auto-merge" toggle unset, no
+ * required checks configured) or GitLab's async merge-status computation can
+ * both cause the forge to reject this — never let that fail an otherwise
+ * fully-successful run. The fallback is simply what happens today: the
+ * developer merges manually once CI is green.
+ */
+async function maybeEnableAutoMerge(forge: ForgeClient, mr: MergeRequest, autoMergeOnGreen: boolean, mergeMethod: MergeMethod): Promise<void> {
+  if (!autoMergeOnGreen) {
+    skipStep('11.1', '🔀', 'Enabling auto-merge on green', 'config.autoMergeOnGreen is disabled');
+    return;
+  }
+  try {
+    await runStep('11.1', '🔀', 'Enabling auto-merge on green', `merge method: ${mergeMethod}`, () => forge.enableAutoMerge(mr.iid, mergeMethod));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    noteRisk('medium', `could not enable auto-merge (${message}) — merge manually once CI is green`);
+  }
+}
+
 export async function openMergeRequest(
   forge: ForgeClient,
   worktreePath: string,
@@ -44,12 +64,17 @@ export async function openMergeRequest(
   intent: CapturedIntent,
   agentName: string,
   checks: CheckResult[],
+  autoMergeOnGreen = false,
+  mergeMethod: MergeMethod = 'squash',
 ): Promise<MergeRequest> {
   await runStep(10, '⬆', 'Pushing your branch', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
 
   const existing = await forge.findExistingMr(branch);
   if (existing) {
     skipStep(11, '🔀', 'Opening merge request', `an MR/PR already exists for this branch — reusing ${existing.webUrl} instead of opening a new one`);
+    // Deliberately does not (re-)enable auto-merge here: a resumed run reusing
+    // an existing MR/PR must not silently turn on something a human may have
+    // turned off since it was opened.
     return existing;
   }
 
@@ -63,5 +88,8 @@ export async function openMergeRequest(
     () => forge.createMergeRequest({ sourceBranch: branch, targetBranch, title: intent.commitMessage, description }),
   );
   note(mr.webUrl);
+
+  await maybeEnableAutoMerge(forge, mr, autoMergeOnGreen, mergeMethod);
+
   return mr;
 }

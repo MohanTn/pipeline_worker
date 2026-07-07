@@ -5,7 +5,7 @@
  * knows how to talk to GitLab.
  */
 
-import type { PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
+import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
 import type { CreateMrArgs, ForgeClient } from './types.js';
 import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
 
@@ -131,6 +131,25 @@ export function createGitlabForge(config: PipelineWorkerConfig): ForgeClient {
       // "checking"/"cannot_be_merged_recheck" mean it hasn't finished
       // computing yet and must not be treated as a conflict.
       return mr.merge_status === 'cannot_be_merged';
+    },
+
+    async enableAutoMerge(mrIid: number, mergeMethod: MergeMethod): Promise<void> {
+      // GitLab has no per-request "rebase" option on this endpoint — merge
+      // strategy besides squash-or-not is a project-level setting, so
+      // mergeMethod: 'rebase' here silently falls back to the project's own
+      // default merge method (documented on ForgeClient.enableAutoMerge).
+      await gitlabRequest(auth, `/merge_requests/${mrIid}/merge`, {
+        method: 'PUT',
+        body: JSON.stringify({ merge_when_pipeline_succeeds: true, squash: mergeMethod === 'squash' }),
+      });
+    },
+
+    async getCiConfigPath(): Promise<string | undefined> {
+      const res = await gitlabRequest(auth, '');
+      const project = (await res.json()) as { ci_config_path?: string | null };
+      // Absent/null/empty all mean "using the default .gitlab-ci.yml path" —
+      // treat them identically rather than betting on one exact representation.
+      return project.ci_config_path || undefined;
     },
   };
 }

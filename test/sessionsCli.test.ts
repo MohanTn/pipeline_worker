@@ -45,7 +45,14 @@ test('pipeline-worker sessions --branch <missing> exits non-zero', () => {
 test('pipeline-worker sessions lists a persisted run, and --branch shows its timeline', () => {
   const dir = tmpRepo();
   try {
-    const state: RunState = { branch: 'feature/add-login', targetBranch: 'main', worktreePath: '/tmp/wt', attempt: 1, phase: 'watch' };
+    const state: RunState = {
+      branch: 'feature/add-login',
+      targetBranch: 'main',
+      worktreePath: '/tmp/wt',
+      ciFixAttempt: 1,
+      conflictAttempt: 0,
+      phase: 'watch',
+    };
     recordEvent(dir, state, 'Created worktree');
     recordEvent(dir, state, 'Pipeline failed; attempt 1/3', 'error');
 

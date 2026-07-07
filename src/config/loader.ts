@@ -14,10 +14,11 @@ import { parseEnv } from 'node:util';
 import { detectChecks } from './detectChecks.js';
 import { deriveProjectPath } from '../git/resolveProjectPath.js';
 import { detectGithubRepo } from '../git/remote.js';
-import type { AgentName, ForgeName, PipelineWorkerConfig } from '../types.js';
+import type { AgentName, ForgeName, MergeMethod, PipelineWorkerConfig } from '../types.js';
 
 const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot', 'pi'];
 const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
+const MERGE_METHODS: readonly MergeMethod[] = ['merge', 'squash', 'rebase'];
 
 // build/lint/test defaults come from detectChecks(repoRoot) at load time.
 const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
@@ -38,6 +39,9 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   intentModel: 'haiku',
   runLintAndTest: true,
   updateChangelog: false,
+  autoMergeOnGreen: false,
+  mergeMethod: 'squash',
+  squashOnMerge: false,
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -163,5 +167,8 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
     runLintAndTest: boolean(process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
     updateChangelog: boolean(process.env.PIPELINE_WORKER_UPDATE_CHANGELOG, DEFAULT_CONFIG.updateChangelog),
+    autoMergeOnGreen: boolean(process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN, DEFAULT_CONFIG.autoMergeOnGreen),
+    mergeMethod: pickName<MergeMethod>(process.env.PIPELINE_WORKER_MERGE_METHOD, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
+    squashOnMerge: boolean(process.env.PIPELINE_WORKER_SQUASH_ON_MERGE, DEFAULT_CONFIG.squashOnMerge),
   };
 }
