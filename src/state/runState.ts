@@ -41,11 +41,34 @@ export function saveRunState(repoRoot: string, state: RunState): void {
   }
 }
 
+/**
+ * A state file written before the shared `attempt` counter was split into
+ * `ciFixAttempt`/`conflictAttempt` has only the old field. Seed *both* new
+ * counters from it rather than 0/0 or an arbitrary split: the old counter
+ * mixed both budgets so there's no way to recover which one was "really"
+ * spent, but seeding both is the conservative choice — a run that had
+ * already burned most of its budget keeps reading as low-on-budget on
+ * `resume`, rather than silently resetting to a fresh 0/0 that could let an
+ * already-escalation-worthy run retry indefinitely across repeated resumes.
+ */
+interface LegacyRunStateFields {
+  attempt?: number;
+}
+
+function migrateRunState(raw: RunState & LegacyRunStateFields): RunState {
+  if (raw.ciFixAttempt === undefined || raw.conflictAttempt === undefined) {
+    const legacy = raw.attempt ?? 0;
+    raw.ciFixAttempt ??= legacy;
+    raw.conflictAttempt ??= legacy;
+  }
+  return raw;
+}
+
 export function loadRunState(repoRoot: string, branch: string): RunState | undefined {
   const path = statePath(repoRoot, branch);
   if (!existsSync(path)) return undefined;
   try {
-    return JSON.parse(readFileSync(path, 'utf-8')) as RunState;
+    return migrateRunState(JSON.parse(readFileSync(path, 'utf-8')) as RunState);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Warning: failed to read run state at ${path}: ${message}`);

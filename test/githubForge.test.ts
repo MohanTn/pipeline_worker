@@ -127,6 +127,115 @@ test('updateMrDescription PATCHes /pulls/{iid} with the new body', async () => {
   }
 });
 
+test('createGithubForge transparently retries a transient 500 via forgeFetch', async () => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    calls += 1;
+    if (calls === 1) {
+      res.writeHead(500);
+      res.end('boom');
+      return;
+    }
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ mergeable_state: 'clean' }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      assert.equal(await forge.hasMergeConflicts(1), false);
+    });
+    assert.equal(calls, 2);
+  } finally {
+    server.close();
+  }
+});
+
+/** Routes GET /repos/.../pulls/{n} to `nodeId` and POST /graphql to `graphqlHandler`, capturing every request made. */
+function startAutoMergeStub(nodeId: string, graphqlHandler: (body: unknown) => { status: number; body: unknown }): Promise<{ server: Server; port: number; requests: Array<{ method?: string; path?: string; body: unknown }> }> {
+  const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      const body = raw ? JSON.parse(raw) : undefined;
+      requests.push({ method: req.method, path: req.url, body });
+      res.setHeader('content-type', 'application/json');
+      if (req.url?.startsWith('/graphql')) {
+        const { status, body: respBody } = graphqlHandler(body);
+        res.writeHead(status);
+        res.end(JSON.stringify(respBody));
+        return;
+      }
+      res.end(JSON.stringify({ node_id: nodeId }));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port, requests });
+    });
+  });
+}
+
+test('enableAutoMerge fetches the PR node_id then sends the enablePullRequestAutoMerge GraphQL mutation', async () => {
+  const { server, port, requests } = await startAutoMergeStub('PR_kwabc123', () => ({ status: 200, body: { data: { enablePullRequestAutoMerge: { clientMutationId: null } } } }));
+  try {
+    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      await forge.enableAutoMerge(42, 'squash');
+    });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].path, '/repos/acme/widgets/pulls/42');
+    assert.equal(requests[1].path, '/graphql');
+    const graphqlBody = requests[1].body as { query: string; variables: { pullRequestId: string; mergeMethod: string } };
+    assert.match(graphqlBody.query, /enablePullRequestAutoMerge/);
+    assert.equal(graphqlBody.variables.pullRequestId, 'PR_kwabc123');
+    assert.equal(graphqlBody.variables.mergeMethod, 'SQUASH');
+  } finally {
+    server.close();
+  }
+});
+
+test('enableAutoMerge throws when the GraphQL response reports errors', async () => {
+  const { server, port } = await startAutoMergeStub('PR_kwabc123', () => ({
+    status: 200,
+    body: { errors: [{ message: 'Pull request Auto merge is not allowed for this repository' }] },
+  }));
+  try {
+    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      await assert.rejects(() => forge.enableAutoMerge(42, 'merge'), /Auto merge is not allowed/);
+    });
+  } finally {
+    server.close();
+  }
+});
+
+test('getCiConfigPath always resolves undefined with no HTTP request — GitHub has no custom-path concept', async () => {
+  let calls = 0;
+  const server = http.createServer((req, res) => {
+    calls += 1;
+    res.writeHead(500);
+    res.end('should never be reached');
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  try {
+    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      assert.equal(await forge.getCiConfigPath(), undefined);
+    });
+    assert.equal(calls, 0);
+  } finally {
+    server.close();
+  }
+});
+
 for (const state of ['clean', 'unstable', 'blocked', 'behind', 'draft', 'unknown', undefined]) {
   test(`hasMergeConflicts is false for GitHub mergeable_state ${JSON.stringify(state)} (not a real conflict)`, async () => {
     const { server, port } = await startPrStub(state);

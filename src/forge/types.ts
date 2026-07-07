@@ -4,7 +4,7 @@
  * shapes so the workflow and MCP server never branch on the forge.
  */
 
-import type { MergeRequest, Pipeline, PipelineJob } from '../types.js';
+import type { MergeMethod, MergeRequest, Pipeline, PipelineJob } from '../types.js';
 
 export interface CreateMrArgs {
   sourceBranch: string;
@@ -34,4 +34,22 @@ export interface ForgeClient {
    * resolution on every push, before the forge has even checked.
    */
   hasMergeConflicts(mrIid: number): Promise<boolean>;
+  /**
+   * Asks the forge to merge this MR/PR automatically once CI (and any
+   * required approvals) allow it — GitHub's `enablePullRequestAutoMerge`
+   * GraphQL mutation, GitLab's `merge_when_pipeline_succeeds`. Throws on
+   * rejection (e.g. the forge's auto-merge feature isn't enabled for this
+   * repo, or approvals are still pending); the caller treats this as
+   * best-effort and must not let a rejection fail the run.
+   */
+  enableAutoMerge(mrIid: number, mergeMethod: MergeMethod): Promise<void>;
+  /**
+   * The project's custom CI/CD configuration file path, if one is set
+   * (GitLab's "CI/CD configuration file" project setting) — used by
+   * watchPipeline.ts's hasCiConfig to recognize CI as configured even when
+   * it isn't at the conventional `.gitlab-ci.yml` path. GitHub has no
+   * equivalent concept (workflows are always under `.github/workflows`) and
+   * always resolves undefined, with no network call.
+   */
+  getCiConfigPath(): Promise<string | undefined>;
 }

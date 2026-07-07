@@ -6,7 +6,7 @@
  * environment variable and never logged.
  */
 
-import type { PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
+import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
 import type { CreateMrArgs, ForgeClient } from './types.js';
 import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
 
@@ -102,6 +102,39 @@ function isFailedConclusion(conclusion: string | null): boolean {
   return conclusion !== null && !['success', 'skipped', 'neutral'].includes(conclusion);
 }
 
+/**
+ * REST and GraphQL live at different paths: github.com's REST base is
+ * https://api.github.com, GraphQL is https://api.github.com/graphql. GitHub
+ * Enterprise Server's REST base ends in /api/v3; its GraphQL endpoint is
+ * .../api/graphql (not /api/v3/graphql) — the two APIs don't nest under the
+ * same versioned prefix there.
+ */
+export function githubGraphqlUrl(apiUrl: string): string {
+  return apiUrl.endsWith('/api/v3') ? `${apiUrl.slice(0, -'/api/v3'.length)}/api/graphql` : `${apiUrl}/graphql`;
+}
+
+const MERGE_METHOD_ENUM: Record<MergeMethod, string> = { merge: 'MERGE', squash: 'SQUASH', rebase: 'REBASE' };
+
+const ENABLE_AUTO_MERGE_MUTATION =
+  'mutation($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) { ' +
+  'enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) { clientMutationId } }';
+
+interface GraphqlResponse {
+  data?: unknown;
+  errors?: Array<{ message: string }>;
+}
+
+async function githubGraphqlRequest(auth: GithubAuth, query: string, variables: object): Promise<GraphqlResponse> {
+  const res = await forgeFetch(
+    'GitHub GraphQL',
+    '/graphql',
+    githubGraphqlUrl(auth.apiUrl),
+    { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json' },
+    { method: 'POST', body: JSON.stringify({ query, variables }) },
+  );
+  return (await res.json()) as GraphqlResponse;
+}
+
 export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
   const auth = resolveGithubAuth(config);
   const owner = auth.repo.split('/')[0];
@@ -178,6 +211,24 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       // non-mergeable states (unstable, blocked, behind, draft, unknown) are
       // not conflicts and must not trigger conflict resolution.
       return pr.mergeable_state === 'dirty';
+    },
+
+    async enableAutoMerge(mrIid: number, mergeMethod: MergeMethod): Promise<void> {
+      const prRes = await githubRequest(auth, `/pulls/${mrIid}`);
+      const pr = (await prRes.json()) as { node_id: string };
+      const body = await githubGraphqlRequest(auth, ENABLE_AUTO_MERGE_MUTATION, {
+        pullRequestId: pr.node_id,
+        mergeMethod: MERGE_METHOD_ENUM[mergeMethod],
+      });
+      if (body.errors?.length) {
+        throw new Error(`GitHub GraphQL enablePullRequestAutoMerge failed: ${body.errors.map((e) => e.message).join('; ')}`);
+      }
+    },
+
+    // GitHub has no "custom CI config path" concept — Actions workflows are
+    // always under .github/workflows, so there's nothing to look up.
+    async getCiConfigPath(): Promise<string | undefined> {
+      return undefined;
     },
   };
 }

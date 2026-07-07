@@ -31,6 +31,9 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: test
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish
+      cancel-in-progress: false # a queued release must never be silently dropped
     permissions:
       contents: write # push the version bump commit/tag
       id-token: write # npm provenance attestation
@@ -46,6 +49,11 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          # concurrency above only prevents *simultaneous* runs — a run that
+          # was queued behind another still started from a checkout that may
+          # have gone stale while it waited, so re-sync immediately before
+          # bumping the version.
+          git pull --rebase origin main
           npm version patch -m "chore(release): %s [skip ci]"
           git push origin HEAD:main --follow-tags
       - name: Publish to npm

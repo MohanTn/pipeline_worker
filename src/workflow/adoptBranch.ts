@@ -131,7 +131,7 @@ async function adoptWithoutMr(
     await commit(worktreePath, 'chore: update changelog');
   }
 
-  const mr = await openMergeRequest(forge, worktreePath, branch, targetBranch, intent, config.agent, checks);
+  const mr = await openMergeRequest(forge, worktreePath, branch, targetBranch, intent, config.agent, checks, config.autoMergeOnGreen, config.mergeMethod);
   state.mrIid = mr.iid;
   state.phase = 'mr';
   recordEvent(repoRoot, state, `Opened MR/PR ${mr.webUrl} for adopted branch ${branch}`);
@@ -152,7 +152,7 @@ export async function adoptBranch(
     checkoutExistingBranch(repoRoot, branch),
   );
 
-  const state: RunState = { branch, targetBranch: '', worktreePath, attempt: 0, phase: 'intent' };
+  const state: RunState = { branch, targetBranch: '', worktreePath, ciFixAttempt: 0, conflictAttempt: 0, phase: 'intent' };
   recordEvent(repoRoot, state, `Adopted external branch ${branch} into worktree ${worktreePath}`);
 
   const existingMr = await forge.findExistingMr(branch);

@@ -2,6 +2,7 @@
 
 export type AgentName = 'claude' | 'copilot' | 'pi';
 export type ForgeName = 'gitlab' | 'github';
+export type MergeMethod = 'merge' | 'squash' | 'rebase';
 
 export interface PipelineWorkerConfig {
   agent: AgentName;
@@ -33,6 +34,20 @@ export interface PipelineWorkerConfig {
   runLintAndTest: boolean;
   /** Once checks pass, add a bullet for this change under CHANGELOG.md's [Unreleased] section (creating the file if absent) and include it in the commit. Off by default: not every consuming repo keeps a changelog. */
   updateChangelog: boolean;
+  /** Once the MR/PR opens, ask the forge to merge it automatically as soon as CI (and any required approvals) allow — best-effort, never fails the run if the forge rejects it. Off by default: merging is a policy decision, not something to turn on silently. */
+  autoMergeOnGreen: boolean;
+  /** Merge strategy passed to enableAutoMerge. Defaults to 'squash'. GitLab has no per-request rebase option — 'rebase' there silently falls back to the project's own default merge method. */
+  mergeMethod: MergeMethod;
+  /**
+   * Once CI is green, collapse every commit this run made on the branch
+   * since it diverged from targetBranch into one (titled from the captured
+   * intent) and force-push — keeps history clean regardless of the target
+   * repo's merge-strategy setting. Off by default: unlike every other write
+   * this tool makes, this rewrites already-pushed history (force-push), a
+   * materially different risk. Only reliable with autoMergeOnGreen off — the
+   * forge may already have merged (and deleted) the branch before this runs.
+   */
+  squashOnMerge: boolean;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';
@@ -51,7 +66,10 @@ export interface RunState {
   worktreePath: string;
   mrIid?: number;
   pipelineId?: number;
-  attempt: number;
+  /** Automated-fix attempts spent on a real CI failure (watchPipeline.ts's runCiFixAttempt); bounded by config.maxFixAttempts independently of conflictAttempt. */
+  ciFixAttempt: number;
+  /** Automated-fix attempts spent resolving merge conflicts with the target branch (watchPipeline.ts's tryResolveConflicts); bounded by config.maxFixAttempts independently of ciFixAttempt, so a long-lived PR needing several trivial rebases can't exhaust the budget meant for real bug-fixing. */
+  conflictAttempt: number;
   phase: RunPhase;
   /** ISO 8601 timestamp of when this run was first created. Absent on state files written before this field existed. */
   startedAt?: string;

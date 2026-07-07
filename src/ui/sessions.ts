@@ -38,7 +38,8 @@ function formatSessionRow(session: RunSession): string {
   const { state } = session;
   const branch = formatBranchColumn(state.branch);
   const mr = formatMrColumn(state.mrIid);
-  return `${branch} ${formatPhase(state.phase)} ${String(state.attempt).padEnd(8)} ${mr.padEnd(7)} ${formatTimestamp(state.updatedAt)}`;
+  const attempts = `${String(state.ciFixAttempt).padEnd(6)} ${String(state.conflictAttempt).padEnd(8)}`;
+  return `${branch} ${formatPhase(state.phase)} ${attempts} ${mr.padEnd(7)} ${formatTimestamp(state.updatedAt)}`;
 }
 
 /** `pipeline-worker sessions` with no --branch: one line per persisted run, most recently updated first. */
@@ -47,7 +48,7 @@ export function printSessionList(sessions: RunSession[]): void {
     console.log('pipeline-worker: no sessions found in this repo (.pipeline-worker/state/ is empty).');
     return;
   }
-  console.log(styleText('bold', `${'BRANCH'.padEnd(40)} ${'PHASE'.padEnd(9)} ATTEMPT  MR/PR   UPDATED`));
+  console.log(styleText('bold', `${'BRANCH'.padEnd(40)} ${'PHASE'.padEnd(9)} CI-FIX CONFLICT MR/PR   UPDATED`));
   for (const session of sessions) {
     console.log(formatSessionRow(session));
   }
@@ -77,7 +78,9 @@ export function printSessionDetail(session: RunSession): void {
   console.log(styleText('bold', `Session: ${state.branch}`));
   console.log(styleText('dim', `  target: ${state.targetBranch}`));
   console.log(styleText('dim', `  worktree: ${state.worktreePath}`));
-  console.log(styleText('dim', `  phase: ${state.phase}  attempt: ${state.attempt}${mrPart}${pipelinePart}`));
+  console.log(
+    styleText('dim', `  phase: ${state.phase}  ci-fix: ${state.ciFixAttempt}  conflict: ${state.conflictAttempt}${mrPart}${pipelinePart}`),
+  );
   console.log(styleText('dim', `  started: ${formatTimestamp(state.startedAt)}  updated: ${formatTimestamp(state.updatedAt)}`));
 
   const history = state.history ?? [];
