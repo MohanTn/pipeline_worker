@@ -15,6 +15,8 @@ import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { adoptBranch } from './workflow/adoptBranch.js';
 import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
+import { resumeSkeleton, adoptSkeleton } from './workflow/runPlan.js';
+import { beginRun, endRun, runStep, seedRunTokens } from './ui/steps.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
 import type { ForgeClient } from './forge/types.js';
@@ -63,15 +65,19 @@ async function runResumeWatch(
 ): Promise<void> {
   try {
     await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
-    // Same stage-14 tail as a fresh run (see orchestrate.ts's finalizeRun):
+    // Same 'merge' tail as a fresh run (see orchestrate.ts's finalizeRun):
     // when auto-merge landed the MR/PR, pull the merged result back into the
     // local target branch so it doesn't sit stale after the run ends.
     if (state.phase === 'done') {
       await maybeSyncTargetBranch(forge, config, repoRoot, state.targetBranch, state.mrIid);
+      endRun('done', `MR/PR #${state.mrIid} finished green`);
+    } else if (state.phase === 'escalated') {
+      endRun('escalated', 'see the MR/PR comment for what was tried and why');
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');
+    endRun('failed', message);
     throw error;
   } finally {
     await cleanup();
@@ -131,14 +137,25 @@ program
       const agent = selectAgent(config);
 
       const existingState = loadRunState(repoRoot, opts.branch);
-      const state = existingState
-        ? requireMrRecorded(opts.branch, existingState)
-        : await adoptBranch(repoRoot, config, forge, agent, opts.branch, opts.target);
-
-      const worktreePath = existingState ? await resolveResumeWorktree(repoRoot, state) : state.worktreePath;
+      let state: ResumableRunState;
+      let worktreePath: string;
+      if (existingState) {
+        const resumable = requireMrRecorded(opts.branch, existingState);
+        beginRun(resumeSkeleton(resumable.targetBranch), { title: opts.branch });
+        if (resumable.totalTokens !== undefined) seedRunTokens(resumable.totalTokens);
+        worktreePath = await runStep('resume', 'reattach: reuse the crashed run\'s worktree, or recreate it from origin', () =>
+          resolveResumeWorktree(repoRoot, resumable),
+        );
+        state = resumable;
+      } else {
+        beginRun(adoptSkeleton(opts.branch), { title: opts.branch });
+        state = await adoptBranch(repoRoot, config, forge, agent, opts.branch, opts.target);
+        worktreePath = state.worktreePath;
+      }
 
       const { cleanup } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
       registerExitSignals((exitCode) => {
+        endRun('interrupted', `resume again with: pipeline-worker resume --branch ${opts.branch}`);
         void cleanup().then(() => process.exit(exitCode));
       });
 

@@ -1,5 +1,6 @@
-/** Top-level control flow wiring the user's workflow stages together — see ui/steps.ts's TOTAL_STAGES for the full numbered sequence. */
+/** Top-level control flow wiring the user's workflow steps together — see workflow/runPlan.ts for the full step skeleton. */
 
+import { basename } from 'node:path';
 import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
 import { selectAgent } from '../agent/index.js';
@@ -17,7 +18,8 @@ import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
-import { step, runStep, skipStep, note, noteRisk, reportAgentInvocation } from '../ui/steps.js';
+import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, note, noteRisk, reportAgentInvocation } from '../ui/steps.js';
+import { freshRunSkeleton } from './runPlan.js';
 import { printWelcome } from '../ui/welcome.js';
 import type { AgentAdapter } from '../agent/types.js';
 import type { CapturedDiff } from '../git/diff.js';
@@ -59,10 +61,9 @@ function buildApplyConflictPrompt(conflictedFiles: string[]): string {
  * fail the run clearly instead so the user can intervene manually.
  */
 async function resolveApplyConflicts(agent: AgentAdapter, repoRoot: string, state: RunState, worktreePath: string, conflictedFiles: string[]): Promise<void> {
+  addDynamicStep('apply', 'apply/conflicts', 'conflicts');
   const agentResult = await runStep(
-    '4.1',
-    '🔧',
-    'Resolving conflicts',
+    'apply/conflicts',
     `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
     () => agent.invoke({ prompt: buildApplyConflictPrompt(conflictedFiles), cwd: worktreePath, permissionMode: 'acceptEdits' }),
   );
@@ -84,17 +85,14 @@ export interface RunWorkflowOptions {
   ticket?: string;
 }
 
-/** Stage 1: capture the uncommitted diff, or null (already logged) when there's nothing to process. */
+/** Step 'capture': read the uncommitted diff, or null (already reported) when there's nothing to process. */
 async function captureRunDiff(repoRoot: string): Promise<CapturedDiff | null> {
   const { diffText, changedFiles, untrackedFiles } = await runStep(
-    1,
-    '📸',
-    'Capturing your changes',
+    'capture',
     'reading uncommitted edits and untracked files from your repo',
     () => captureDiff(repoRoot),
   );
   if (diffText.trim().length === 0 && untrackedFiles.length === 0) {
-    console.log('pipeline-worker: no changes to process.');
     return null;
   }
   note(`${untrackedFiles.length} new file(s), ${diffText.split('\n').length} line(s) of diff`);
@@ -112,17 +110,13 @@ async function applyCapturedDiff(
   untrackedFiles: string[],
 ): Promise<void> {
   await runStep(
-    3,
-    '🔄',
-    'Syncing worktree with origin',
+    'sync',
     `pull --rebase origin ${targetBranch}, so the diff lands on the latest base`,
     () => syncWithOrigin(worktreePath, targetBranch),
   );
 
   const applyResult = await runStep(
-    4,
-    '📦',
-    'Applying your changes',
+    'apply',
     'replay your diff and untracked files into the new worktree',
     () => applyDiffToWorktree(worktreePath, diffText, untrackedFiles, repoRoot),
   );
@@ -142,9 +136,7 @@ async function captureIntentAndBranch(
   untrackedFiles: string[],
 ): Promise<{ intent: CapturedIntent; intentTokens?: number; actualBranchName: string }> {
   const { intent, usage } = await runStep(
-    5,
-    '🧠',
-    'Understanding your changes',
+    'intent',
     `ask ${config.agent} to infer a change type, branch slug, commit message, and summary`,
     () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath, config.intentModel),
   );
@@ -153,15 +145,14 @@ async function captureIntentAndBranch(
 
   const branchName = buildBranchName(config.branchPattern, { type: intent.changeType, ticket: options.ticket, name: intent.branchSlug });
   const actualBranchName = await runStep(
-    6,
-    '🌿',
-    'Checkout feature branch',
+    'branch',
     `switch to feature branch ${branchName}`,
     () => renameBranch(worktreePath, branchName),
   );
   if (actualBranchName !== branchName) {
     note(`"${branchName}" already exists locally — using "${actualBranchName}" instead`);
   }
+  setRunHeader({ title: actualBranchName });
   return { intent, intentTokens: usage?.totalTokens, actualBranchName };
 }
 
@@ -173,9 +164,7 @@ async function captureIntentAndBranch(
  */
 export async function runAndReportChecks(config: PipelineWorkerConfig, worktreePath: string, state: RunState, repoRoot: string): Promise<CheckResult[] | null> {
   const checks = await runStep(
-    7,
-    '✅',
-    'Running checks',
+    'checks',
     'build, lint, and test — whichever your repo has configured',
     () => runChecks(config, worktreePath),
   );
@@ -186,6 +175,7 @@ export async function runAndReportChecks(config: PipelineWorkerConfig, worktreeP
       `pipeline-worker: ${failedCheck.name} failed, aborting before opening a merge request.\n${failedCheck.stderr}`,
     );
     recordEvent(repoRoot, state, `${failedCheck.name} check failed, aborted before opening a merge request`, 'error');
+    endRun('failed', `${failedCheck.name} failed — aborted before opening a merge request`);
     process.exitCode = 1;
     return null;
   }
@@ -201,9 +191,7 @@ export async function runAndReportChecks(config: PipelineWorkerConfig, worktreeP
 export async function maybeUpdateChangelog(config: PipelineWorkerConfig, worktreePath: string, intent: CapturedIntent): Promise<void> {
   if (config.updateChangelog) {
     await runStep(
-      8,
-      '📝',
-      'Updating changelog',
+      'changelog',
       "add a bullet under CHANGELOG.md's [Unreleased] section",
       async () => {
         updateChangelog(worktreePath, intent);
@@ -211,7 +199,7 @@ export async function maybeUpdateChangelog(config: PipelineWorkerConfig, worktre
       },
     );
   } else {
-    skipStep(8, '📝', 'Updating changelog', 'config.updateChangelog is disabled');
+    skipStep('changelog', 'config.updateChangelog is disabled');
   }
 }
 
@@ -227,9 +215,7 @@ async function commitAndOpenMr(
   repoRoot: string,
 ): Promise<MergeRequest> {
   await runStep(
-    9,
-    '💾',
-    'Committing changes',
+    'commit',
     `commit message: "${intent.commitMessage}"`,
     // applyDiffToWorktree (and, if enabled, the changelog step above) left
     // everything staged; without this commit the push would carry no
@@ -254,9 +240,7 @@ async function commitAndOpenMr(
 async function maybeCleanupEarly(config: PipelineWorkerConfig, repoRoot: string, untrackedFiles: string[], branch: string, releaseLock: () => void): Promise<void> {
   if (config.cleanupOnSuccess && config.cleanupEarly) {
     await runStep(
-      13,
-      '🧹',
-      'Cleaning up your repo',
+      'cleanup',
       `reset to HEAD — your changes are now safely pushed to ${branch} (MR open)`,
       () => resetRepo(repoRoot, untrackedFiles),
     );
@@ -273,12 +257,13 @@ async function maybeCleanupEarly(config: PipelineWorkerConfig, repoRoot: string,
  * shows up here as a push failure and is logged as a no-op, not an error.
  */
 async function maybeSquashCommits(config: PipelineWorkerConfig, worktreePath: string, branch: string, targetBranch: string, intent: CapturedIntent): Promise<void> {
+  addDynamicStep('ci-watch', 'ci-watch/squash', 'squash');
   if (!config.squashOnMerge) {
-    skipStep('12.8', '📚', 'Squashing run commits', 'config.squashOnMerge is disabled');
+    skipStep('ci-watch/squash', 'config.squashOnMerge is disabled');
     return;
   }
   try {
-    await runStep('12.8', '📚', 'Squashing run commits', `collapsing into one commit: "${intent.commitMessage}"`, async () => {
+    await runStep('ci-watch/squash', `collapsing into one commit: "${intent.commitMessage}"`, async () => {
       await squashCommitsSinceMergeBase(worktreePath, targetBranch, intent.commitMessage);
       await forcePushWithLease(worktreePath, 'origin', branch);
     });
@@ -305,30 +290,29 @@ async function finalizeRun(
   if (finalPhase === 'done') {
     await maybeSquashCommits(config, worktreePath, state.branch, targetBranch, intent);
 
-    const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
-    step('🎉', 'Done', detail);
     if (config.cleanupOnSuccess) {
-      // Only run stage 13 here when it hasn't already run early, above —
-      // no skip announcement needed in that case, since it did run, just
-      // sooner than usual, not never.
+      // Only run the cleanup step here when it hasn't already run early,
+      // above — no skip announcement needed in that case, since it did run,
+      // just sooner than usual, not never.
       if (!config.cleanupEarly) {
         await runStep(
-          13,
-          '🧹',
-          'Cleaning up your repo',
+          'cleanup',
           `reset to HEAD — your changes are now safely on ${state.branch}`,
           () => resetRepo(repoRoot, untrackedFiles),
         );
       }
     } else {
-      skipStep(13, '🧹', 'Cleaning up your repo', 'config.cleanupOnSuccess is disabled — leaving your changes on the local repo for you to inspect');
+      skipStep('cleanup', 'config.cleanupOnSuccess is disabled — leaving your changes on the local repo for you to inspect');
     }
 
     // After cleanup on purpose: with cleanupOnSuccess on, the working tree is
     // clean by now, so the fast-forward can't collide with leftover local edits.
     await maybeSyncTargetBranch(forge, config, repoRoot, targetBranch, mr.iid);
+
+    const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
+    endRun('done', detail);
   } else if (finalPhase === 'escalated') {
-    step('🚨', 'Stopped for human review', `see ${mr.webUrl} for what was tried and why`);
+    endRun('escalated', `see ${mr.webUrl} for what was tried and why`);
     process.exitCode = 1;
   }
 }
@@ -348,25 +332,36 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     const agent = selectAgent(config);
     await printWelcome(config, repoRoot);
 
+    // The skeleton needs the target branch for its sync/merge details, so
+    // read it before the first step renders (both are read-only).
+    const targetBranch = await currentBranch(repoRoot);
+    beginRun(freshRunSkeleton(targetBranch, config.agent), { title: basename(repoRoot) });
+
     const diff = await captureRunDiff(repoRoot);
-    if (!diff) return;
+    if (!diff) {
+      endRun('done', 'no changes to process — your working tree is clean');
+      return;
+    }
     const { diffText, changedFiles, untrackedFiles } = diff;
 
-    const targetBranch = await currentBranch(repoRoot);
     const tempBranch = generateTempBranchName();
     const worktreePath = await runStep(
-      2,
-      '🌳',
-      'Creating worktree',
+      'worktree',
       `create worktree with name ${tempBranch}`,
       () => createWorktree(repoRoot, tempBranch),
     );
+    // The uuid tail of the temp branch, shortened, doubles as the header's
+    // worktree identifier (the mock's 'worktree a91f').
+    setRunHeader({ worktreeShortId: tempBranch.slice(-4) });
 
     let state: RunState = { branch: tempBranch, targetBranch, worktreePath, ciFixAttempt: 0, conflictAttempt: 0, phase: 'diff' };
     recordEvent(repoRoot, state, `Created worktree at ${worktreePath} (temp branch ${tempBranch})`);
 
     const { cleanup, markDone } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
     registerExitSignals((exitCode) => {
+      // Settle the run display first so the terminal is left readable (and,
+      // under the live TTY renderer, the cursor is restored).
+      endRun('interrupted', shouldPreserveWorktreeOnInterrupt(state.phase) ? `resume with: pipeline-worker resume --branch ${state.branch}` : undefined);
       // process.exit() below terminates immediately without unwinding the
       // suspended runWorkflow() call stack, so the outer `finally { releaseLock() }`
       // never runs — release it explicitly here first in both branches.
@@ -414,6 +409,7 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');
+      endRun('failed', message);
       throw error;
     } finally {
       await cleanup();

@@ -26,7 +26,7 @@ import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { captureIntent } from './captureIntent.js';
 import { runAndReportChecks, maybeUpdateChangelog } from './orchestrate.js';
 import { openMergeRequest, buildDescription } from './openMergeRequest.js';
-import { runStep, note, step } from '../ui/steps.js';
+import { runStep, skipStep, note, announce } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { AgentAdapter } from '../agent/types.js';
 import type { PipelineWorkerConfig, ResumableRunState, RunState } from '../types.js';
@@ -62,23 +62,25 @@ async function adoptWithExistingMr(
   state.targetBranch = existingMr.targetBranch;
 
   const { files, baseRef } = await runStep(
-    'A.2',
-    '🔍',
-    "Diffing the branch's changes",
+    'inspect',
     `comparing against origin/${existingMr.targetBranch}`,
     () => diffSinceTarget(worktreePath, existingMr.targetBranch),
   );
 
+  // These skeleton steps only run on the no-MR-yet path (adoptWithoutMr):
+  // an already-open MR/PR means the branch is pushed and CI re-verifies it.
+  skipStep('checks', 'MR/PR already open — its CI pipeline verifies the branch');
+  skipStep('changelog', 'not updated when refreshing an existing MR/PR');
+  skipStep('push', 'branch is already pushed — that is how its MR/PR exists');
+
   const { intent, usage } = await runStep(
-    '5',
-    '🧠',
-    'Understanding the branch\'s changes',
+    'intent',
     `ask ${config.agent} to infer a summary, risk, and file-by-file breakdown`,
     () => captureIntent(agent, files, worktreePath, config.intentModel, baseRef),
   );
   note(`${config.agent} says: ${intent.summary}`);
 
-  await runStep('11', '📝', 'Overwriting merge request description', `MR/PR ${existingMr.webUrl}`, () =>
+  await runStep('mr', `overwriting the description of MR/PR ${existingMr.webUrl}`, () =>
     forge.updateMrDescription(existingMr.iid, buildDescription(intent, config.agent, [])),
   );
 
@@ -104,9 +106,7 @@ async function adoptWithoutMr(
   recordEvent(repoRoot, state, `No existing MR/PR found; targeting ${targetBranch}`);
 
   const { files, baseRef } = await runStep(
-    'A.2',
-    '🔍',
-    "Diffing the branch's changes",
+    'inspect',
     `comparing against origin/${targetBranch}`,
     () => diffSinceTarget(worktreePath, targetBranch),
   );
@@ -117,9 +117,7 @@ async function adoptWithoutMr(
   }
 
   const { intent, usage } = await runStep(
-    '5',
-    '🧠',
-    'Understanding the branch\'s changes',
+    'intent',
     `ask ${config.agent} to infer a summary, risk, and file-by-file breakdown`,
     () => captureIntent(agent, files, worktreePath, config.intentModel, baseRef),
   );
@@ -147,9 +145,9 @@ export async function adoptBranch(
   branch: string,
   targetOverride: string | undefined,
 ): Promise<ResumableRunState> {
-  step('🌱', 'Adopting external branch', `${branch} has no pipeline-worker run recorded for it — checking it out`);
+  announce('Adopting external branch', `${branch} has no pipeline-worker run recorded for it — checking it out`);
 
-  const worktreePath = await runStep('A.1', '🌳', 'Checking out branch', `fetch + checkout origin/${branch}`, () =>
+  const worktreePath = await runStep('adopt', `fetch + checkout origin/${branch}`, () =>
     checkoutExistingBranch(repoRoot, branch),
   );
 

@@ -16,7 +16,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { currentBranch } from '../git/commit.js';
-import { runStep, skipStep, note, noteRisk } from '../ui/steps.js';
+import { runStep, skipStep, updateStep, note, noteRisk } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { PipelineWorkerConfig } from '../types.js';
 
@@ -72,21 +72,24 @@ export async function syncTargetBranchAfterMerge(
   return 'updated';
 }
 
-/** Explains each non-'updated' outcome to the user; every branch ends in "you can still just git pull". */
+/** Explains each outcome on the merge step's own row and as a note; every non-'updated' branch ends in "you can still just git pull". */
 function reportOutcome(outcome: SyncOutcome, targetBranch: string, timing: SyncTiming): void {
   if (outcome === 'updated') {
+    updateStep('merge', { detail: `merged + local ${targetBranch} synced` });
     note(`local ${targetBranch} now includes the merged MR/PR`);
   } else if (outcome === 'merge-timeout') {
+    updateStep('merge', { detail: `not merged after ${Math.round(timing.timeoutMs / 1000)}s — git pull ${targetBranch} once it lands` });
     note(
       `the forge had not merged the MR/PR after ${Math.round(timing.timeoutMs / 1000)}s (required approvals still pending?) — ` +
         `run 'git pull' on ${targetBranch} once it merges`,
     );
   } else {
+    updateStep('merge', { detail: `repo no longer on ${targetBranch} — git pull it yourself` });
     note(`your repo is no longer on ${targetBranch} — skipped; run 'git pull' on ${targetBranch} yourself`);
   }
 }
 
-/** Stage 14: announces the skip when auto-merge is off, otherwise runs the sync and reduces any failure to a low-risk note. */
+/** Step 'merge': announces the skip when auto-merge is off, otherwise runs the sync and reduces any failure to a low-risk note. */
 export async function maybeSyncTargetBranch(
   forge: ForgeClient,
   config: PipelineWorkerConfig,
@@ -96,14 +99,12 @@ export async function maybeSyncTargetBranch(
   timing: SyncTiming = DEFAULT_SYNC_TIMING,
 ): Promise<void> {
   if (!config.autoMergeOnGreen) {
-    skipStep(14, '⬇️', `Updating local ${targetBranch}`, 'config.autoMergeOnGreen is disabled — nothing was merged for this run to pull back');
+    skipStep('merge', 'config.autoMergeOnGreen is disabled — nothing was merged for this run to pull back');
     return;
   }
   try {
     const outcome = await runStep(
-      14,
-      '⬇️',
-      `Updating local ${targetBranch}`,
+      'merge',
       `wait for the forge to auto-merge the MR/PR, then fast-forward ${targetBranch} from origin`,
       () => syncTargetBranchAfterMerge(forge, repoRoot, targetBranch, mrIid, timing),
     );

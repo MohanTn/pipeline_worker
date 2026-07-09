@@ -34,7 +34,7 @@ import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolved
 import { runChecks } from './runChecks.js';
 import type { ForgeClient } from '../forge/types.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
-import { step, runStep, note, reportAgentInvocation } from '../ui/steps.js';
+import { runStep, runPhase, startStep, finishStep, addDynamicStep, note, reportAgentInvocation } from '../ui/steps.js';
 import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState, CheckResult } from '../types.js';
 
 const execFileAsync = promisify(execFile);
@@ -201,18 +201,22 @@ function formatEscalationNote(headline: string, bullets: string[], footer: strin
 }
 
 async function escalate(forge: ForgeClient, mrIid: number, message: string, state: RunState, repoRoot: string): Promise<void> {
-  // message may be a multi-line checklist (see formatEscalationNote); runStep's
+  // message may be a multi-line checklist (see formatEscalationNote); a step's
   // detail line assumes single-line text (it doesn't collapse newlines the way
   // note() does), so flatten it there while posting the full body to the MR/PR.
   const detail = message.replace(/\s*\n\s*/g, ' ');
-  await runStep('12.7', '🚨', 'Escalating to a human', detail, () => forge.createMrNote(mrIid, message));
+  addDynamicStep('ci-watch', 'ci-watch/escalate', 'escalate');
+  await runStep('ci-watch/escalate', detail, () => forge.createMrNote(mrIid, message));
+  // The watch itself is over, and not with a pass: the whole ci-watch branch
+  // reads failed so the escalation is visible at a glance.
+  finishStep('ci-watch', 'failed', { detail: 'escalated to a human — see the MR/PR comment' });
   state.phase = 'escalated';
   recordEvent(repoRoot, state, detail, 'error');
 }
 
-/** Attempts `git merge origin/targetBranch`; true means it succeeded and auto-committed, false means conflicts are left in the working tree. */
-async function attemptCleanMerge(worktreePath: string, targetBranch: string): Promise<boolean> {
-  return runStep('12.2', '🔀', 'Merging target branch', `git merge origin/${targetBranch} --no-edit`, async () => {
+/** Attempts `git merge origin/targetBranch` as a phase of `stepId`; true means it succeeded and auto-committed, false means conflicts are left in the working tree. */
+async function attemptCleanMerge(stepId: string, worktreePath: string, targetBranch: string): Promise<boolean> {
+  return runPhase(stepId, `git merge origin/${targetBranch} --no-edit`, async () => {
     await execFileAsync('git', ['fetch', 'origin', targetBranch], { cwd: worktreePath });
     try {
       await execFileAsync('git', ['merge', `origin/${targetBranch}`, '--no-edit'], { cwd: worktreePath });
@@ -223,17 +227,15 @@ async function attemptCleanMerge(worktreePath: string, targetBranch: string): Pr
   });
 }
 
-/** Asks the agent to resolve the given conflicted files, recording the turn's token spend and returning whichever files still have unresolved markers afterward. */
-async function resolveConflictsWithAgent(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[], state: RunState, repoRoot: string): Promise<string[]> {
+/** Asks the agent to resolve the given conflicted files (as a phase of `stepId`), recording the turn's token spend and returning whichever files still have unresolved markers afterward. */
+async function resolveConflictsWithAgent(stepId: string, agent: AgentAdapter, worktreePath: string, conflictedFiles: string[], state: RunState, repoRoot: string): Promise<string[]> {
   note(conflictedFiles.join(', '));
 
   const mcpConfigPath = writeAgentMcpConfig();
   let agentResult: AgentInvokeResult;
   try {
-    agentResult = await runStep(
-      '12.3',
-      '🔧',
-      'Resolving conflicts',
+    agentResult = await runPhase(
+      stepId,
       `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
       () => agent.invoke({ prompt: buildConflictPrompt(conflictedFiles), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
     );
@@ -300,11 +302,6 @@ export async function tryResolveConflicts(
       state,
       `Merge conflicts detected; attempt ${state.conflictAttempt}/${config.maxFixAttempts} — merging origin/${targetBranch} into ${branch}`,
     );
-    step(
-      '⚠️',
-      'Merge conflicts detected',
-      `attempt ${state.conflictAttempt}/${config.maxFixAttempts} — merging origin/${targetBranch} into ${branch}`,
-    );
 
     if (state.conflictAttempt > config.maxFixAttempts) {
       const bullet = lastLocalFailure
@@ -320,16 +317,27 @@ export async function tryResolveConflicts(
       return false;
     }
 
+    // One tree row per attempt; the phases below (merge, agent, verify, push)
+    // only mutate its detail — see ui/steps.ts's runPhase.
+    const stepId = `ci-watch/rebase-${state.conflictAttempt}`;
+    addDynamicStep('ci-watch', stepId, `rebase ${state.conflictAttempt}`);
+    startStep(stepId, {
+      detail: `merging origin/${targetBranch} into ${branch}`,
+      attempt: state.conflictAttempt,
+      maxAttempts: config.maxFixAttempts,
+    });
+
     if (lastLocalFailure === undefined) {
-      const cleanMerge = await attemptCleanMerge(worktreePath, targetBranch);
+      const cleanMerge = await attemptCleanMerge(stepId, worktreePath, targetBranch);
       if (!cleanMerge) {
         const conflictedFiles = await listConflictedFiles(worktreePath);
         if (conflictedFiles.length === 0) {
           throw new Error(`git merge origin/${targetBranch} failed for a reason other than conflicts — check the worktree for details`);
         }
 
-        const stillConflicted = await resolveConflictsWithAgent(agent, worktreePath, conflictedFiles, state, repoRoot);
+        const stillConflicted = await resolveConflictsWithAgent(stepId, agent, worktreePath, conflictedFiles, state, repoRoot);
         if (stillConflicted.length > 0) {
+          finishStep(stepId, 'failed', { detail: `${stillConflicted.length} file(s) still conflicted after the agent's attempt` });
           await escalate(
             forge,
             mrIid,
@@ -348,10 +356,8 @@ export async function tryResolveConflicts(
       }
       // else: attemptCleanMerge's `git merge --no-edit` already auto-committed — nothing left to stage here.
     } else {
-      const agentResult = await runStep(
-        '12.36',
-        '🔧',
-        'Fixing local check failure after merge',
+      const agentResult = await runPhase(
+        stepId,
         `asking the agent to fix the ${lastLocalFailure.name} failure the merge introduced`,
         () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), cwd: worktreePath, permissionMode: 'acceptEdits' }),
       );
@@ -359,6 +365,7 @@ export async function tryResolveConflicts(
       recordAgentTokens(repoRoot, state, 'fix local check failure after merge', agentResult.usage);
 
       if (!(await hasChanges(worktreePath))) {
+        finishStep(stepId, 'failed', { detail: 'agent fix attempt made no changes to push' });
         await escalate(
           forge,
           mrIid,
@@ -379,28 +386,28 @@ export async function tryResolveConflicts(
       await commit(worktreePath, `fix: address local check failure after merge (attempt ${state.conflictAttempt})`);
     }
 
-    const localChecks = await runStep(
-      '12.35',
-      '🔍',
-      'Verifying merge locally',
-      'build/lint/test in the worktree before pushing, so a broken merge/fix never costs a full CI round-trip',
+    const localChecks = await runPhase(
+      stepId,
+      'verifying build/lint/test locally, so a broken merge/fix never costs a full CI round-trip',
       () => runChecks(config, worktreePath),
     );
     const failed = localChecks.find((c) => !c.ok);
     if (failed) {
       note(`${failed.name} failed locally after merge — asking the agent again without pushing`);
+      finishStep(stepId, 'failed', { detail: `${failed.name} failed locally after the merge` });
       lastLocalFailure = failed;
       continue;
     }
 
-    await runStep('12.4', '⬆', 'Pushing the merge', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+    await runPhase(stepId, `pushing the merge — ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+    finishStep(stepId, 'done', { detail: `merged origin/${targetBranch} + pushed` });
     return true;
   }
 }
 
 /** No CI ran at all (repo has no workflow configured for this MR/PR) — there's nothing to poll for, so stop instead of spinning until the 2-hour safety window would otherwise time out. */
 async function handleNoPipelineOutcome(state: RunState, repoRoot: string): Promise<void> {
-  step('ℹ️', 'No CI pipeline found', `no pipeline was detected for the MR/PR within ${NO_PIPELINE_GRACE_MS / 1000}s — nothing to watch`);
+  finishStep('ci-watch', 'done', { detail: `no pipeline detected for the MR/PR within ${NO_PIPELINE_GRACE_MS / 1000}s — nothing to watch` });
   state.phase = 'done';
   recordEvent(repoRoot, state, 'No CI pipeline found for this MR/PR — nothing to watch');
 }
@@ -436,7 +443,6 @@ export async function runCiFixAttempt(
   for (;;) {
     state.ciFixAttempt += 1;
     recordEvent(repoRoot, state, `Pipeline failed; attempt ${state.ciFixAttempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
-    step('💥', 'Pipeline failed', `attempt ${state.ciFixAttempt}/${config.maxFixAttempts} — ${pipeline.webUrl}`);
 
     if (state.ciFixAttempt > config.maxFixAttempts) {
       const bullet = lastLocalFailure
@@ -452,14 +458,22 @@ export async function runCiFixAttempt(
       return { action: 'stop' };
     }
 
+    // One tree row per fix attempt; the phases below (agent, commit, verify,
+    // push) only mutate its detail — see ui/steps.ts's runPhase.
+    const stepId = `ci-watch/fix-${state.ciFixAttempt}`;
+    addDynamicStep('ci-watch', stepId, `fix ${state.ciFixAttempt}`);
+    startStep(stepId, {
+      detail: `pipeline failed — ${pipeline.webUrl}`,
+      attempt: state.ciFixAttempt,
+      maxAttempts: config.maxFixAttempts,
+    });
+
     const prompt = lastLocalFailure ? buildLocalCheckFixPrompt(lastLocalFailure) : buildFixPrompt(pipeline, config.forge);
     const mcpConfigPath = writeAgentMcpConfig();
     let agentResult: AgentInvokeResult;
     try {
-      agentResult = await runStep(
-        '12.5',
-        '🔧',
-        'Fixing CI failure',
+      agentResult = await runPhase(
+        stepId,
         lastLocalFailure
           ? `asking the agent to fix the ${lastLocalFailure.name} failure its last edit left behind`
           : `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
@@ -473,6 +487,7 @@ export async function runCiFixAttempt(
 
     if (!(await hasChanges(worktreePath))) {
       // Re-pushing an identical tree would never produce a new pipeline; stop here.
+      finishStep(stepId, 'failed', { detail: 'agent fix attempt made no changes to push' });
       await escalate(
         forge,
         mrIid,
@@ -487,26 +502,26 @@ export async function runCiFixAttempt(
       return { action: 'stop' };
     }
 
-    await runStep('12.55', '📦', 'Committing the fix', `commit attempt ${state.ciFixAttempt} on ${branch}`, async () => {
+    await runPhase(stepId, `committing fix attempt ${state.ciFixAttempt} on ${branch}`, async () => {
       await stageAll(worktreePath);
       await commit(worktreePath, `fix: address CI failure (attempt ${state.ciFixAttempt})`);
     });
 
-    const localChecks = await runStep(
-      '12.56',
-      '🔍',
-      'Verifying fix locally',
-      'build/lint/test in the worktree before spending a CI cycle on it',
+    const localChecks = await runPhase(
+      stepId,
+      'verifying build/lint/test locally before spending a CI cycle on it',
       () => runChecks(config, worktreePath),
     );
     const failed = localChecks.find((c) => !c.ok);
     if (failed) {
       note(`${failed.name} still fails locally — asking the agent again without pushing`);
+      finishStep(stepId, 'failed', { detail: `${failed.name} still fails locally after the fix` });
       lastLocalFailure = failed;
       continue;
     }
 
-    await runStep('12.6', '⬆', 'Pushing the fix', `push ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+    await runPhase(stepId, `pushing the fix — ${branch} to origin`, () => push(worktreePath, 'origin', branch));
+    finishStep(stepId, 'done', { detail: 'fix pushed — waiting for the next pipeline' });
     return { action: 'continue', previousPipelineId: pipeline.id };
   }
 }
@@ -530,6 +545,7 @@ async function handlePipelineTerminal(
   if (pipeline.status === 'success') {
     state.phase = 'done';
     recordEvent(repoRoot, state, 'Pipeline succeeded');
+    finishStep('ci-watch', 'done', { detail: `pipeline ${pipeline.id} passed` });
     return { action: 'stop' };
   }
 
@@ -568,13 +584,18 @@ export async function watchPipeline(
   const ciConfigured = await hasCiConfig(worktreePath, forge, config.forge);
   state.phase = 'watch';
   recordEvent(repoRoot, state, 'Started watching pipeline');
+  startStep('ci-watch', { detail: `poll CI every ${config.pollIntervalSeconds}s` });
 
   let previousPipelineId: number | undefined;
+  let waitCount = 0;
   for (;;) {
+    // Each poll cycle is its own child row, so a run that needed three
+    // pipelines shows three waits interleaved with the fixes between them.
+    waitCount += 1;
+    const waitId = `ci-watch/wait-${waitCount}`;
+    addDynamicStep('ci-watch', waitId, 'wait');
     const outcome = await runStep(
-      '12.1',
-      '👀',
-      'Watching pipeline',
+      waitId,
       `poll CI every ${config.pollIntervalSeconds}s until it finishes`,
       () => pollForNextAction(forge, mrIid, intervalMs, previousPipelineId, NO_PIPELINE_GRACE_MS, ciConfigured),
     );

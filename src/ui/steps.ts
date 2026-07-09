@@ -1,45 +1,39 @@
 /**
- * Friendly progress narration for `pipeline-worker run`: a bold, colored,
- * numbered headline per workflow step (with an icon and a "[n/TOTAL_STAGES]"
- * counter) and a dim technical detail line underneath — mirrors how Claude
- * Code narrates its own tool calls, so a non-technical user can follow along
- * without reading source.
+ * The workflow's one door to the terminal: module-level functions the
+ * workflow code calls by step id, backed by a RunTree (the data model) and a
+ * Renderer (LineRenderer for non-TTY/plain output, TreeRenderer for the live
+ * TTY dashboard). Workflow code never touches process.stdout itself — see
+ * CLAUDE.md's terminal-output discipline.
+ *
+ * The facade is safe to use without beginRun() (unit tests exercise workflow
+ * helpers directly): the first call lazily creates an empty tree with a
+ * LineRenderer, and unknown step ids materialize as top-level nodes instead
+ * of throwing — the UI must never kill the run.
  */
 
 import { styleText } from 'node:util';
+import { RunTree, type RunStatus, type StepSeed } from './runTree.js';
+import { LineRenderer, type Renderer } from './renderer.js';
 import type { RiskLevel } from '../types.js';
 import type { AgentInvokeResult } from '../agent/types.js';
 
 const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green', medium: 'yellow', high: 'red' };
 
-/**
- * The workflow always runs stages 1-14 in order. Some stages are opt-in or
- * conditional on runtime state and are announced via skipStep() with a
- * reason instead of running when their condition isn't met (stage 8:
- * config.updateChangelog; stage 11: reused when an MR/PR already exists;
- * stage 13: config.cleanupOnSuccess; stage 14: config.autoMergeOnGreen) —
- * so the numbering stays sequential and a skipped stage is still visible
- * instead of silently vanishing.
- *
- * Stage 12 (watching the pipeline, and fixing/escalating on failure) loops
- * and branches internally, so its sub-steps are numbered 12.1-12.7 (see
- * watchPipeline.ts) rather than each claiming the bare "12".
- */
-const TOTAL_STAGES = 14;
-
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const SPINNER_INTERVAL_MS = 80;
-
-function formatElapsed(ms: number): string {
-  return `${(ms / 1000).toFixed(1)}s`;
+interface ActiveRun {
+  tree: RunTree;
+  renderer: Renderer;
+  ended: boolean;
 }
 
+let active: ActiveRun | undefined;
+/** The most recently started step — where noteSession attributes an agent turn's tokens. */
+let lastStepId: string | undefined;
+
 /**
- * Keeps a spinner redraw to a single physical row. Without this, a line
- * longer than the terminal's column count auto-wraps, and the `\r\x1b[K`
- * redraw in runStep() below only rewinds/clears the row the cursor is on —
- * not the wrapped continuation from the previous frame — so each tick
- * appends a new line instead of animating in place.
+ * Keeps a spinner/tree redraw to a single physical row. Without this, a line
+ * longer than the terminal's column count auto-wraps, and cursor-based
+ * erasing only rewinds the rows it knows about — not the wrapped
+ * continuation — so each frame appends garbage instead of animating in place.
  */
 export function truncateToWidth(text: string, width: number): string {
   if (width <= 0 || text.length <= width) return text;
@@ -47,16 +41,120 @@ export function truncateToWidth(text: string, width: number): string {
   return `${text.slice(0, width - 1)}…`;
 }
 
-/** stage accepts a decimal string (e.g. "12.3") for a sub-step of a numbered stage — see TOTAL_STAGES. */
-function stageHeader(stage: number | string, icon: string, title: string): string {
-  return styleText(['bold', 'cyan'], `[${stage}/${TOTAL_STAGES}] ${icon} ${title}`);
+function createRenderer(): Renderer {
+  // TreeRenderer (the live TTY dashboard) plugs in here; until it exists,
+  // every mode gets the append-only LineRenderer.
+  return new LineRenderer();
 }
 
-/** A one-off status line with no associated work to wait on (e.g. a final summary). */
-export function step(icon: string, title: string, detail?: string): void {
-  console.log(); // blank line for clear separation between stages
-  console.log(styleText('bold', `${icon} ${title}`));
-  if (detail) console.log(styleText('dim', `  ${detail}`));
+function ensureActive(): ActiveRun {
+  if (!active) {
+    const renderer = createRenderer();
+    const tree = new RunTree([], { title: 'run' }, (event) => renderer.onEvent(event, tree));
+    active = { tree, renderer, ended: false };
+  }
+  return active;
+}
+
+/** Starts a new run display. Replaces any previous run's tree (each CLI invocation begins at most one). */
+export function beginRun(skeleton: StepSeed[], header: { title: string; worktreeShortId?: string }): void {
+  const renderer = createRenderer();
+  const tree = new RunTree(skeleton, header, (event) => renderer.onEvent(event, tree));
+  active = { tree, renderer, ended: false };
+  lastStepId = undefined;
+}
+
+/**
+ * Settles the run display into its terminal status. Idempotent: only the
+ * first call paints, so error paths can call endRun('failed') defensively
+ * without stomping an earlier, more specific verdict.
+ */
+export function endRun(status: Exclude<RunStatus, 'running'>, detail?: string): void {
+  const run = ensureActive();
+  if (run.ended) return;
+  run.ended = true;
+  run.tree.setHeader({ status });
+  run.renderer.stop(status, detail, run.tree);
+}
+
+/** Adds a step that wasn't in the skeleton — the watch loop's fix/rebase attempts, conflict resolution, squash. */
+export function addDynamicStep(parentId: string | undefined, id: string, label: string, detail = ''): void {
+  ensureActive().tree.add(parentId, { id, label, detail });
+}
+
+/** Marks a step running without tying it to a single task closure — for steps whose phases span several calls (see runPhase). */
+export function startStep(id: string, patch: { detail?: string; attempt?: number; maxAttempts?: number } = {}): void {
+  lastStepId = id;
+  ensureActive().tree.start(id, patch);
+}
+
+export function finishStep(id: string, status: 'done' | 'failed' = 'done', patch: { detail?: string } = {}): void {
+  ensureActive().tree.finish(id, status, patch);
+}
+
+export function updateStep(id: string, patch: { detail?: string; attempt?: number; maxAttempts?: number }): void {
+  ensureActive().tree.update(id, patch);
+}
+
+/** Announces a step that did not run this time, and why — a skipped stage stays visible instead of silently vanishing (which reads as a bug, not a choice). */
+export function skipStep(id: string, reason: string): void {
+  ensureActive().tree.finish(id, 'skipped', { detail: reason });
+}
+
+/** Runs one step to completion: running → done, or running → failed + rethrow. */
+export async function runStep<T>(id: string, detail: string, task: () => Promise<T>): Promise<T> {
+  const run = ensureActive();
+  lastStepId = id;
+  run.tree.start(id, { detail });
+  try {
+    const result = await task();
+    run.tree.finish(id, 'done');
+    return result;
+  } catch (error) {
+    run.tree.finish(id, 'failed');
+    throw error;
+  }
+}
+
+/**
+ * Runs one phase of an already-running step (a fix attempt's agent turn,
+ * local verify, push, ...), mutating the step's detail rather than creating
+ * grandchildren — the tree stays one row per attempt, as the dashboard
+ * renders it. Failure marks the whole step failed and rethrows; success
+ * leaves it running for the next phase (the caller finishes it).
+ */
+export async function runPhase<T>(id: string, detail: string, task: () => Promise<T>): Promise<T> {
+  const run = ensureActive();
+  const node = run.tree.get(id);
+  if (!node || node.status !== 'running') {
+    startStep(id, { detail });
+  } else {
+    run.tree.update(id, { detail });
+  }
+  try {
+    return await task();
+  } catch (error) {
+    run.tree.finish(id, 'failed');
+    throw error;
+  }
+}
+
+/** Updates the header line: the run's display name (once intent names the branch) and the worktree short id. */
+export function setRunHeader(patch: { title?: string; worktreeShortId?: string }): void {
+  ensureActive().tree.setHeader(patch);
+}
+
+/** Folds a resumed run's persisted token total into the header figure, so the dashboard shows the whole run's spend, not just this process's share. */
+export function seedRunTokens(tokens: number): void {
+  ensureActive().tree.seedTokens(tokens);
+}
+
+/** A bold one-off announcement outside any step (adopting a branch, pipeline failed, ...). */
+export function announce(text: string, detail?: string): void {
+  const run = ensureActive();
+  run.renderer.log('');
+  run.renderer.log(styleText('bold', text));
+  if (detail) run.renderer.log(styleText('dim', `  ${detail}`));
 }
 
 /**
@@ -66,23 +164,12 @@ export function step(icon: string, title: string, detail?: string): void {
  * otherwise a multi-line value would break out of the "one dim line" format.
  */
 export function note(text: string): void {
-  console.log(styleText('dim', `  ${text.replace(/\s*\n\s*/g, ' ')}`));
+  ensureActive().renderer.log(styleText('dim', `  ${text.replace(/\s*\n\s*/g, ' ')}`));
 }
 
 /** Like note(), but colors the text by risk level (green/yellow/red for low/medium/high). */
 export function noteRisk(risk: RiskLevel, reason: string): void {
-  console.log(styleText('dim', '  ') + styleText(RISK_COLOR[risk], `risk: ${risk} — ${reason.replace(/\s*\n\s*/g, ' ')}`));
-}
-
-/**
- * Announces a numbered stage that did not run this time, and why, so the
- * printed sequence stays gap-free instead of a conditional stage silently
- * vanishing from between its neighbors (which reads as a bug, not a choice).
- */
-export function skipStep(stage: number | string, icon: string, title: string, reason: string): void {
-  console.log();
-  console.log(styleText('dim', `[${stage}/${TOTAL_STAGES}] ${icon} ${title} (skipped)`));
-  console.log(styleText('dim', `  ${reason.replace(/\s*\n\s*/g, ' ')}`));
+  ensureActive().renderer.log(styleText('dim', '  ') + styleText(RISK_COLOR[risk], `risk: ${risk} — ${reason.replace(/\s*\n\s*/g, ' ')}`));
 }
 
 /**
@@ -91,16 +178,19 @@ export function skipStep(stage: number | string, icon: string, title: string, re
  * or a CI failure was fixed can look it up afterwards (`claude --resume <id>`
  * or, for Copilot, `copilot --resume <id>` — see agent/copilot.ts on why that
  * id is one we assigned rather than one the CLI reported). Session history is
- * scoped to the working directory the CLI ran in (see agent/claude.ts:
- * `cwd: opts.cwd` is always the worktree, never the caller's own repo), so
- * `--resume` only finds the session when run from that same worktree path —
- * printing the path lets the user `cd` there first. This function has no way
- * to know which adapter produced `result` (`AgentInvokeResult` doesn't carry
- * one), so it names the path rather than assembling a `claude`/`copilot`
- * command that would guess wrong half the time. A no-op when the adapter
- * didn't return a sessionId, which keeps this safe to call unconditionally.
+ * scoped to the working directory the CLI ran in, so `--resume` only finds
+ * the session when run from that same worktree path — printing the path lets
+ * the user `cd` there first. A no-op when the adapter didn't return a
+ * sessionId, which keeps this safe to call unconditionally.
+ *
+ * Also attributes the turn's token spend (when the adapter reported any) to
+ * the step that ran it, which is what feeds the per-step and header token
+ * figures on the dashboard.
  */
 export function noteSession(result: AgentInvokeResult, worktreePath: string): void {
+  if (result.usage?.totalTokens !== undefined && lastStepId !== undefined) {
+    ensureActive().tree.addTokens(lastStepId, result.usage.totalTokens);
+  }
   if (!result.sessionId) return;
   const duration = result.durationMs !== undefined ? ` — ${(result.durationMs / 1000).toFixed(1)}s` : '';
   note(`agent session: ${result.sessionId}${duration} — cd ${worktreePath} to resume it there`);
@@ -111,48 +201,4 @@ export function reportAgentInvocation(result: AgentInvokeResult, worktreePath: s
   const text = result.text;
   note(`agent: ${text.slice(0, 300).trim()}${text.length > 300 ? '…' : ''}`);
   noteSession(result, worktreePath);
-}
-
-/**
- * Runs one numbered workflow stage with a colored, iconed title, then a live
- * status line beneath it while `task` runs: a spinner plus a counting-up
- * elapsed timer in a TTY, settling into a green checkmark or red cross with
- * the total duration on completion. Falls back to a single static print when
- * stdout isn't a TTY (CI logs, redirected files) since carriage-return
- * spinners would just garble those.
- */
-export async function runStep<T>(stage: number | string, icon: string, title: string, detail: string, task: () => Promise<T>): Promise<T> {
-  console.log(); // blank line for clear separation between stages
-  console.log(stageHeader(stage, icon, title));
-
-  if (!process.stdout.isTTY) {
-    console.log(styleText('dim', `  ${detail}`));
-    return task();
-  }
-
-  const start = Date.now();
-  let frame = 0;
-  const render = (glyph: string, color: 'dim' | 'green' | 'red' = 'dim'): void => {
-    const line = `  ${glyph} ${detail} (${formatElapsed(Date.now() - start)})`;
-    const width = process.stdout.columns ?? line.length;
-    process.stdout.write(`\r\x1b[K${styleText(color, truncateToWidth(line, width))}`);
-  };
-  render(SPINNER_FRAMES[0]);
-  const timer = setInterval(() => {
-    frame = (frame + 1) % SPINNER_FRAMES.length;
-    render(SPINNER_FRAMES[frame]);
-  }, SPINNER_INTERVAL_MS);
-
-  try {
-    const result = await task();
-    clearInterval(timer);
-    render('✓', 'green');
-    process.stdout.write('\n');
-    return result;
-  } catch (error) {
-    clearInterval(timer);
-    render('✗', 'red');
-    process.stdout.write('\n');
-    throw error;
-  }
 }
