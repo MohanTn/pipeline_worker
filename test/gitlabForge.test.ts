@@ -62,6 +62,41 @@ test('hasMergeConflicts is true for GitLab "cannot_be_merged" (confirmed conflic
   }
 });
 
+// isMrMerged gates syncTargetBranch.ts's local fast-forward — reading
+// "closed" (closed-without-merging) as merged would pull nothing and reading
+// "merged" as unmerged would always time the sync out.
+function startStateStub(state: string): Promise<{ server: Server; port: number }> {
+  const server = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ state }));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port });
+    });
+  });
+}
+
+test('isMrMerged is true only for GitLab state "merged", not "closed"', async () => {
+  for (const [state, expected] of [
+    ['merged', true],
+    ['closed', false],
+    ['opened', false],
+  ] as const) {
+    const { server, port } = await startStateStub(state);
+    try {
+      await withGitlabEnv(async () => {
+        const forge = createGitlabForge(gitlabConfig(`http://127.0.0.1:${port}`));
+        assert.equal(await forge.isMrMerged(1), expected, `state "${state}"`);
+      });
+    } finally {
+      server.close();
+    }
+  }
+});
+
 test('updateMrDescription PUTs /merge_requests/{iid} with the new description', async () => {
   const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
   const server = http.createServer((req, res) => {

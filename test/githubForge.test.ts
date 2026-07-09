@@ -99,6 +99,41 @@ test('hasMergeConflicts is true for GitHub "dirty" (confirmed conflict)', async 
   }
 });
 
+// isMrMerged gates syncTargetBranch.ts's local fast-forward — GitHub's PR
+// `state` reads "closed" for both merged and closed-without-merging, so only
+// the `merged` flag can answer this.
+function startMergedStub(merged: boolean | undefined): Promise<{ server: Server; port: number }> {
+  const server = http.createServer((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ state: 'closed', merged }));
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port });
+    });
+  });
+}
+
+test('isMrMerged is true only when GitHub reports merged: true, even though state is "closed" either way', async () => {
+  for (const [merged, expected] of [
+    [true, true],
+    [false, false],
+    [undefined, false],
+  ] as const) {
+    const { server, port } = await startMergedStub(merged);
+    try {
+      await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+        const forge = createGithubForge(githubConfig());
+        assert.equal(await forge.isMrMerged(1), expected, `merged: ${String(merged)}`);
+      });
+    } finally {
+      server.close();
+    }
+  }
+});
+
 test('updateMrDescription PATCHes /pulls/{iid} with the new body', async () => {
   const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
   const server = http.createServer((req, res) => {

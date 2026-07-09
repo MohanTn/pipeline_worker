@@ -213,6 +213,14 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       return pr.mergeable_state === 'dirty';
     },
 
+    async isMrMerged(mrIid: number): Promise<boolean> {
+      const res = await githubRequest(auth, `/pulls/${mrIid}`);
+      const pr = (await res.json()) as { merged?: boolean };
+      // `merged` is the authoritative flag; `state` alone can't distinguish
+      // merged from closed-without-merging (both read "closed").
+      return pr.merged === true;
+    },
+
     async enableAutoMerge(mrIid: number, mergeMethod: MergeMethod): Promise<void> {
       const prRes = await githubRequest(auth, `/pulls/${mrIid}`);
       const pr = (await prRes.json()) as { node_id: string };

@@ -14,6 +14,7 @@ import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { adoptBranch } from './workflow/adoptBranch.js';
+import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
 import type { ForgeClient } from './forge/types.js';
@@ -62,6 +63,12 @@ async function runResumeWatch(
 ): Promise<void> {
   try {
     await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
+    // Same stage-14 tail as a fresh run (see orchestrate.ts's finalizeRun):
+    // when auto-merge landed the MR/PR, pull the merged result back into the
+    // local target branch so it doesn't sit stale after the run ends.
+    if (state.phase === 'done') {
+      await maybeSyncTargetBranch(forge, config, repoRoot, state.targetBranch, state.mrIid);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');

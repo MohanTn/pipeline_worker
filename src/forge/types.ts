@@ -44,6 +44,15 @@ export interface ForgeClient {
    */
   enableAutoMerge(mrIid: number, mergeMethod: MergeMethod): Promise<void>;
   /**
+   * True once the forge reports the MR/PR as actually merged — GitHub's
+   * `merged` flag on the pull request, GitLab's `state: "merged"`. Used
+   * after enableAutoMerge to detect that the auto-merge really landed, so
+   * the local target branch can be fast-forwarded to include it (see
+   * workflow/syncTargetBranch.ts). A still-open or closed-unmerged MR/PR
+   * reads as false.
+   */
+  isMrMerged(mrIid: number): Promise<boolean>;
+  /**
    * The project's custom CI/CD configuration file path, if one is set
    * (GitLab's "CI/CD configuration file" project setting) — used by
    * watchPipeline.ts's hasCiConfig to recognize CI as configured even when

@@ -51,6 +51,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     },
     createMrNote: async () => ({ id: 1 }),
     hasMergeConflicts: async () => false,
+    isMrMerged: async () => false,
     ...overrides,
   };
 }

@@ -133,6 +133,14 @@ export function createGitlabForge(config: PipelineWorkerConfig): ForgeClient {
       return mr.merge_status === 'cannot_be_merged';
     },
 
+    async isMrMerged(mrIid: number): Promise<boolean> {
+      const res = await gitlabRequest(auth, `/merge_requests/${mrIid}`);
+      const mr = (await res.json()) as { state?: string };
+      // "merged" is a distinct state from "closed" (closed-without-merging)
+      // on GitLab, so the state field alone is authoritative here.
+      return mr.state === 'merged';
+    },
+
     async enableAutoMerge(mrIid: number, mergeMethod: MergeMethod): Promise<void> {
       // GitLab has no per-request "rebase" option on this endpoint — merge
       // strategy besides squash-or-not is a project-level setting, so

@@ -85,6 +85,7 @@ function mrForgeStub(overrides: Partial<ForgeClient>): ForgeClient {
     },
     createMrNote: async () => ({ id: 1 }),
     hasMergeConflicts: async () => false,
+    isMrMerged: async () => false,
     enableAutoMerge: async () => {
       throw new Error('not used');
     },

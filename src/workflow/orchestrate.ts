@@ -13,6 +13,7 @@ import { runChecks } from './runChecks.js';
 import { updateChangelog } from './updateChangelog.js';
 import { openMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
+import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { recordEvent } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
@@ -285,10 +286,11 @@ async function maybeSquashCommits(config: PipelineWorkerConfig, worktreePath: st
   }
 }
 
-/** After watchPipeline settles: report the final outcome and run stage 13's cleanup if it hasn't already run early. */
+/** After watchPipeline settles: report the final outcome, run stage 13's cleanup if it hasn't already run early, then stage 14's local target-branch sync. */
 // fallow-ignore-next-line complexity
 async function finalizeRun(
   finalPhase: RunPhase,
+  forge: ForgeClient,
   config: PipelineWorkerConfig,
   mr: MergeRequest,
   state: RunState,
@@ -319,6 +321,10 @@ async function finalizeRun(
     } else {
       skipStep(13, '🧹', 'Cleaning up your repo', 'config.cleanupOnSuccess is disabled — leaving your changes on the local repo for you to inspect');
     }
+
+    // After cleanup on purpose: with cleanupOnSuccess on, the working tree is
+    // clean by now, so the fast-forward can't collide with leftover local edits.
+    await maybeSyncTargetBranch(forge, config, repoRoot, targetBranch, mr.iid);
   } else if (finalPhase === 'escalated') {
     step('🚨', 'Stopped for human review', `see ${mr.webUrl} for what was tried and why`);
     process.exitCode = 1;
@@ -402,7 +408,7 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       // boundary so TS uses the declared RunPhase return type instead of the
       // 'mr' literal it narrowed state.phase to just before the call.
       const finalPhase = readPhase(state);
-      await finalizeRun(finalPhase, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent);
+      await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');

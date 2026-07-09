@@ -13,18 +13,19 @@ import type { AgentInvokeResult } from '../agent/types.js';
 const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green', medium: 'yellow', high: 'red' };
 
 /**
- * The workflow always runs stages 1-13 in order. Some stages are opt-in or
+ * The workflow always runs stages 1-14 in order. Some stages are opt-in or
  * conditional on runtime state and are announced via skipStep() with a
  * reason instead of running when their condition isn't met (stage 8:
  * config.updateChangelog; stage 11: reused when an MR/PR already exists;
- * stage 13: config.cleanupOnSuccess) — so the numbering stays sequential and
- * a skipped stage is still visible instead of silently vanishing.
+ * stage 13: config.cleanupOnSuccess; stage 14: config.autoMergeOnGreen) —
+ * so the numbering stays sequential and a skipped stage is still visible
+ * instead of silently vanishing.
  *
  * Stage 12 (watching the pipeline, and fixing/escalating on failure) loops
  * and branches internally, so its sub-steps are numbered 12.1-12.7 (see
  * watchPipeline.ts) rather than each claiming the bare "12".
  */
-const TOTAL_STAGES = 13;
+const TOTAL_STAGES = 14;
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_INTERVAL_MS = 80;
