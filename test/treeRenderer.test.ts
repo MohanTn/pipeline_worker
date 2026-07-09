@@ -126,6 +126,26 @@ test('no emitted line exceeds the terminal width, even with a long detail string
   );
 });
 
+test('an undefined columns (piped stdout with no known width) falls back to assuming 80', () => {
+  const out = new FakeStream();
+  out.columns = undefined;
+  const renderer = new TreeRenderer(out);
+  const tree = new RunTree(SKELETON, { title: 'add-login' }, (event) => renderer.onEvent(event, tree));
+  try {
+    renderer.onEvent({ kind: 'header' }, tree);
+    tree.start('capture', { detail: 'a detail exactly seventy characters long to sit right under the eighty column default fallback' });
+    for (const write of out.writes) {
+      for (const line of write.split('\n')) {
+        // eslint-disable-next-line no-control-regex
+        const visible = line.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+        assert.ok(visible.length <= 80, `line exceeded the 80-column fallback: "${visible}" (${visible.length})`);
+      }
+    }
+  } finally {
+    renderer.stop('done', undefined, tree);
+  }
+});
+
 test('each repaint erases exactly as many lines as the previous frame emitted', () => {
   withRig(({ out, tree }) => {
     out.writes = []; // drop the initial-attach frame; measure only the next repaint

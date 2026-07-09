@@ -43,14 +43,23 @@ export function truncateToWidth(text: string, width: number): string {
 }
 
 /**
- * The live tree dashboard needs a real terminal to redraw in place; CI logs,
- * piped output, and PIPELINE_WORKER_PLAIN_OUTPUT (an explicit escape hatch —
- * useful when filing a bug report, or any tool that greps run output) all
- * fall back to the append-only LineRenderer instead.
+ * Pure selection logic, kept separate from createRenderer() so it's testable
+ * without touching the real process.stdout (flipping process.stdout.isTTY in
+ * a test would make a real TreeRenderer hide the cursor on the terminal
+ * actually running the test suite). The live tree dashboard needs a real
+ * terminal to redraw in place; CI logs, piped output, and
+ * PIPELINE_WORKER_PLAIN_OUTPUT (an explicit escape hatch — useful when filing
+ * a bug report, or any tool that greps run output) all fall back to the
+ * append-only LineRenderer instead.
  */
+export function selectRendererMode(isTTY: boolean, plainOutputEnv: string | undefined): 'tree' | 'line' {
+  const plain = ['true', '1'].includes((plainOutputEnv ?? '').toLowerCase());
+  return isTTY && !plain ? 'tree' : 'line';
+}
+
 function createRenderer(): Renderer {
-  const plain = ['true', '1'].includes((process.env.PIPELINE_WORKER_PLAIN_OUTPUT ?? '').toLowerCase());
-  return process.stdout.isTTY && !plain ? new TreeRenderer() : new LineRenderer();
+  const mode = selectRendererMode(process.stdout.isTTY === true, process.env.PIPELINE_WORKER_PLAIN_OUTPUT);
+  return mode === 'tree' ? new TreeRenderer() : new LineRenderer();
 }
 
 /**
