@@ -7,6 +7,7 @@
 import { styleText } from 'node:util';
 import type { RunSession } from '../state/runState.js';
 import type { RunPhase } from '../types.js';
+import { formatTokens } from './format.js';
 
 const PHASE_COLOR: Record<RunPhase, Parameters<typeof styleText>[0]> = {
   diff: 'dim',
@@ -34,12 +35,17 @@ function formatMrColumn(mrIid: number | undefined): string {
   return mrIid !== undefined ? `#${mrIid}` : '-';
 }
 
+/** '-' when the run's adapter never reported usage (pi/copilot, or a pre-token-accounting state file) — absence means unknown, never zero. */
+function formatTokensColumn(totalTokens: number | undefined): string {
+  return (totalTokens !== undefined ? formatTokens(totalTokens) : '-').padEnd(9);
+}
+
 function formatSessionRow(session: RunSession): string {
   const { state } = session;
   const branch = formatBranchColumn(state.branch);
   const mr = formatMrColumn(state.mrIid);
   const attempts = `${String(state.ciFixAttempt).padEnd(6)} ${String(state.conflictAttempt).padEnd(8)}`;
-  return `${branch} ${formatPhase(state.phase)} ${attempts} ${mr.padEnd(7)} ${formatTimestamp(state.updatedAt)}`;
+  return `${branch} ${formatPhase(state.phase)} ${attempts} ${mr.padEnd(7)} ${formatTokensColumn(state.totalTokens)} ${formatTimestamp(state.updatedAt)}`;
 }
 
 /** `pipeline-worker sessions` with no --branch: one line per persisted run, most recently updated first. */
@@ -48,7 +54,7 @@ export function printSessionList(sessions: RunSession[]): void {
     console.log('pipeline-worker: no sessions found in this repo (.pipeline-worker/state/ is empty).');
     return;
   }
-  console.log(styleText('bold', `${'BRANCH'.padEnd(40)} ${'PHASE'.padEnd(9)} CI-FIX CONFLICT MR/PR   UPDATED`));
+  console.log(styleText('bold', `${'BRANCH'.padEnd(40)} ${'PHASE'.padEnd(9)} CI-FIX CONFLICT MR/PR   ${'TOKENS'.padEnd(9)} UPDATED`));
   for (const session of sessions) {
     console.log(formatSessionRow(session));
   }
@@ -67,7 +73,8 @@ function formatOptionalMetaParts(state: RunSession['state']): { mrPart: string; 
 
 function formatHistoryEntry(entry: NonNullable<RunSession['state']['history']>[number]): string {
   const message = entry.level === 'error' ? styleText('red', entry.message) : entry.message;
-  return `  ${LEVEL_ICON[entry.level]} ${styleText('dim', formatTimestamp(entry.at))} ${styleText('dim', `[${entry.phase}]`)} ${message}`;
+  const tokensPart = entry.tokens !== undefined ? ` ${styleText('dim', `· ${formatTokens(entry.tokens)}`)}` : '';
+  return `  ${LEVEL_ICON[entry.level]} ${styleText('dim', formatTimestamp(entry.at))} ${styleText('dim', `[${entry.phase}]`)} ${message}${tokensPart}`;
 }
 
 /** `pipeline-worker sessions --branch <name>`: one run's metadata plus its full step-by-step history. */
@@ -78,8 +85,9 @@ export function printSessionDetail(session: RunSession): void {
   console.log(styleText('bold', `Session: ${state.branch}`));
   console.log(styleText('dim', `  target: ${state.targetBranch}`));
   console.log(styleText('dim', `  worktree: ${state.worktreePath}`));
+  const tokensPart = state.totalTokens !== undefined ? `  tokens: ${formatTokens(state.totalTokens)}` : '';
   console.log(
-    styleText('dim', `  phase: ${state.phase}  ci-fix: ${state.ciFixAttempt}  conflict: ${state.conflictAttempt}${mrPart}${pipelinePart}`),
+    styleText('dim', `  phase: ${state.phase}  ci-fix: ${state.ciFixAttempt}  conflict: ${state.conflictAttempt}${mrPart}${pipelinePart}${tokensPart}`),
   );
   console.log(styleText('dim', `  started: ${formatTimestamp(state.startedAt)}  updated: ${formatTimestamp(state.updatedAt)}`));
 

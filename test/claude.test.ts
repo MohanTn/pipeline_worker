@@ -255,3 +255,63 @@ test('claudeAdapter delivers the prompt over stdin rather than argv, avoiding E2
     rmSync(topDir, { recursive: true, force: true });
   }
 });
+
+/** Runs claudeAdapter against a fake `claude` on PATH that prints `envelope` verbatim, returning the parsed result. */
+async function invokeWithEnvelope(envelope: string): Promise<Awaited<ReturnType<typeof claudeAdapter.invoke>>> {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-claude-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeClaude = join(binDir, 'claude');
+  const envelopeFile = join(topDir, 'envelope.json');
+  writeFileSync(envelopeFile, envelope);
+  writeFileSync(fakeClaude, `#!/bin/sh\ncat > /dev/null\ncat "${envelopeFile}"\n`);
+  chmodSync(fakeClaude, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    return await claudeAdapter.invoke({ prompt: 'hi', cwd: binDir });
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+}
+
+test('claudeAdapter extracts token usage from the CLI envelope, folding cache tokens into inputTokens', { skip: process.platform === 'win32' }, async () => {
+  const result = await invokeWithEnvelope(
+    JSON.stringify({
+      result: 'ok',
+      session_id: 's-1',
+      duration_ms: 1200,
+      usage: { input_tokens: 100, output_tokens: 400, cache_creation_input_tokens: 300, cache_read_input_tokens: 1100 },
+      total_cost_usd: 0.0123,
+      num_turns: 3,
+    }),
+  );
+  assert.equal(result.usage?.inputTokens, 1500);
+  assert.equal(result.usage?.outputTokens, 400);
+  assert.equal(result.usage?.totalTokens, 1900);
+  assert.equal(result.usage?.costUsd, 0.0123);
+  assert.equal(result.usage?.numTurns, 3);
+});
+
+test('claudeAdapter leaves usage undefined when the envelope has none', { skip: process.platform === 'win32' }, async () => {
+  const result = await invokeWithEnvelope(JSON.stringify({ result: 'ok', session_id: 's-1', duration_ms: 5 }));
+  assert.equal(result.text, 'ok');
+  assert.equal(result.usage, undefined);
+});
+
+test('claudeAdapter degrades malformed usage fields to undefined instead of throwing', { skip: process.platform === 'win32' }, async () => {
+  const result = await invokeWithEnvelope(
+    JSON.stringify({ result: 'ok', usage: { input_tokens: 'lots', output_tokens: -3 }, total_cost_usd: 'cheap', num_turns: null }),
+  );
+  assert.equal(result.text, 'ok');
+  assert.equal(result.usage, undefined);
+});
+
+test('claudeAdapter reports partial usage when only one side is a valid count', { skip: process.platform === 'win32' }, async () => {
+  const result = await invokeWithEnvelope(JSON.stringify({ result: 'ok', usage: { output_tokens: 250 } }));
+  assert.equal(result.usage?.inputTokens, undefined);
+  assert.equal(result.usage?.outputTokens, 250);
+  assert.equal(result.usage?.totalTokens, 250);
+});

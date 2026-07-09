@@ -33,7 +33,7 @@ import type { AgentAdapter, AgentInvokeResult } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolvedConflictMarkers } from '../git/commit.js';
 import { runChecks } from './runChecks.js';
 import type { ForgeClient } from '../forge/types.js';
-import { recordEvent } from '../state/runState.js';
+import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { step, runStep, note, reportAgentInvocation } from '../ui/steps.js';
 import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState, CheckResult } from '../types.js';
 
@@ -223,8 +223,8 @@ async function attemptCleanMerge(worktreePath: string, targetBranch: string): Pr
   });
 }
 
-/** Asks the agent to resolve the given conflicted files, returning whichever still have unresolved markers afterward. */
-async function resolveConflictsWithAgent(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[]): Promise<string[]> {
+/** Asks the agent to resolve the given conflicted files, recording the turn's token spend and returning whichever files still have unresolved markers afterward. */
+async function resolveConflictsWithAgent(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[], state: RunState, repoRoot: string): Promise<string[]> {
   note(conflictedFiles.join(', '));
 
   const mcpConfigPath = writeAgentMcpConfig();
@@ -241,6 +241,7 @@ async function resolveConflictsWithAgent(agent: AgentAdapter, worktreePath: stri
     unlinkSync(mcpConfigPath);
   }
   reportAgentInvocation(agentResult, worktreePath);
+  recordAgentTokens(repoRoot, state, 'resolve merge conflicts', agentResult.usage);
 
   return findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
 }
@@ -327,7 +328,7 @@ export async function tryResolveConflicts(
           throw new Error(`git merge origin/${targetBranch} failed for a reason other than conflicts — check the worktree for details`);
         }
 
-        const stillConflicted = await resolveConflictsWithAgent(agent, worktreePath, conflictedFiles);
+        const stillConflicted = await resolveConflictsWithAgent(agent, worktreePath, conflictedFiles, state, repoRoot);
         if (stillConflicted.length > 0) {
           await escalate(
             forge,
@@ -355,6 +356,7 @@ export async function tryResolveConflicts(
         () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), cwd: worktreePath, permissionMode: 'acceptEdits' }),
       );
       reportAgentInvocation(agentResult, worktreePath);
+      recordAgentTokens(repoRoot, state, 'fix local check failure after merge', agentResult.usage);
 
       if (!(await hasChanges(worktreePath))) {
         await escalate(
@@ -467,6 +469,7 @@ export async function runCiFixAttempt(
       unlinkSync(mcpConfigPath);
     }
     reportAgentInvocation(agentResult, worktreePath);
+    recordAgentTokens(repoRoot, state, 'fix CI failure', agentResult.usage);
 
     if (!(await hasChanges(worktreePath))) {
       // Re-pushing an identical tree would never produce a new pipeline; stop here.

@@ -8,7 +8,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import type { RunState } from '../types.js';
+import type { RunHistoryEntry, RunState } from '../types.js';
+import type { AgentUsage } from '../agent/types.js';
 
 /** Caps state.history so a long-running CI-fix loop can't grow the state file unboundedly. */
 const MAX_HISTORY_ENTRIES = 200;
@@ -82,13 +83,31 @@ export function loadRunState(repoRoot: string, branch: string): RunState | undef
  * `state` in place, matching how saveRunState is already called throughout
  * orchestrate.ts/watchPipeline.ts.
  */
-export function recordEvent(repoRoot: string, state: RunState, message: string, level: 'info' | 'error' = 'info'): void {
+export function recordEvent(repoRoot: string, state: RunState, message: string, level: 'info' | 'error' = 'info', tokens?: number): void {
   const now = new Date().toISOString();
   state.startedAt ??= now;
   state.updatedAt = now;
-  const history = [...(state.history ?? []), { at: now, phase: state.phase, level, message }];
+  const entry: RunHistoryEntry = { at: now, phase: state.phase, level, message };
+  if (tokens !== undefined) {
+    entry.tokens = tokens;
+    state.totalTokens = (state.totalTokens ?? 0) + tokens;
+  }
+  const history = [...(state.history ?? []), entry];
   state.history = history.length > MAX_HISTORY_ENTRIES ? history.slice(history.length - MAX_HISTORY_ENTRIES) : history;
   saveRunState(repoRoot, state);
+}
+
+/**
+ * Narrates one agent turn into the run's history, carrying its token spend
+ * when the adapter reported any (see AgentUsage). A no-op when there is no
+ * usage to record: an entry saying "spent unknown tokens" would add noise to
+ * `sessions` without informing anyone — the turn itself is already narrated
+ * by its surrounding step events.
+ */
+export function recordAgentTokens(repoRoot: string, state: RunState, purpose: string, usage: AgentUsage | undefined): void {
+  const tokens = usage?.totalTokens;
+  if (tokens === undefined) return;
+  recordEvent(repoRoot, state, `Agent turn (${purpose})`, 'info', tokens);
 }
 
 export interface RunSession {

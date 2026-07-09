@@ -22,7 +22,7 @@ import { checkoutExistingBranch } from '../git/worktree.js';
 import { commit, hasChanges, mergeBase, stageAll } from '../git/commit.js';
 import { changedFilesSinceRef } from '../git/diff.js';
 import { detectDefaultBranch } from '../git/remote.js';
-import { recordEvent } from '../state/runState.js';
+import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { captureIntent } from './captureIntent.js';
 import { runAndReportChecks, maybeUpdateChangelog } from './orchestrate.js';
 import { openMergeRequest, buildDescription } from './openMergeRequest.js';
@@ -69,7 +69,7 @@ async function adoptWithExistingMr(
     () => diffSinceTarget(worktreePath, existingMr.targetBranch),
   );
 
-  const intent = await runStep(
+  const { intent, usage } = await runStep(
     '5',
     '🧠',
     'Understanding the branch\'s changes',
@@ -84,7 +84,7 @@ async function adoptWithExistingMr(
 
   state.mrIid = existingMr.iid;
   state.phase = 'mr';
-  recordEvent(repoRoot, state, `Overwrote description for existing MR/PR ${existingMr.webUrl}`);
+  recordEvent(repoRoot, state, `Overwrote description for existing MR/PR ${existingMr.webUrl}`, 'info', usage?.totalTokens);
   return state as ResumableRunState;
 }
 
@@ -116,7 +116,7 @@ async function adoptWithoutMr(
     throw new Error(`pipeline-worker: local checks failed for branch ${branch} — aborting before opening a merge request.`);
   }
 
-  const intent = await runStep(
+  const { intent, usage } = await runStep(
     '5',
     '🧠',
     'Understanding the branch\'s changes',
@@ -124,6 +124,7 @@ async function adoptWithoutMr(
     () => captureIntent(agent, files, worktreePath, config.intentModel, baseRef),
   );
   note(`${config.agent} says: ${intent.summary}`);
+  recordAgentTokens(repoRoot, state, 'capture intent for adopted branch', usage);
 
   await maybeUpdateChangelog(config, worktreePath, intent);
   if (await hasChanges(worktreePath)) {

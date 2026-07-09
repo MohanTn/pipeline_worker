@@ -14,7 +14,7 @@ import { updateChangelog } from './updateChangelog.js';
 import { openMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
-import { recordEvent } from '../state/runState.js';
+import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
 import { step, runStep, skipStep, note, noteRisk, reportAgentInvocation } from '../ui/steps.js';
@@ -58,7 +58,7 @@ function buildApplyConflictPrompt(conflictedFiles: string[]): string {
  * nothing to leave an escalation comment on if the agent can't resolve it —
  * fail the run clearly instead so the user can intervene manually.
  */
-async function resolveApplyConflicts(agent: AgentAdapter, worktreePath: string, conflictedFiles: string[]): Promise<void> {
+async function resolveApplyConflicts(agent: AgentAdapter, repoRoot: string, state: RunState, worktreePath: string, conflictedFiles: string[]): Promise<void> {
   const agentResult = await runStep(
     '4.1',
     '🔧',
@@ -67,6 +67,7 @@ async function resolveApplyConflicts(agent: AgentAdapter, worktreePath: string, 
     () => agent.invoke({ prompt: buildApplyConflictPrompt(conflictedFiles), cwd: worktreePath, permissionMode: 'acceptEdits' }),
   );
   reportAgentInvocation(agentResult, worktreePath);
+  recordAgentTokens(repoRoot, state, 'resolve diff-apply conflicts', agentResult.usage);
 
   const stillConflicted = findUnresolvedConflictMarkers(worktreePath, conflictedFiles);
   if (stillConflicted.length > 0) {
@@ -104,6 +105,7 @@ async function captureRunDiff(repoRoot: string): Promise<CapturedDiff | null> {
 async function applyCapturedDiff(
   agent: AgentAdapter,
   repoRoot: string,
+  state: RunState,
   worktreePath: string,
   targetBranch: string,
   diffText: string,
@@ -126,7 +128,7 @@ async function applyCapturedDiff(
   );
   if (applyResult.conflicted) {
     note(`conflict in: ${applyResult.conflictedFiles.join(', ')}`);
-    await resolveApplyConflicts(agent, worktreePath, applyResult.conflictedFiles);
+    await resolveApplyConflicts(agent, repoRoot, state, worktreePath, applyResult.conflictedFiles);
   }
 }
 
@@ -138,8 +140,8 @@ async function captureIntentAndBranch(
   worktreePath: string,
   changedFiles: string[],
   untrackedFiles: string[],
-): Promise<{ intent: CapturedIntent; actualBranchName: string }> {
-  const intent = await runStep(
+): Promise<{ intent: CapturedIntent; intentTokens?: number; actualBranchName: string }> {
+  const { intent, usage } = await runStep(
     5,
     '🧠',
     'Understanding your changes',
@@ -160,7 +162,7 @@ async function captureIntentAndBranch(
   if (actualBranchName !== branchName) {
     note(`"${branchName}" already exists locally — using "${actualBranchName}" instead`);
   }
-  return { intent, actualBranchName };
+  return { intent, intentTokens: usage?.totalTokens, actualBranchName };
 }
 
 /**
@@ -384,11 +386,11 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     });
 
     try {
-      await applyCapturedDiff(agent, repoRoot, worktreePath, targetBranch, diffText, untrackedFiles);
+      await applyCapturedDiff(agent, repoRoot, state, worktreePath, targetBranch, diffText, untrackedFiles);
 
-      const { intent, actualBranchName } = await captureIntentAndBranch(agent, config, options, worktreePath, changedFiles, untrackedFiles);
+      const { intent, intentTokens, actualBranchName } = await captureIntentAndBranch(agent, config, options, worktreePath, changedFiles, untrackedFiles);
       state = { ...state, branch: actualBranchName, phase: 'intent' };
-      recordEvent(repoRoot, state, `Captured intent; renamed to feature branch ${actualBranchName}`);
+      recordEvent(repoRoot, state, `Captured intent; renamed to feature branch ${actualBranchName}`, 'info', intentTokens);
 
       const checks = await runAndReportChecks(config, worktreePath, state, repoRoot);
       if (!checks) return;

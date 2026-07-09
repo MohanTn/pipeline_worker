@@ -31,11 +31,30 @@ export interface AgentInvokeOptions {
   model?: string;
 }
 
+/**
+ * Best-effort token/cost telemetry for one agent invocation. Only adapters
+ * whose CLI reports usage in its output format can fill this in (claude's
+ * `--output-format json` envelope does; pi and copilot print modes expose
+ * nothing, so their results simply omit it). Absence means "unknown", never
+ * "zero" — display code must omit the figure rather than render 0.
+ */
+export interface AgentUsage {
+  /** Prompt-side tokens, with any cache-creation/cache-read tokens folded in. */
+  inputTokens?: number;
+  outputTokens?: number;
+  /** input + output when both are known, else whichever side is known. */
+  totalTokens?: number;
+  costUsd?: number;
+  numTurns?: number;
+}
+
 export interface AgentInvokeResult {
   /** The agent's final text answer (or, when jsonSchema was supplied, its raw JSON string). */
   text: string;
   /** The parsed structured payload, when the adapter's output format returns one. */
   raw?: unknown;
+  /** Token/cost telemetry for this turn, when the adapter's CLI reports it (see AgentUsage). */
+  usage?: AgentUsage;
   /**
    * Identifier for the underlying agent CLI's own session, so a user can look
    * up what it did later — `claude --resume <id>` or, for Copilot (which has

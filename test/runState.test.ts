@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { saveRunState, loadRunState, recordEvent, listRunStates } from '../src/state/runState.js';
+import { saveRunState, loadRunState, recordEvent, recordAgentTokens, listRunStates } from '../src/state/runState.js';
 import type { RunState } from '../src/types.js';
 
 function baseState(overrides: Partial<RunState> = {}): RunState {
@@ -143,6 +143,52 @@ test('listRunStates skips a corrupt state file rather than failing the whole lis
       listRunStates(dir).map((s) => s.branch),
       ['feature/good'],
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recordEvent with tokens stamps the entry and accumulates state.totalTokens across turns', () => {
+  const dir = tmpRepo();
+  try {
+    const state = baseState();
+    recordEvent(dir, state, 'Captured intent', 'info', 1900);
+    recordEvent(dir, state, 'No tokens on this one');
+    recordEvent(dir, state, 'Agent turn (fix CI failure)', 'info', 4400);
+
+    assert.equal(state.totalTokens, 6300);
+    const loaded = loadRunState(dir, state.branch);
+    assert.equal(loaded?.totalTokens, 6300);
+    assert.equal(loaded?.history?.[0].tokens, 1900);
+    assert.equal(loaded?.history?.[1].tokens, undefined);
+    assert.equal(loaded?.history?.[2].tokens, 4400);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('recordAgentTokens records only when the adapter reported usage — silence for pi/copilot, never a zero', () => {
+  const dir = tmpRepo();
+  try {
+    const state = baseState();
+    recordAgentTokens(dir, state, 'resolve merge conflicts', { totalTokens: 1234 });
+    recordAgentTokens(dir, state, 'resolve merge conflicts', undefined);
+    recordAgentTokens(dir, state, 'resolve merge conflicts', { costUsd: 0.5 });
+
+    assert.equal(state.totalTokens, 1234);
+    assert.equal(state.history?.length, 1);
+    assert.match(state.history![0].message, /Agent turn \(resolve merge conflicts\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a state file written before token accounting loads with totalTokens simply absent', () => {
+  const dir = tmpRepo();
+  try {
+    saveRunState(dir, baseState({ branch: 'feature/old' }));
+    const loaded = loadRunState(dir, 'feature/old');
+    assert.equal(loaded?.totalTokens, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
 /** Step 3: ask the configured agent what a diff is *for*, in a structured, reusable shape. */
 
 import { z } from 'zod';
-import type { AgentAdapter } from '../agent/types.js';
+import type { AgentAdapter, AgentUsage } from '../agent/types.js';
 import type { CapturedIntent } from '../types.js';
 import { noteSession } from '../ui/steps.js';
 
@@ -125,7 +125,13 @@ const IntentShape = z.object({
  * is already committed on the branch — `git diff HEAD` there would show
  * nothing.
  */
-export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string, model: string, baseRef = 'HEAD'): Promise<CapturedIntent> {
+/** captureIntent's return: the validated intent plus the turn's best-effort token usage, so the caller can record the spend against its run state. */
+export interface IntentCapture {
+  intent: CapturedIntent;
+  usage?: AgentUsage;
+}
+
+export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string, model: string, baseRef = 'HEAD'): Promise<IntentCapture> {
   const prompt =
     'The following files changed in this git worktree (which is your current working directory):\n' +
     files.map((file) => `- ${file}`).join('\n') +
@@ -149,7 +155,7 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
   });
   noteSession(result, worktreePath);
   try {
-    return IntentShape.parse(JSON.parse(result.text));
+    return { intent: IntentShape.parse(JSON.parse(result.text)), usage: result.usage };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`agent returned an unusable intent payload: ${message}\n--- agent output ---\n${result.text.slice(0, 2000)}`);

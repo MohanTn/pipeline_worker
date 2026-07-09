@@ -58,6 +58,8 @@ export interface RunHistoryEntry {
   phase: RunPhase;
   level: 'info' | 'error';
   message: string;
+  /** Agent tokens spent by the turn this entry narrates. Absent when the adapter reports no usage (pi/copilot) or the entry isn't an agent turn. */
+  tokens?: number;
 }
 
 export interface RunState {
@@ -71,6 +73,8 @@ export interface RunState {
   /** Automated-fix attempts spent resolving merge conflicts with the target branch (watchPipeline.ts's tryResolveConflicts); bounded by config.maxFixAttempts independently of ciFixAttempt, so a long-lived PR needing several trivial rebases can't exhaust the budget meant for real bug-fixing. */
   conflictAttempt: number;
   phase: RunPhase;
+  /** Running sum of every history entry's `tokens` — the run's total agent spend, as far as the adapter reports it. Absent on state files written before this field existed and on runs whose adapter reports no usage. */
+  totalTokens?: number;
   /** ISO 8601 timestamp of when this run was first created. Absent on state files written before this field existed. */
   startedAt?: string;
   /** ISO 8601 timestamp of the most recent state write. Absent on state files written before this field existed. */

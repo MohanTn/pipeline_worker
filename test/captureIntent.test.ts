@@ -70,8 +70,19 @@ test('captureIntent uses a custom baseRef in its diff instructions, for the resu
 });
 
 test('captureIntent accepts a short single-line commitMessage', async () => {
-  const intent = await captureIntent(fakeAgent(JSON.stringify(VALID_PAYLOAD)), ['src/login.ts'], '/tmp', 'haiku');
+  const { intent } = await captureIntent(fakeAgent(JSON.stringify(VALID_PAYLOAD)), ['src/login.ts'], '/tmp', 'haiku');
   assert.equal(intent.commitMessage, 'feat: add login page');
+});
+
+test('captureIntent surfaces the agent turn\'s token usage when the adapter reports it, and omits it when not', async () => {
+  const withUsage: AgentAdapter = {
+    invoke: async () => ({ text: JSON.stringify(VALID_PAYLOAD), usage: { inputTokens: 1500, outputTokens: 400, totalTokens: 1900 } }),
+  };
+  const captured = await captureIntent(withUsage, ['src/login.ts'], '/tmp', 'haiku');
+  assert.equal(captured.usage?.totalTokens, 1900);
+
+  const withoutUsage = await captureIntent(fakeAgent(JSON.stringify(VALID_PAYLOAD)), ['src/login.ts'], '/tmp', 'haiku');
+  assert.equal(withoutUsage.usage, undefined);
 });
 
 test('captureIntent rejects a multi-line commitMessage', async () => {

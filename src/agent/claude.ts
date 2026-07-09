@@ -23,7 +23,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult } from './types.js';
+import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult, type AgentUsage } from './types.js';
 import { writePromptToStdin } from './stdinPrompt.js';
 
 const execFileAsync = promisify(execFile);
@@ -145,14 +145,60 @@ async function runClaudeProcess(args: string[], opts: AgentInvokeOptions): Promi
   }
 }
 
+interface ClaudeEnvelope {
+  result?: string;
+  session_id?: string;
+  duration_ms?: number;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
+  };
+  total_cost_usd?: number;
+  num_turns?: number;
+}
+
+function asCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * Extracts best-effort token telemetry from the CLI's envelope. Cache
+ * creation/read tokens are folded into inputTokens — they are prompt-side
+ * spend either way, and one figure is what the per-step display needs. Any
+ * malformed or missing field degrades to undefined, never a throw: usage is
+ * decoration, and a CLI version that reshapes this part of the envelope must
+ * not break the run.
+ */
+function parseUsage(parsed: ClaudeEnvelope): AgentUsage | undefined {
+  const rawUsage = parsed.usage;
+  const input = asCount(rawUsage?.input_tokens);
+  const cacheCreation = asCount(rawUsage?.cache_creation_input_tokens);
+  const cacheRead = asCount(rawUsage?.cache_read_input_tokens);
+  const inputTokens = input === undefined && cacheCreation === undefined && cacheRead === undefined ? undefined : (input ?? 0) + (cacheCreation ?? 0) + (cacheRead ?? 0);
+  const outputTokens = asCount(rawUsage?.output_tokens);
+  const totalTokens = inputTokens === undefined && outputTokens === undefined ? undefined : (inputTokens ?? 0) + (outputTokens ?? 0);
+  const costUsd = asCount(parsed.total_cost_usd);
+  const numTurns = asCount(parsed.num_turns);
+  if (totalTokens === undefined && costUsd === undefined && numTurns === undefined) return undefined;
+  return { inputTokens, outputTokens, totalTokens, costUsd, numTurns };
+}
+
 function parseClaudeResult(stdout: string, start: number): AgentInvokeResult {
   try {
     // duration_ms/session_id come straight from the CLI's own JSON envelope
     // (see the module comment's `claude -p --output-format json` sample);
     // falling back to our own wall-clock reading only covers the
     // never-observed case where that envelope omits duration_ms.
-    const parsed = JSON.parse(stdout) as { result?: string; session_id?: string; duration_ms?: number };
-    return { text: parsed.result ?? stdout, raw: parsed, sessionId: parsed.session_id, durationMs: parsed.duration_ms ?? Date.now() - start };
+    const parsed = JSON.parse(stdout) as ClaudeEnvelope;
+    return {
+      text: parsed.result ?? stdout,
+      raw: parsed,
+      sessionId: parsed.session_id,
+      durationMs: parsed.duration_ms ?? Date.now() - start,
+      usage: parseUsage(parsed),
+    };
   } catch {
     // --output-format json should always produce parseable JSON; fall back
     // to the raw stream rather than throwing, since the invocation itself succeeded.
