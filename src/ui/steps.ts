@@ -14,6 +14,7 @@
 import { styleText } from 'node:util';
 import { RunTree, type RunStatus, type StepSeed } from './runTree.js';
 import { LineRenderer, type Renderer } from './renderer.js';
+import { TreeRenderer } from './treeRenderer.js';
 import type { RiskLevel } from '../types.js';
 import type { AgentInvokeResult } from '../agent/types.js';
 
@@ -41,26 +42,40 @@ export function truncateToWidth(text: string, width: number): string {
   return `${text.slice(0, width - 1)}…`;
 }
 
+/**
+ * The live tree dashboard needs a real terminal to redraw in place; CI logs,
+ * piped output, and PIPELINE_WORKER_PLAIN_OUTPUT (an explicit escape hatch —
+ * useful when filing a bug report, or any tool that greps run output) all
+ * fall back to the append-only LineRenderer instead.
+ */
 function createRenderer(): Renderer {
-  // TreeRenderer (the live TTY dashboard) plugs in here; until it exists,
-  // every mode gets the append-only LineRenderer.
-  return new LineRenderer();
+  const plain = ['true', '1'].includes((process.env.PIPELINE_WORKER_PLAIN_OUTPUT ?? '').toLowerCase());
+  return process.stdout.isTTY && !plain ? new TreeRenderer() : new LineRenderer();
+}
+
+/**
+ * Constructs a tree wired to a fresh renderer, then fires one synthetic
+ * event so the renderer attaches and paints the initial (all-pending)
+ * frame immediately — the skeleton's nodes are inserted directly in the
+ * RunTree constructor, with no 'add' events of their own, so without this a
+ * TreeRenderer would stay unattached (and crash on the first freeform log()
+ * call) until the first real mutation.
+ */
+function createActiveRun(skeleton: StepSeed[], header: { title: string; worktreeShortId?: string }): ActiveRun {
+  const renderer = createRenderer();
+  const tree = new RunTree(skeleton, header, (event) => renderer.onEvent(event, tree));
+  renderer.onEvent({ kind: 'header' }, tree);
+  return { tree, renderer, ended: false };
 }
 
 function ensureActive(): ActiveRun {
-  if (!active) {
-    const renderer = createRenderer();
-    const tree = new RunTree([], { title: 'run' }, (event) => renderer.onEvent(event, tree));
-    active = { tree, renderer, ended: false };
-  }
+  active ??= createActiveRun([], { title: 'run' });
   return active;
 }
 
 /** Starts a new run display. Replaces any previous run's tree (each CLI invocation begins at most one). */
 export function beginRun(skeleton: StepSeed[], header: { title: string; worktreeShortId?: string }): void {
-  const renderer = createRenderer();
-  const tree = new RunTree(skeleton, header, (event) => renderer.onEvent(event, tree));
-  active = { tree, renderer, ended: false };
+  active = createActiveRun(skeleton, header);
   lastStepId = undefined;
 }
 
