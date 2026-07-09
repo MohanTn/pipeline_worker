@@ -39,7 +39,11 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   intentModel: 'haiku',
   runLintAndTest: true,
   updateChangelog: false,
-  autoMergeOnGreen: false,
+  // Default-on: a run is meant to go all the way to a merged, locally-synced
+  // result unattended (see maybeSyncTargetBranch) — merging remains
+  // best-effort and never fails the run, and PIPELINE_WORKER_AUTO_MERGE_ON_GREEN=false
+  // restores the old opt-in behavior for anyone who wants to merge by hand.
+  autoMergeOnGreen: true,
   mergeMethod: 'squash',
   squashOnMerge: false,
 };
@@ -98,6 +102,24 @@ function resolveProjectId(value: string | undefined, fallback: number | string):
   return Number.isFinite(num) && num > 0 ? num : value;
 }
 
+/**
+ * squashOnMerge force-pushes a collapsed history onto the branch after CI is
+ * green; with autoMergeOnGreen also on, the forge may already have merged
+ * (and possibly deleted) that branch via its own webhook before the squash
+ * push runs — see maybeSquashCommits, which reduces that race to a low-risk
+ * note rather than failing the run. Surfacing it here too, at config load
+ * time, means the user sees it before the run even starts.
+ */
+function warnIfSquashRacesAutoMerge(autoMergeOnGreen: boolean, squashOnMerge: boolean): void {
+  if (autoMergeOnGreen && squashOnMerge) {
+    console.error(
+      'Warning: PIPELINE_WORKER_SQUASH_ON_MERGE is enabled alongside PIPELINE_WORKER_AUTO_MERGE_ON_GREEN — ' +
+        'the forge may merge (and delete) the branch before the squash push runs. This is best-effort and will ' +
+        'not fail the run, but the squash may silently no-op.',
+    );
+  }
+}
+
 /** Warns once when no toolchain was auto-detected and none of the build/lint/test env overrides are set — checks will otherwise silently be skipped. */
 // fallow-ignore-next-line complexity
 function warnIfToolchainUndetected(repoRoot: string, detected: ReturnType<typeof detectChecks>): void {
@@ -150,6 +172,9 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
   warnIfToolchainUndetected(repoRoot, detected);
 
   const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE;
+  const autoMergeOnGreen = boolean(process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN, DEFAULT_CONFIG.autoMergeOnGreen);
+  const squashOnMerge = boolean(process.env.PIPELINE_WORKER_SQUASH_ON_MERGE, DEFAULT_CONFIG.squashOnMerge);
+  warnIfSquashRacesAutoMerge(autoMergeOnGreen, squashOnMerge);
 
   return {
     agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, DEFAULT_CONFIG.agent),
@@ -167,8 +192,8 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
     runLintAndTest: boolean(process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
     updateChangelog: boolean(process.env.PIPELINE_WORKER_UPDATE_CHANGELOG, DEFAULT_CONFIG.updateChangelog),
-    autoMergeOnGreen: boolean(process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN, DEFAULT_CONFIG.autoMergeOnGreen),
+    autoMergeOnGreen,
     mergeMethod: pickName<MergeMethod>(process.env.PIPELINE_WORKER_MERGE_METHOD, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
-    squashOnMerge: boolean(process.env.PIPELINE_WORKER_SQUASH_ON_MERGE, DEFAULT_CONFIG.squashOnMerge),
+    squashOnMerge,
   };
 }

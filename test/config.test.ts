@@ -198,6 +198,56 @@ test('PIPELINE_WORKER_MAX_FIX_ATTEMPTS overrides the default, and an invalid val
   });
 });
 
+test('loadConfig defaults autoMergeOnGreen to true — a run is meant to reach a merged, locally-synced result unattended', () => {
+  withTempDir((dir) => {
+    assert.equal(loadConfig(dir).autoMergeOnGreen, true);
+  });
+});
+
+test('PIPELINE_WORKER_AUTO_MERGE_ON_GREEN=false restores the opt-in (manual-merge) behavior', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN = 'false';
+    assert.equal(loadConfig(dir).autoMergeOnGreen, false);
+  });
+});
+
+test('loadConfig defaults squashOnMerge to false', () => {
+  withTempDir((dir) => {
+    assert.equal(loadConfig(dir).squashOnMerge, false);
+  });
+});
+
+test('loadConfig warns when squashOnMerge is enabled alongside the default-on autoMergeOnGreen', () => {
+  withTempDir((dir) => {
+    const originalError = console.error;
+    const warnings: string[] = [];
+    console.error = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+    try {
+      process.env.PIPELINE_WORKER_SQUASH_ON_MERGE = 'true';
+      loadConfig(dir);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(warnings.some((w) => w.includes('SQUASH_ON_MERGE') && w.includes('AUTO_MERGE_ON_GREEN')));
+  });
+});
+
+test('loadConfig does not warn when squashOnMerge is enabled with auto-merge explicitly turned off', () => {
+  withTempDir((dir) => {
+    const originalError = console.error;
+    const warnings: string[] = [];
+    console.error = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+    try {
+      process.env.PIPELINE_WORKER_SQUASH_ON_MERGE = 'true';
+      process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN = 'false';
+      loadConfig(dir);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(!warnings.some((w) => w.includes('SQUASH_ON_MERGE')));
+  });
+});
+
 test('env vars set forge, github.repo, and pollIntervalSeconds', () => {
   withTempDir((dir) => {
     process.env.PIPELINE_WORKER_FORGE = 'github';

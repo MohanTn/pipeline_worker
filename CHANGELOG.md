@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- **Behavior change:** `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN` now defaults to `true` (was `false`). A `pipeline-worker run` now goes all the way to a merged PR/MR with your local target branch fast-forwarded, unattended, instead of stopping at "CI is green, merge it yourself." This remains best-effort — a forge that rejects auto-merge (required approvals, feature disabled, ...) leaves the run to finish normally and you merge manually, exactly as before. Set `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN=false` to restore the previous default. Enabling `PIPELINE_WORKER_SQUASH_ON_MERGE` alongside the new default now prints a warning at startup, since the forge may merge (and delete) the branch before the squash push runs.
+
 ### Fixed
 
 - Added truncateToWidth() utility function to prevent spinner detail text from exceeding terminal width, preventing unwanted line wrapping. Integrated into runStep() render function to apply terminal-width-aware truncation.
