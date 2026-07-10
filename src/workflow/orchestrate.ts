@@ -383,12 +383,12 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     try {
       await applyCapturedDiff(agent, repoRoot, state, worktreePath, targetBranch, diffText, untrackedFiles);
 
+      const checks = await runAndReportChecks(config, worktreePath, state, repoRoot);
+      if (!checks) return;
+
       const { intent, intentTokens, actualBranchName } = await captureIntentAndBranch(agent, config, options, worktreePath, changedFiles, untrackedFiles);
       state = { ...state, branch: actualBranchName, phase: 'intent' };
       recordEvent(repoRoot, state, `Captured intent; renamed to feature branch ${actualBranchName}`, 'info', intentTokens);
-
-      const checks = await runAndReportChecks(config, worktreePath, state, repoRoot);
-      if (!checks) return;
 
       await maybeUpdateChangelog(config, worktreePath, intent);
 
