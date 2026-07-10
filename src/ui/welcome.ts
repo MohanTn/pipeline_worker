@@ -1,10 +1,15 @@
 /** Prints a one-time banner summarizing this run's configuration before any workflow stage starts. */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { styleText } from "node:util";
 import { getGitUser } from "../git/commit.js";
+import { boxHeader, boxBullet, boxBottom, boxTop } from "./format.js";
 import type { PipelineWorkerConfig } from "../types.js";
 
-const RULE_WIDTH = 60;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as { name: string; version: string };
 
 export function repositoryUrl(config: PipelineWorkerConfig): string {
   if (config.forge === "github") {
@@ -35,22 +40,23 @@ export async function printWelcome(
     ["Forge", config.forge],
     ["Repository", repositoryUrl(config)],
     [
-      "Git user",
+      "Git User",
       user.name && user.email
         ? `${user.name} <${user.email}>`
         : "(not configured)",
     ],
   ];
-  const labelWidth = Math.max(...rows.map(([label]) => label.length));
-  const rule = styleText("cyan", "─".repeat(RULE_WIDTH));
 
-  console.log(rule);
-  console.log(
-    styleText(["bold", "cyan"], "  🚀 pipeline-worker - By Mohan Talkad:"),
-  );
-  console.log(rule);
+  console.log(boxTop());
+  const title = `🚀 PIPELINE WORKER v${pkg.version} • By Mohan Talkad`;
+  const padding = Math.max(0, 98 - title.length);
+  const titleLine = `│ ${styleText("bold", title)}${" ".repeat(padding)}│`;
+  console.log(titleLine);
+  console.log(boxBottom());
+
   for (const [label, value] of rows) {
-    console.log(`  ${styleText("cyan", label.padEnd(labelWidth))}  ${value}`);
+    console.log(boxBullet(label, value, 2));
   }
-  console.log(rule);
+
+  console.log("");
 }

@@ -15,7 +15,7 @@
  */
 
 import { styleText } from 'node:util';
-import { formatTokens } from './format.js';
+import { formatTokens, boxHeader, boxBottom, boxTop } from './format.js';
 import type { RunStatus, RunTree, StepNode, TreeEvent } from './runTree.js';
 
 export interface Renderer {
