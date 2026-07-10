@@ -15,6 +15,7 @@ import { styleText } from 'node:util';
 import { RunTree, type RunStatus, type StepSeed } from './runTree.js';
 import { LineRenderer, type Renderer } from './renderer.js';
 import { TreeRenderer } from './treeRenderer.js';
+import { boxHeader, formatBulletBlock } from './format.js';
 import type { RiskLevel } from '../types.js';
 import type { AgentInvokeResult } from '../agent/types.js';
 
@@ -225,4 +226,33 @@ export function reportAgentInvocation(result: AgentInvokeResult, worktreePath: s
   const text = result.text;
   note(`agent: ${text.slice(0, 300).trim()}${text.length > 300 ? '…' : ''}`);
   noteSession(result, worktreePath);
+}
+
+/** Outputs a formatted section header with title and emoji. */
+export function sectionHeader(title: string, emoji: string): void {
+  const run = ensureActive();
+  for (const line of boxHeader(title, emoji)) {
+    run.renderer.log(line);
+  }
+}
+
+/** Outputs a formatted section with header, bullet points, and spacing. */
+export function outputSection(
+  title: string,
+  emoji: string,
+  items: Array<{ label: string; value: string; wrap?: boolean }>,
+): void {
+  const run = ensureActive();
+  for (const line of boxHeader(title, emoji)) {
+    run.renderer.log(line);
+  }
+  for (const line of formatBulletBlock(items)) {
+    run.renderer.log(line);
+  }
+  run.renderer.log('');
+}
+
+/** Outputs a section footer (blank line for spacing). */
+export function sectionFooter(): void {
+  ensureActive().renderer.log('');
 }
