@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { changedFilesSinceRef } from '../src/git/diff.js';
+import { changedFilesSinceRef, captureDiff } from '../src/git/diff.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,6 +48,31 @@ test('changedFilesSinceRef returns an empty array when there is nothing new sinc
     await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
 
     assert.deepEqual(await changedFilesSinceRef(dir, 'HEAD'), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('captureDiff counts modified and deleted tracked files separately from untracked new files', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-capturediff-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+    writeFileSync(join(dir, 'edit.txt'), 'original\n');
+    writeFileSync(join(dir, 'remove.txt'), 'gone\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
+
+    writeFileSync(join(dir, 'edit.txt'), 'changed\n');
+    rmSync(join(dir, 'remove.txt'));
+    writeFileSync(join(dir, 'new.txt'), 'untracked\n');
+
+    const result = await captureDiff(dir);
+    assert.equal(result.modifiedCount, 1);
+    assert.equal(result.deletedCount, 1);
+    assert.deepEqual(result.untrackedFiles, ['new.txt']);
+    assert.deepEqual(result.changedFiles.sort(), ['edit.txt', 'remove.txt']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

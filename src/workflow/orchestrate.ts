@@ -87,7 +87,7 @@ export interface RunWorkflowOptions {
 
 /** Step 'capture': read the uncommitted diff, or null (already reported) when there's nothing to process. */
 async function captureRunDiff(repoRoot: string): Promise<CapturedDiff | null> {
-  const { diffText, changedFiles, untrackedFiles } = await runStep(
+  const { diffText, changedFiles, untrackedFiles, modifiedCount, deletedCount } = await runStep(
     'capture',
     'reading uncommitted edits and untracked files from your repo',
     () => captureDiff(repoRoot),
@@ -95,8 +95,8 @@ async function captureRunDiff(repoRoot: string): Promise<CapturedDiff | null> {
   if (diffText.trim().length === 0 && untrackedFiles.length === 0) {
     return null;
   }
-  note(`${untrackedFiles.length} new file(s), ${diffText.split('\n').length} line(s) of diff`);
-  return { diffText, changedFiles, untrackedFiles };
+  note(`${untrackedFiles.length} new file(s), ${modifiedCount} modified, ${deletedCount} deleted, ${diffText.split('\n').length} line(s) of diff`);
+  return { diffText, changedFiles, untrackedFiles, modifiedCount, deletedCount };
 }
 
 /** Stages 3-4: sync the worktree with origin, replay the captured diff, and resolve any resulting conflicts. */
