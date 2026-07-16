@@ -1,15 +1,8 @@
-/** Prints a one-time banner summarizing this run's configuration before any workflow stage starts. */
+/** Prints this run's configuration (agent, forge, repository, git user) before any workflow stage starts. */
 
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { styleText } from "node:util";
 import { getGitUser } from "../git/commit.js";
-import { boxHeader, boxBullet, boxBottom, boxTop } from "./format.js";
+import { boxBullet } from "./format.js";
 import type { PipelineWorkerConfig } from "../types.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8')) as { name: string; version: string };
 
 export function repositoryUrl(config: PipelineWorkerConfig): string {
   if (config.forge === "github") {
@@ -47,16 +40,8 @@ export async function printWelcome(
     ],
   ];
 
-  console.log(boxTop());
-  const title = `🚀 PIPELINE WORKER v${pkg.version} • By Mohan Talkad`;
-  const padding = Math.max(0, 98 - title.length);
-  const titleLine = `│ ${styleText("bold", title)}${" ".repeat(padding)}│`;
-  console.log(titleLine);
-  console.log(boxBottom());
-
   for (const [label, value] of rows) {
-    console.log(boxBullet(label, value, 2));
+    console.log(boxBullet(label, value));
   }
-
   console.log("");
 }
