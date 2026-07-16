@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getGitUser, listConflictedFiles, findUnresolvedConflictMarkers, mergeBase } from '../src/git/commit.js';
+import { getGitUser, listConflictedFiles, findUnresolvedConflictMarkers, mergeBase, findRepoRoot } from '../src/git/commit.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -42,6 +42,30 @@ test('getGitUser reads user.name/user.email from the repo config', async () => {
 
     const user = await getGitUser(dir);
     assert.deepEqual(user, { name: 'Test User', email: 'test@example.com' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('findRepoRoot returns the repo root when called from the repo root', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-reporoot-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    const root = await findRepoRoot(dir);
+    assert.equal(root, dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('findRepoRoot returns the repo root when called from a subdirectory', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-subdir-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    const subdir = join(dir, 'subdir', 'nested');
+    await execFileAsync('mkdir', ['-p', subdir]);
+    const root = await findRepoRoot(subdir);
+    assert.equal(root, dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

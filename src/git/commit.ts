@@ -61,6 +61,11 @@ export function findUnresolvedConflictMarkers(worktreePath: string, files: strin
   return files.filter((file) => CONFLICT_MARKER.test(readFileSync(join(worktreePath, file), 'utf-8')));
 }
 
+export async function findRepoRoot(cwd: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+  return stdout.trim();
+}
+
 export async function currentBranch(cwd: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
   return stdout.trim();

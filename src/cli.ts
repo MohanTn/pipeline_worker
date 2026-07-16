@@ -11,6 +11,7 @@ import { loadConfig } from './config/loader.js';
 import { createForge } from './forge/index.js';
 import { selectAgent } from './agent/index.js';
 import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
+import { findRepoRoot } from './git/commit.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { adoptBranch } from './workflow/adoptBranch.js';
@@ -99,7 +100,8 @@ program
   .action(async (opts: { ticket?: string }) => {
     try {
       await ensureLatestVersion(pkg.name, pkg.version);
-      await runWorkflow(process.cwd(), { ticket: opts.ticket });
+      const repoRoot = await findRepoRoot(process.cwd());
+      await runWorkflow(repoRoot, { ticket: opts.ticket });
     } catch (error) {
       console.error('pipeline-worker run failed:', error instanceof Error ? error.message : error);
       process.exit(1);
@@ -131,7 +133,7 @@ program
   )
   .action(async (opts: { branch: string; target?: string }) => {
     try {
-      const repoRoot = process.cwd();
+      const repoRoot = await findRepoRoot(process.cwd());
       const config = loadConfig(repoRoot);
       const forge = createForge(config);
       const agent = selectAgent(config);
