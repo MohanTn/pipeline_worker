@@ -11,6 +11,8 @@ export interface CapturedDiff {
   diffText: string;
   changedFiles: string[];
   untrackedFiles: string[];
+  modifiedCount: number;
+  deletedCount: number;
 }
 
 /**
@@ -36,19 +38,27 @@ export interface CapturedDiff {
  * scan the full (potentially many-MB, base64-laden) `diffText`.
  */
 export async function captureDiff(repoRoot: string): Promise<CapturedDiff> {
-  const [{ stdout: diffText }, { stdout: nameOnlyOut }, { stdout: statusOut }] = await Promise.all([
+  const [{ stdout: diffText }, { stdout: nameStatusOut }, { stdout: statusOut }] = await Promise.all([
     execFileAsync('git', ['diff', 'HEAD', '--full-index', '--binary'], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 }),
-    execFileAsync('git', ['diff', 'HEAD', '--name-only'], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 }),
+    execFileAsync('git', ['diff', 'HEAD', '--name-status'], { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 }),
     execFileAsync('git', ['status', '--porcelain'], { cwd: repoRoot }),
   ]);
 
-  const changedFiles = nameOnlyOut.split('\n').map((line) => line.trim()).filter((line) => line.length > 0);
+  const changedFiles: string[] = [];
+  let modifiedCount = 0;
+  let deletedCount = 0;
+  for (const line of nameStatusOut.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)) {
+    const [code, ...paths] = line.split('\t');
+    changedFiles.push(paths[paths.length - 1]); // renames carry old+new path; keep the new one
+    if (code.startsWith('M') || code.startsWith('R')) modifiedCount += 1;
+    else if (code.startsWith('D')) deletedCount += 1;
+  }
   const untrackedFiles = statusOut
     .split('\n')
     .filter((line) => line.startsWith('?? '))
     .map((line) => line.slice(3).trim());
 
-  return { diffText, changedFiles, untrackedFiles };
+  return { diffText, changedFiles, untrackedFiles, modifiedCount, deletedCount };
 }
 
 /**

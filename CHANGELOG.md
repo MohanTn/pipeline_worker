@@ -21,6 +21,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Introduces a core diff-management module (src/git/diff.ts) that exports three functions: captureDiff for staged/unstaged changes and untracked files, changedFilesSinceRef for ref-based file queries used by adoptBranch, and resetRepo for cleanup. The orchestrate workflow is updated to import and use these functions. Tests verify diff capture accuracy with real git repos.
 - Implements TreeRenderer for interactive live TTY dashboard with step-tree rendering, terminal-aware truncation, automatic height/width adaptation via step collapsing, comprehensive edge-case tests (narrow terminals, unknown steps, resize handling), and architecture documentation.
 - Introduces box-drawing and text formatting utilities to format.ts, exports new structured output functions from steps.ts, and refactors the welcome banner to use a cleaner box-drawing presentation with version information
 - Live TTY dashboard: on a real terminal, `pipeline-worker run`/`resume` now redraws a header line plus the step tree in place (glyphs for pending/running/done/failed/skipped, durations, best-effort tokens, `attempt N/M`) instead of scrolling a new block per stage — CI logs, piped output, and the new `PIPELINE_WORKER_PLAIN_OUTPUT=true` escape hatch keep the previous append-only narration. A long-running fix/rebase loop that outgrows the terminal height collapses its older attempts into a single `… N earlier attempts` line rather than pushing the live rows off-screen.
