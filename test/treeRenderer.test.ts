@@ -212,15 +212,25 @@ test('stop() paints the final frame, restores the cursor, and further onEvent ca
   });
 });
 
-test('resize drops the stale region bookkeeping and repaints cleanly on the next event', () => {
+test('resize erases the previous frame in place instead of leaving it in scrollback', () => {
   withRig(({ out, tree }) => {
-    out.fireResize();
-    assert.ok(out.writes.some((w) => w === '\n'));
     out.writes = [];
-    tree.start('capture');
-    // No erase-sequence referencing a stale line count that predates the resize.
+    out.fireResize();
+    // Exactly one erase-and-redraw, no stray blank line abandoning the old frame.
     const eraseSequences = out.writes.filter((w) => ERASE_REGION_RE.test(w));
-    assert.ok(eraseSequences.length <= 1);
+    assert.equal(eraseSequences.length, 1);
+    assert.ok(!out.writes.some((w) => w === '\n'));
+
+    // A mouse-drag resize fires many events in quick succession — each one
+    // must still erase-and-redraw in place, never stack up stale frames.
+    out.writes = [];
+    out.fireResize();
+    out.fireResize();
+    out.fireResize();
+    assert.equal(out.writes.filter((w) => ERASE_REGION_RE.test(w)).length, 3);
+
+    tree.start('capture');
+    assert.equal(out.writes.filter((w) => ERASE_REGION_RE.test(w)).length, 4);
   });
 });
 

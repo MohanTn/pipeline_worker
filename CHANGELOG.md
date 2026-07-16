@@ -21,6 +21,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Implements TreeRenderer for interactive live TTY dashboard with step-tree rendering, terminal-aware truncation, automatic height/width adaptation via step collapsing, comprehensive edge-case tests (narrow terminals, unknown steps, resize handling), and architecture documentation.
 - Introduces box-drawing and text formatting utilities to format.ts, exports new structured output functions from steps.ts, and refactors the welcome banner to use a cleaner box-drawing presentation with version information
 - Live TTY dashboard: on a real terminal, `pipeline-worker run`/`resume` now redraws a header line plus the step tree in place (glyphs for pending/running/done/failed/skipped, durations, best-effort tokens, `attempt N/M`) instead of scrolling a new block per stage — CI logs, piped output, and the new `PIPELINE_WORKER_PLAIN_OUTPUT=true` escape hatch keep the previous append-only narration. A long-running fix/rebase loop that outgrows the terminal height collapses its older attempts into a single `… N earlier attempts` line rather than pushing the live rows off-screen.
 - Best-effort agent token accounting: every agent turn's token spend (reported today by the Claude Code CLI's JSON envelope; pi/copilot expose none, and absence is shown as unknown, never zero) is recorded into the run's persisted history and summed into a per-run total. `pipeline-worker sessions` gains a TOKENS column in the list view and per-entry/total token figures in the detail view.

@@ -137,12 +137,14 @@ export class TreeRenderer implements Renderer {
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
   private readonly originalConsole = { log: console.log, error: console.error, warn: console.warn };
+  // Every painted line is pre-truncated to the terminal width (see the file
+  // header), so a resize never changes how many physical rows the region
+  // occupies — renderedLines is still accurate. A plain repaint erases the
+  // old frame and draws the new one in its place, same as any other event;
+  // this used to instead abandon the region and print a fresh block below
+  // it, which meant a mouse-drag resize (many resize events in a row) left
+  // a stack of stale frames behind, appending rather than replacing.
   private readonly onResize = (): void => {
-    // Post-reflow, the terminal may have re-wrapped the old region in ways
-    // cursor math can't undo reliably; abandon it (one junk block stays in
-    // scrollback — the deliberate trade-off) and paint fresh.
-    this.out.write('\n');
-    this.renderedLines = 0;
     this.paint();
   };
   private readonly restoreCursorOnExit = (): void => {

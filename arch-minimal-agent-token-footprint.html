@@ -1,0 +1,1800 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Shared Understanding — Minimal Agent Token Footprint — Intent / Conflict / CI-Fix</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      :root {
+        --accent: #2563eb;
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --text: #1e293b;
+        --text-muted: #64748b;
+        --border: #e2e8f0;
+        --status-draft: #64748b;
+        --status-review: #f59e0b;
+        --status-approved: #16a34a;
+        --wrong: #e11d48;
+        --warn: #b45309;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        line-height: 1.6;
+        color: var(--text);
+        background: var(--bg);
+        min-height: 100vh;
+      }
+
+      nav#toc {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 240px;
+        height: 100vh;
+        background: var(--card-bg);
+        border-right: 1px solid var(--border);
+        overflow-y: auto;
+        z-index: 100;
+        padding: 2rem 1rem;
+      }
+
+      nav#toc .brand {
+        font-weight: bold;
+        font-size: 1.1rem;
+        color: var(--accent);
+        margin-bottom: 2rem;
+        display: block;
+      }
+
+      nav#toc a {
+        display: block;
+        padding: 0.5rem 0.75rem;
+        margin: 0.5rem 0;
+        color: var(--text);
+        text-decoration: none;
+        border-radius: 6px;
+        font-size: 0.95rem;
+        transition: all 0.2s;
+      }
+
+      nav#toc a:hover {
+        background: var(--bg);
+        color: var(--accent);
+      }
+
+      nav#toc a.active {
+        background: var(--accent);
+        color: white;
+        font-weight: 500;
+      }
+
+      main {
+        margin-left: 240px;
+        padding: 3rem 2rem;
+        margin-right: auto;
+      }
+
+      header {
+        margin-bottom: 3rem;
+      }
+
+      header h1 {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+        color: var(--text);
+      }
+
+      header .subtitle {
+        color: var(--text-muted);
+        font-size: 0.95rem;
+      }
+
+      .status-banner {
+        display: flex;
+        align-items: center;
+        gap: 1.5rem;
+        padding: 1rem 1.5rem;
+        border-radius: 12px;
+        margin-bottom: 2rem;
+        font-size: 0.9rem;
+        font-weight: 500;
+      }
+
+      .status-banner.draft {
+        background: rgba(100, 116, 139, 0.1);
+        color: var(--status-draft);
+        border-left: 4px solid var(--status-draft);
+      }
+
+      .status-banner.review {
+        background: rgba(245, 158, 11, 0.1);
+        color: var(--status-review);
+        border-left: 4px solid var(--status-review);
+      }
+
+      .status-banner.approved {
+        background: rgba(22, 163, 74, 0.1);
+        color: var(--status-approved);
+        border-left: 4px solid var(--status-approved);
+      }
+
+      section {
+        margin-bottom: 3rem;
+        scroll-margin-top: 2rem;
+      }
+
+      section h2 {
+        font-size: 1.4rem;
+        margin-bottom: 1.5rem;
+        padding-left: 1rem;
+        border-left: 4px solid var(--accent);
+        color: var(--text);
+      }
+
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1.5rem;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      }
+
+      .card h3 {
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+        color: var(--text);
+      }
+
+      .card h4 {
+        font-size: 1rem;
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+        color: var(--accent);
+      }
+
+      .card h4:first-child {
+        margin-top: 0;
+      }
+
+      .card p {
+        margin-bottom: 1rem;
+        color: var(--text);
+      }
+
+      .card ul,
+      .card ol {
+        margin-left: 1.5rem;
+        margin-bottom: 1rem;
+      }
+
+      .card li {
+        margin-bottom: 0.5rem;
+        color: var(--text);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 1rem;
+      }
+
+      table thead {
+        background: var(--bg);
+        border-bottom: 2px solid var(--border);
+      }
+
+      table th {
+        padding: 1rem;
+        text-align: left;
+        font-weight: 600;
+        color: var(--text);
+        font-size: 0.9rem;
+        white-space: nowrap;
+      }
+
+      table td {
+        padding: 1rem;
+        border-bottom: 1px solid var(--border);
+        color: var(--text);
+        font-size: 0.95rem;
+        white-space: nowrap;
+      }
+
+      table tbody tr:nth-child(even) {
+        background: rgba(100, 116, 139, 0.02);
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin-bottom: 1rem;
+      }
+
+      /* Interactive tables hold sentences, not identifiers: let them wrap. */
+      #u-table td,
+      #oq-table td {
+        white-space: normal;
+        vertical-align: top;
+      }
+
+      #u-table .u-statement {
+        min-width: 320px;
+      }
+
+      #u-table .u-verdict {
+        min-width: 210px;
+      }
+
+      #oq-table td:nth-child(2) {
+        min-width: 260px;
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 0.15rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .badge.src-user {
+        background: rgba(37, 99, 235, 0.12);
+        color: var(--accent);
+      }
+      .badge.src-code {
+        background: rgba(22, 163, 74, 0.12);
+        color: var(--status-approved);
+      }
+      .badge.src-inferred {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--warn);
+      }
+      .badge.src-assumed {
+        background: rgba(225, 29, 72, 0.12);
+        color: #be123c;
+      }
+      .badge.conf-high {
+        background: rgba(22, 163, 74, 0.12);
+        color: var(--status-approved);
+      }
+      .badge.conf-medium {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--warn);
+      }
+      .badge.conf-low {
+        background: rgba(225, 29, 72, 0.12);
+        color: #be123c;
+      }
+      .badge.kind-example {
+        background: rgba(22, 163, 74, 0.12);
+        color: var(--status-approved);
+      }
+      .badge.kind-counter {
+        background: rgba(225, 29, 72, 0.12);
+        color: #be123c;
+      }
+      .badge.tension-badge {
+        background: rgba(245, 158, 11, 0.15);
+        color: var(--warn);
+      }
+
+      .u-evidence {
+        margin-top: 0.35rem;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+      }
+
+      .u-impact {
+        margin-top: 0.25rem;
+        font-size: 0.8rem;
+        color: var(--warn);
+      }
+
+      .priority-flag {
+        margin-top: 0.4rem;
+        display: inline-block;
+        font-size: 0.72rem;
+        font-weight: 700;
+        color: #be123c;
+        background: rgba(225, 29, 72, 0.09);
+        border: 1px solid rgba(225, 29, 72, 0.25);
+        border-radius: 999px;
+        padding: 0.1rem 0.55rem;
+      }
+
+      .fork-hint {
+        margin-top: 0.4rem;
+        font-size: 0.82rem;
+        font-weight: 600;
+        color: var(--accent);
+      }
+
+      .u-hint {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+        margin-bottom: 1rem;
+      }
+
+      /* Verdict buttons (claims + examples) */
+      .verdict-group {
+        display: flex;
+        gap: 0.35rem;
+        margin-bottom: 0.4rem;
+      }
+
+      .verdict-btn {
+        width: 2rem;
+        height: 2rem;
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 0.95rem;
+        line-height: 1;
+        color: var(--text-muted);
+        transition: all 0.15s;
+      }
+
+      .verdict-btn:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      .verdict-btn.v-yes.selected {
+        background: var(--status-approved);
+        border-color: var(--status-approved);
+        color: white;
+      }
+      .verdict-btn.v-partly.selected {
+        background: var(--status-review);
+        border-color: var(--status-review);
+        color: white;
+      }
+      .verdict-btn.v-no.selected {
+        background: var(--wrong);
+        border-color: var(--wrong);
+        color: white;
+      }
+
+      /* Row state colouring (agreed / flagged) for claims */
+      #u-table tbody tr[data-state="agreed"] {
+        background: rgba(22, 163, 74, 0.07);
+      }
+      #u-table tbody tr[data-state="flagged"] {
+        background: rgba(225, 29, 72, 0.07);
+      }
+      #u-table tbody tr[data-priority="high"] td:first-child {
+        box-shadow: inset 3px 0 0 #be123c;
+      }
+
+      /* Fork radio options */
+      .fork-opt,
+      .tension-opt {
+        display: flex;
+        align-items: flex-start;
+        gap: 0.45rem;
+        font-size: 0.88rem;
+        padding: 0.3rem 0.4rem;
+        border-radius: 6px;
+        cursor: pointer;
+        margin-bottom: 0.2rem;
+      }
+      .fork-opt:hover,
+      .tension-opt:hover {
+        background: var(--bg);
+      }
+      .fork-opt input,
+      .tension-opt input {
+        margin-top: 0.28rem;
+      }
+      .fork-neither span {
+        color: var(--text-muted);
+      }
+
+      /* Structured correction options */
+      .u-correction {
+        margin-top: 0.25rem;
+      }
+      .correction-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        align-items: center;
+        margin-bottom: 0.5rem;
+      }
+      .correction-label {
+        font-size: 0.78rem;
+        color: var(--text-muted);
+        margin-right: 0.15rem;
+      }
+      .correction-opt {
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        border-radius: 6px;
+        padding: 0.25rem 0.6rem;
+        font-size: 0.82rem;
+        cursor: pointer;
+        color: var(--text);
+        transition: all 0.15s;
+      }
+      .correction-opt:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .correction-opt.selected {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: white;
+      }
+
+      /* Add-a-claim */
+      .add-claim-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 0.5rem;
+      }
+      .ghost-btn {
+        background: var(--card-bg);
+        border: 1px dashed var(--accent);
+        color: var(--accent);
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .ghost-btn:hover {
+        background: rgba(37, 99, 235, 0.06);
+      }
+      #u-table tbody tr.added-row {
+        background: rgba(37, 99, 235, 0.05);
+      }
+      textarea.added-text {
+        width: 100%;
+        min-width: 260px;
+        min-height: 2.5rem;
+        padding: 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.9rem;
+        color: var(--text);
+        resize: vertical;
+      }
+      .remove-added {
+        background: none;
+        border: none;
+        color: var(--wrong);
+        cursor: pointer;
+        font-size: 0.8rem;
+      }
+      .remove-added:hover {
+        text-decoration: underline;
+      }
+
+      /* Recall / success statement */
+      .recall-card {
+        border-left: 4px solid var(--status-review);
+        background: rgba(245, 158, 11, 0.05);
+      }
+      .recall-card h3 {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      textarea#recall-box {
+        width: 100%;
+        min-height: 4rem;
+        padding: 0.6rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.95rem;
+        color: var(--text);
+        resize: vertical;
+      }
+
+      /* Tensions */
+      .tension-card {
+        border-left: 4px solid var(--status-review);
+      }
+      .tension-head {
+        font-weight: 600;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+      .tension-cols {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1rem;
+        margin-bottom: 1rem;
+      }
+      .tension-col {
+        padding: 0.85rem 1rem;
+        border-radius: 8px;
+        background: var(--bg);
+      }
+      .tension-col.want {
+        border-top: 3px solid var(--accent);
+      }
+      .tension-col.code {
+        border-top: 3px solid var(--wrong);
+      }
+      .tension-col h4 {
+        margin: 0 0 0.4rem 0;
+      }
+      .tension-col p {
+        margin: 0;
+        font-size: 0.92rem;
+      }
+      .tension-rec {
+        font-size: 0.9rem;
+        background: rgba(37, 99, 235, 0.05);
+        border-radius: 8px;
+        padding: 0.6rem 0.85rem;
+        margin-bottom: 1rem;
+      }
+      .tension-resolve {
+        border-top: 1px solid var(--border);
+        padding-top: 0.85rem;
+      }
+      .resolve-label {
+        display: block;
+        font-weight: 600;
+        font-size: 0.88rem;
+        margin-bottom: 0.5rem;
+      }
+      .tension-card[data-choice] {
+        border-left-color: var(--status-approved);
+      }
+
+      /* Acceptance examples */
+      .example-card {
+        border-left: 4px solid var(--status-approved);
+      }
+      .example-card.ex-counter {
+        border-left-color: var(--wrong);
+      }
+      .ex-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.85rem;
+      }
+      .ex-verdict {
+        margin-bottom: 0;
+      }
+      .ex-gwt > div {
+        padding: 0.35rem 0;
+        font-size: 0.93rem;
+        border-bottom: 1px dashed var(--border);
+      }
+      .ex-gwt > div:last-child {
+        border-bottom: none;
+      }
+      .gwt-k {
+        display: inline-block;
+        width: 3.6rem;
+        font-weight: 700;
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+      .ex-refs {
+        margin-top: 0.5rem;
+        font-size: 0.78rem;
+        color: var(--text-muted);
+      }
+      .example-card[data-verdict="yes"] {
+        background: rgba(22, 163, 74, 0.06);
+      }
+      .example-card[data-verdict="no"] {
+        background: rgba(225, 29, 72, 0.06);
+      }
+
+      .mermaid-card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 2rem;
+        margin-bottom: 1.5rem;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 400px;
+        position: relative;
+      }
+
+      .mermaid {
+        display: flex;
+        justify-content: center;
+      }
+
+      .diagram-toggle-btn {
+        position: absolute;
+        top: 0.75rem;
+        right: 0.75rem;
+        width: 2rem;
+        height: 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        color: var(--text-muted);
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+        z-index: 2;
+        transition: all 0.2s;
+      }
+
+      .diagram-toggle-btn:hover {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+
+      .diagram-backdrop {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.6);
+        z-index: 999;
+      }
+
+      .diagram-backdrop.active {
+        display: block;
+      }
+
+      body.diagram-lock {
+        overflow: hidden;
+      }
+
+      .mermaid-card.diagram-maximized {
+        position: fixed;
+        inset: 2rem;
+        z-index: 1000;
+        overflow: auto;
+        box-shadow: 0 25px 70px rgba(0, 0, 0, 0.35);
+      }
+
+      .mermaid-card.diagram-maximized .mermaid {
+        width: 100%;
+        height: 100%;
+      }
+
+      .mermaid-card.diagram-maximized .mermaid svg {
+        width: 100% !important;
+        height: 100% !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+      }
+
+      pre,
+      code {
+        white-space: pre-wrap;
+        word-break: break-all;
+        max-width: 100%;
+        font-family: "Courier New", Courier, monospace;
+      }
+
+      pre {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1rem;
+        overflow-x: auto;
+        margin-bottom: 1rem;
+        font-size: 0.85rem;
+        line-height: 1.4;
+      }
+
+      code {
+        background: rgba(100, 116, 139, 0.1);
+        padding: 0.2rem 0.4rem;
+        border-radius: 4px;
+        color: #e11d48;
+        font-size: 0.9rem;
+      }
+
+      pre code {
+        background: none;
+        padding: 0;
+        color: var(--text);
+      }
+
+      details {
+        margin-bottom: 1.5rem;
+      }
+
+      details summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: var(--accent);
+        padding: 0.75rem;
+        user-select: none;
+        transition: all 0.2s;
+      }
+
+      details summary:hover {
+        background: var(--bg);
+        border-radius: 6px;
+      }
+
+      details[open] summary {
+        margin-bottom: 1rem;
+      }
+
+      details pre {
+        margin-top: 1rem;
+      }
+
+      .approval-gate {
+        background: rgba(22, 163, 74, 0.1);
+        border-left: 4px solid var(--status-approved);
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        color: var(--status-approved);
+        font-weight: 500;
+        margin-top: 2rem;
+      }
+
+      .ai-overview-card {
+        border-left: 4px solid var(--accent);
+        background: rgba(37, 99, 235, 0.04);
+      }
+
+      .copy-qa-btn {
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        padding: 0.5rem 1rem;
+        font-size: 0.85rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+      .copy-qa-btn:hover {
+        opacity: 0.9;
+      }
+      .copy-qa-btn.copied {
+        background: var(--status-approved);
+      }
+
+      textarea.oq-answer,
+      textarea.u-note,
+      textarea.t-note,
+      textarea.ex-note {
+        width: 100%;
+        min-width: 200px;
+        min-height: 3rem;
+        padding: 0.5rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-family: inherit;
+        font-size: 0.9rem;
+        color: var(--text);
+        resize: vertical;
+      }
+      textarea.u-note,
+      textarea.t-note,
+      textarea.ex-note {
+        min-width: 180px;
+        margin-top: 0.35rem;
+      }
+
+      #sync-widget {
+        position: fixed;
+        right: 1.25rem;
+        bottom: 1.25rem;
+        z-index: 500;
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+        padding: 0.9rem 1rem;
+        width: 250px;
+        font-size: 0.85rem;
+      }
+      #sync-widget .sync-title {
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+      }
+      #sync-widget .sync-counts {
+        color: var(--text-muted);
+        margin-bottom: 0.5rem;
+      }
+      #sync-widget .sync-bar {
+        height: 6px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        overflow: hidden;
+        margin-bottom: 0.5rem;
+      }
+      #sync-bar-fill {
+        height: 100%;
+        width: 0;
+        background: var(--status-approved);
+        transition: width 0.2s;
+      }
+      .sync-gate {
+        font-size: 0.8rem;
+        font-weight: 600;
+        margin-bottom: 0.6rem;
+        color: var(--text-muted);
+      }
+      .sync-gate.warn {
+        color: #be123c;
+      }
+      .sync-gate.ok {
+        color: var(--status-approved);
+      }
+      #copy-review-btn {
+        width: 100%;
+      }
+
+      section,
+      .card {
+        overflow-wrap: break-word;
+        word-break: break-word;
+      }
+
+      @media (max-width: 900px) {
+        nav#toc {
+          position: static;
+          width: 100%;
+          height: auto;
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+          padding: 1rem;
+          margin-bottom: 1rem;
+        }
+        nav#toc .brand {
+          display: inline-block;
+          margin-right: 2rem;
+        }
+        nav#toc a {
+          display: inline-block;
+          margin: 0 0.5rem;
+          padding: 0.4rem 0.6rem;
+          font-size: 0.85rem;
+        }
+        main {
+          margin-left: 0;
+          padding: 2rem 1rem;
+        }
+        header h1 {
+          font-size: 1.5rem;
+        }
+        .tension-cols {
+          grid-template-columns: 1fr;
+        }
+        #sync-widget {
+          right: 0.75rem;
+          bottom: 0.75rem;
+          width: 210px;
+          padding: 0.7rem 0.8rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <nav id="toc">
+      <span class="brand">🧠 Understanding</span>
+      <a href="#s-overview">★ At a Glance</a>
+      <a href="#s0">0 · Document Control</a>
+      <a href="#s1">1 · The Concept</a>
+      <a href="#s2">2 · The Code Today</a>
+      <a href="#s3">3 · The Change</a>
+      <a href="#s4">4 · Acceptance Examples</a>
+      <a href="#s5">5 · Understanding Checklist</a>
+      <a href="#s6">6 · Tensions</a>
+      <a href="#s7">7 · Scope</a>
+      <a href="#s8">8 · Open Questions</a>
+      <a href="#s9">9 · Risks</a>
+      <a href="#s10">10 · Implementation Sketch</a>
+    </nav>
+
+    <main>
+      <header>
+        <h1>🧠 Shared Understanding — Minimal Agent Token Footprint — Intent / Conflict / CI-Fix</h1>
+        <p class="subtitle">Cut per-invocation token spend in captureIntent, conflict-resolution, and CI-fix agent turns by narrowing tool allowlists to the essential minimum and suppressing harness-injected system-prompt boilerplate, for both the claude and copilot adapters. · TypeScript ESM · Node &gt;=20.12 · Claude Code CLI 2.1.209 · GitHub Copilot CLI 1.0.70 · src/agent/claude.ts · src/agent/copilot.ts · src/workflow/captureIntent.ts · src/workflow/watchPipeline.ts</p>
+      </header>
+
+      <section id="s-overview">
+        <h2>🤖 At a Glance — Do We Agree on the Goal?</h2>
+        <div class="card ai-overview-card">
+          <h3>My understanding of what you want</h3>
+          <p>You want three specific agent turns — intent capture, merge-conflict resolution, and CI/pipeline-failure fixing — to cost as few tokens as possible on both the <code>claude</code> and <code>copilot</code> adapters. v1 found the crux tension: intent capture is genuinely read-only, but conflict-resolution and CI-fix are edit-and-diagnose loops, so a literal "Read + git diff only" allowlist there would disable them rather than shrink them.</p><p><strong>v2 resolves that for the CI/pipeline-failure stage specifically</strong> (<code>watchPipeline.ts</code>'s <code>runCiFixAttempt</code>): keep its tool access exactly as-is — Edit/Write/Bash plus the forge MCP config — so the agent can still pull the failing pipeline's jobs/logs and actually fix the code. The token saving here comes only from the system-prompt side: trim what Claude Code injects by default, and pass <code>--no-custom-instructions</code> on Copilot to drop AGENTS.md-style repo instructions. Digging into that surfaced a real gap worth flagging honestly: <code>copilot.ts</code> today silently drops the per-run MCP config it's handed (only a console.error warning) because its own code comment says Copilot has no per-invocation MCP flag — but the installed Copilot CLI (1.0.70) does have one, <code>--additional-mcp-config</code>, that the adapter simply isn't using. Until that's wired in, "keep the MCP server so Copilot can pull the pipeline and logs" isn't actually true for Copilot yet, even though it already works for Claude. That's now this doc's most load-bearing open item (T4). The merge-conflict (non-CI) resolution path and the intent-capture stage's own Copilot tool-scoping question are still open — see OQ5 and OQ4.</p>
+        </div>
+        <div class="card recall-card">
+          <h3>✍️ Your turn — success in your own words</h3>
+          <p class="u-hint">
+            Before trusting my summary, write what a correct result looks like
+            to you, in a sentence or two. If your words and mine diverge, that
+            gap is the most important thing on this page. Your text is included
+            in the copied review so I can reconcile the two.
+          </p>
+          <textarea
+            id="recall-box"
+            placeholder="In my words, this is done when…"
+          ></textarea>
+        </div>
+      </section>
+
+      <section id="s0">
+        <h2>0 · Document Control</h2>
+        <div class="status-banner draft">
+          <strong>Status:</strong> DRAFT ·
+          <strong>Version:</strong> v2 ·
+          <strong>Last Updated:</strong> 2026-07-14 ·
+          <strong>Author:</strong> claude-sonnet-5
+        </div>
+
+        <div class="card">
+          <h3>Revision Log</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Version</th>
+                  <th>Date</th>
+                  <th>Summary of Changes</th>
+                  <th>Driven By</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td>v1</td><td>2026-07-14</td><td>First draft from the request to minimize agent token spend in intent-capture/conflict/CI-fix stages.</td><td>First generation</td></tr>
+<tr><td>v2</td><td>2026-07-14</td><td>Resolved T1/T2/T3 for the CI/pipeline-failure stage: keep full tool access + MCP (U13), trim system prompt on Claude, add --no-custom-instructions on Copilot. Surfaced a new gap (T4/U14): copilot.ts currently drops the per-run MCP config entirely, but the installed Copilot CLI&#039;s --additional-mcp-config flag looks like the real fix. Added OQ5 (merge-conflict path scope) and OQ6 (--no-custom-instructions elsewhere).</td><td>User: &quot;for pipeline resolution lets keep the mcp server for the AI can pull the failing pipeline and logs from the pipeline and fix the code, reduce the system prompt here and exclude custom prompt for copilot&quot;</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="approval-gate">
+          <strong>Approval Gate:</strong> Implementation begins only after every
+          high-stakes claim in Section 5 is verdicted, every tension is resolved,
+          the acceptance examples you approve are agreed as binding, and you flip
+          this document to APPROVED. Matching mental models is the deliverable
+          here; code comes later.
+        </div>
+      </section>
+
+      <section id="s1">
+        <h2>1 · The Concept, In My Own Words</h2>
+        <div class='card'><p>Every headless agent turn pipeline-worker runs today pays two fixed costs before it does any useful work: the tool-use system prompt the underlying CLI injects (Claude Code's full default system prompt, or Copilot CLI's built-in agent prompt), and whatever tool-use documentation the CLI generates for every tool in the invocation's allowlist. For three specific turns — figuring out what a diff is for (captureIntent), fixing merge conflicts, and diagnosing/fixing a failed CI pipeline — you want that fixed cost pushed as close to zero as the CLIs allow, on both the claude and copilot adapters.</p><p>Why it matters: these three turns run automatically, on every single run of the tool, often several times per run (the conflict and CI-fix loops can retry up to <code>config.maxFixAttempts</code> times each). Token cost here isn't a one-off — it's a per-invocation multiplier on top of pipeline-worker's baseline usage, and it's the one part of the cost that's pure overhead: none of it goes toward the actual diagnosis or fix. The v2 decision narrows this further for the CI/pipeline-failure stage: the tool budget stays untouched there because the stage cannot do its job without it — only the system-prompt overhead is in play.</p></div>
+      </section>
+
+      <section id="s2">
+        <h2>2 · What the Code Does Today</h2>
+        <div class='card'><p>Today, tool scoping and system-prompt handling both funnel through the shared <code>AgentAdapter</code> interface (<code>src/agent/types.ts</code>), but the two concrete adapters honor different parts of it:</p><ul><li><strong>claude.ts</strong> forwards <code>allowedTools</code> straight to <code>--allowedTools</code>, but never sets any system-prompt flag — every invocation gets Claude Code's full default system prompt on top of the task prompt.</li><li><strong>copilot.ts</strong> always passes <code>--allow-all-tools</code> and ignores <code>allowedTools</code>/<code>model</code> entirely (per its own code comment); it has no way to touch the system prompt at all.</li></ul><p>Only one of the three stages is actually read-only by design: <code>captureIntent.ts</code> sets <code>allowedTools: ['Read','Grep','Glob','Bash(git diff:*)']</code> because it must never mutate the worktree the later apply/commit steps depend on. The other two are edit loops on purpose: <code>orchestrate.ts</code>'s conflict-apply step and <code>watchPipeline.ts</code>'s merge-conflict/CI-fix loops run with <code>permissionMode: 'acceptEdits'</code> and no allowlist, and the CI-fix/merge-conflict turns additionally get an MCP config (<code>writeAgentMcpConfig</code>) so the agent can pull failed-job logs itself — the prompt text never contains the failure content.</p><p><strong>Gap found during review:</strong> that MCP config only actually reaches the agent on the claude adapter (via <code>--mcp-config</code>). <code>copilot.ts</code> drops the same <code>mcpConfigPath</code> argument entirely — it only logs a <code>console.error</code> warning — because Copilot CLI was believed to have no per-invocation MCP flag. Today, under copilot, the forge MCP server is reachable only if a human has separately registered it in the fixed <code>~/.copilot/mcp-config.json</code> file.</p><pre class='mermaid'>flowchart TD
+  CI[captureIntent.ts] -->|allowedTools: Read, Grep, Glob, Bash git diff| SEL{selectAgent}
+  SEL -->|claude| CL[claude.ts buildClaudeArgs]
+  SEL -->|copilot| CO[copilot.ts invoke]
+  CL -->|--allowedTools forwarded, full default system prompt| CLI1[claude CLI]
+  CO -->|--allow-all-tools always, allowedTools ignored, full default system prompt, no override flag| CLI2[copilot CLI]
+
+  OR[orchestrate.ts apply-conflicts] -->|acceptEdits, no allowedTools = full tool set| SEL
+  WP1[watchPipeline.ts merge-conflict loop] -->|acceptEdits, no allowedTools, full tool set| SEL
+  WP2[watchPipeline.ts runCiFixAttempt] -->|acceptEdits, no allowedTools, + forge MCP config| SEL
+  WP2 -.->|MCP config reaches claude CLI via --mcp-config| CLI1
+  WP2 -.->|MCP config silently dropped, warning only| CO</pre></div>
+      </section>
+
+      <section id="s3">
+        <h2>3 · The Change — Before → After</h2>
+        <div class='card'><table><thead><tr><th>Stage</th><th>Today — Claude</th><th>Today — Copilot</th><th>After (v2 resolution where decided)</th></tr></thead><tbody><tr><td>Intent capture</td><td><code>--allowedTools Read Grep Glob "Bash(git diff:*)"</code>; full default system prompt</td><td><code>--allow-all-tools</code> (allowlist ignored); full default system prompt, no override possible</td><td>Claude: same allowlist + <code>--system-prompt</code>/<code>--bare</code> short prompt. Copilot: <code>--available-tools</code> scoping still open (OQ4), <code>--no-custom-instructions</code> still open here (OQ6); built-in prompt floor unchanged (U8)</td></tr><tr><td>Conflict resolution (merge, non-CI)</td><td><code>acceptEdits</code>, full tool set, no MCP</td><td><code>acceptEdits</code>, full tool set (always)</td><td>Open — not addressed by the v2 decision (see OQ5/U2)</td></tr><tr><td>CI / pipeline fix</td><td><code>acceptEdits</code>, full tool set + forge MCP config (works today via <code>--mcp-config</code>)</td><td><code>acceptEdits</code>, full tool set; <code>mcpConfigPath</code> silently dropped (only reachable if pre-registered globally)</td><td><strong>RESOLVED (v2):</strong> tool access unchanged on both adapters (MCP + Edit/Write/Bash retained, U13). Claude's system prompt trimmed (T2). Copilot gets <code>--no-custom-instructions</code> + <code>--additional-mcp-config</code> wired in so MCP actually reaches it (T4, pending verification — E9)</td></tr></tbody></table><pre class='mermaid'>flowchart LR
+  subgraph Claude[Claude adapter — CI-fix, after v2]
+    A1[runCiFixAttempt] -->|Edit/Write/Bash/MCP retained + trimmed --system-prompt| A2[claude CLI]
+  end
+  subgraph Copilot[Copilot adapter — CI-fix, after v2 pending T4]
+    B1[runCiFixAttempt] -->|full tools retained + --no-custom-instructions + --additional-mcp-config| B2[copilot CLI]
+  end</pre></div>
+      </section>
+
+      <section id="s4">
+        <h2>4 · Acceptance Examples — Sign Off the Behaviour</h2>
+        <p class="u-hint">
+          Each example is a concrete input → outcome I believe you want (or, for a
+          counter-example, one that must NOT happen). Mark ✓ if that's the behaviour
+          you expect, ✗ if the outcome is wrong. The ones you ✓ become the binding
+          acceptance criteria the implementation is graded against — this is where
+          understanding turns into something testable.
+        </p>
+        <div class="card example-card ex-example" data-id="E1" data-example="Given the intent-capture step running under the claude adapter with default config; When captureIntent.ts invokes the agent; Then the resolved claude CLI args include --allowedTools Read Grep Glob &quot;Bash(git diff:*)&quot; (no Write/Edit/unscoped Bash) and, after this change, an explicit --system-prompt (or --bare) argument replacing Claude Code&#039;s full default system prompt"><div class="ex-head"><span class="badge kind-example">E1 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> the intent-capture step running under the claude adapter with default config</div><div><span class="gwt-k">When</span> captureIntent.ts invokes the agent</div><div><span class="gwt-k">Then</span> the resolved claude CLI args include --allowedTools Read Grep Glob &quot;Bash(git diff:*)&quot; (no Write/Edit/unscoped Bash) and, after this change, an explicit --system-prompt (or --bare) argument replacing Claude Code&#039;s full default system prompt</div></div><div class="ex-refs">Pins claims: U3, U6, U7</div><textarea class="ex-note" name="exnote-E1" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-counter" data-id="E2" data-example="Given the intent-capture step running under the copilot adapter today (before T3 is resolved); When captureIntent.ts invokes the agent; Then the resolved copilot invocation must NOT be assumed to only allow Read/Grep/Glob/git-diff — it runs with --allow-all-tools regardless of READ_ONLY_TOOLS, so any review or cost estimate assuming parity between the two adapters is wrong until T3 ships"><div class="ex-head"><span class="badge kind-counter">E2 · must NOT happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> the intent-capture step running under the copilot adapter today (before T3 is resolved)</div><div><span class="gwt-k">When</span> captureIntent.ts invokes the agent</div><div><span class="gwt-k">Then</span> the resolved copilot invocation must NOT be assumed to only allow Read/Grep/Glob/git-diff — it runs with --allow-all-tools regardless of READ_ONLY_TOOLS, so any review or cost estimate assuming parity between the two adapters is wrong until T3 ships</div></div><div class="ex-refs">Pins claims: U4</div><textarea class="ex-note" name="exnote-E2" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-example" data-id="E3" data-example="Given a merge-conflict resolution turn inside watchPipeline.ts&#039;s tryResolveConflicts; When the agent is invoked to resolve conflict markers in the merged files; Then the agent must still retain Write/Edit/Bash tool access — findUnresolvedConflictMarkers finds zero remaining markers and stageAll/commit succeed, exactly as today"><div class="ex-head"><span class="badge kind-example">E3 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> a merge-conflict resolution turn inside watchPipeline.ts&#039;s tryResolveConflicts</div><div><span class="gwt-k">When</span> the agent is invoked to resolve conflict markers in the merged files</div><div><span class="gwt-k">Then</span> the agent must still retain Write/Edit/Bash tool access — findUnresolvedConflictMarkers finds zero remaining markers and stageAll/commit succeed, exactly as today</div></div><div class="ex-refs">Pins claims: U2, U9</div><textarea class="ex-note" name="exnote-E3" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-counter" data-id="E4" data-example="Given the CI-fix turn inside runCiFixAttempt, diagnosing a real pipeline.webUrl failure; When the agent is invoked with this change applied; Then it must NOT be stripped of the forge MCP config (mcpConfigPath) or Edit access — without them the agent has no way to see which CI job/log failed (the prompt only contains a URL) and hasChanges(worktreePath) will be false on every attempt, exhausting maxFixAttempts and escalating without ever having attempted a real fix"><div class="ex-head"><span class="badge kind-counter">E4 · must NOT happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> the CI-fix turn inside runCiFixAttempt, diagnosing a real pipeline.webUrl failure</div><div><span class="gwt-k">When</span> the agent is invoked with this change applied</div><div><span class="gwt-k">Then</span> it must NOT be stripped of the forge MCP config (mcpConfigPath) or Edit access — without them the agent has no way to see which CI job/log failed (the prompt only contains a URL) and hasChanges(worktreePath) will be false on every attempt, exhausting maxFixAttempts and escalating without ever having attempted a real fix</div></div><div class="ex-refs">Pins claims: U9, U13</div><textarea class="ex-note" name="exnote-E4" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-example" data-id="E5" data-example="Given the system-prompt-stripping change shipped for the claude adapter; When any of the three stages invoke claude.ts&#039;s buildClaudeArgs for the same worktree/diff as before the change; Then the recorded AgentUsage.inputTokens (via recordAgentTokens in runState.ts) for that turn is measurably lower than the pre-change baseline for an equivalent diff"><div class="ex-head"><span class="badge kind-example">E5 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> the system-prompt-stripping change shipped for the claude adapter</div><div><span class="gwt-k">When</span> any of the three stages invoke claude.ts&#039;s buildClaudeArgs for the same worktree/diff as before the change</div><div><span class="gwt-k">Then</span> the recorded AgentUsage.inputTokens (via recordAgentTokens in runState.ts) for that turn is measurably lower than the pre-change baseline for an equivalent diff</div></div><div class="ex-refs">Pins claims: U6, U7</div><textarea class="ex-note" name="exnote-E5" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-example" data-id="E6" data-example="Given T1 is resolved in favor of stage-appropriate essential tools (this doc&#039;s recommendation, confirmed for CI/pipeline-failure in v2); When comparing the shipped change against today&#039;s baseline; Then captureIntent.ts&#039;s READ_ONLY_TOOLS stays Read/Grep/Glob/Bash(git diff:*) (or is trimmed further if Grep/Glob prove unused), while watchPipeline.ts:480&#039;s runCiFixAttempt invoke call keeps acceptEdits with full tool access + MCP config, unchanged from today&#039;s tool surface"><div class="ex-head"><span class="badge kind-example">E6 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> T1 is resolved in favor of stage-appropriate essential tools (this doc&#039;s recommendation, confirmed for CI/pipeline-failure in v2)</div><div><span class="gwt-k">When</span> comparing the shipped change against today&#039;s baseline</div><div><span class="gwt-k">Then</span> captureIntent.ts&#039;s READ_ONLY_TOOLS stays Read/Grep/Glob/Bash(git diff:*) (or is trimmed further if Grep/Glob prove unused), while watchPipeline.ts:480&#039;s runCiFixAttempt invoke call keeps acceptEdits with full tool access + MCP config, unchanged from today&#039;s tool surface</div></div><div class="ex-refs">Pins claims: U13, T1</div><textarea class="ex-note" name="exnote-E6" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-counter" data-id="E7" data-example="Given a future change that removes the forge MCP config or Edit tool from runCiFixAttempt in the name of saving tokens; When a real CI failure needing an actual code fix occurs; Then the agent must NOT silently produce zero changes on every attempt and burn the entire maxFixAttempts budget before escalating — that wastes more tokens (maxFixAttempts full invocations) than it saves, and is strictly worse than today&#039;s behavior"><div class="ex-head"><span class="badge kind-counter">E7 · must NOT happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> a future change that removes the forge MCP config or Edit tool from runCiFixAttempt in the name of saving tokens</div><div><span class="gwt-k">When</span> a real CI failure needing an actual code fix occurs</div><div><span class="gwt-k">Then</span> the agent must NOT silently produce zero changes on every attempt and burn the entire maxFixAttempts budget before escalating — that wastes more tokens (maxFixAttempts full invocations) than it saves, and is strictly worse than today&#039;s behavior</div></div><div class="ex-refs">Pins claims: T1, U13</div><textarea class="ex-note" name="exnote-E7" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-example" data-id="E8" data-example="Given the copilot adapter is updated per T3 to pass --available-tools/--excluded-tools for stages where narrowing is wanted (e.g. captureIntent, not CI/pipeline-failure); When captureIntent runs under the copilot adapter after that change; Then a manual smoke test (e.g. --log-level debug, or prompting the agent to attempt a Write and observing it get denied) confirms the CLI actually enforces the restriction before this is considered done — the flag existing in --help is not itself proof of enforcement"><div class="ex-head"><span class="badge kind-example">E8 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> the copilot adapter is updated per T3 to pass --available-tools/--excluded-tools for stages where narrowing is wanted (e.g. captureIntent, not CI/pipeline-failure)</div><div><span class="gwt-k">When</span> captureIntent runs under the copilot adapter after that change</div><div><span class="gwt-k">Then</span> a manual smoke test (e.g. --log-level debug, or prompting the agent to attempt a Write and observing it get denied) confirms the CLI actually enforces the restriction before this is considered done — the flag existing in --help is not itself proof of enforcement</div></div><div class="ex-refs">Pins claims: U5, T3</div><textarea class="ex-note" name="exnote-E8" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-example" data-id="E9" data-example="Given copilot.ts is updated to pass mcpConfigPath via --additional-mcp-config @&lt;path&gt; instead of dropping it (T4&#039;s recommended fix); When runCiFixAttempt invokes the agent under the copilot adapter for a real pipeline failure; Then the agent can call the pipeline-worker-forge MCP server&#039;s tools to see the failed job/logs, matching what the claude adapter already gets via --mcp-config, and the run&#039;s escalate() path is no longer hit purely because Copilot couldn&#039;t see why CI failed"><div class="ex-head"><span class="badge kind-example">E9 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> copilot.ts is updated to pass mcpConfigPath via --additional-mcp-config @&lt;path&gt; instead of dropping it (T4&#039;s recommended fix)</div><div><span class="gwt-k">When</span> runCiFixAttempt invokes the agent under the copilot adapter for a real pipeline failure</div><div><span class="gwt-k">Then</span> the agent can call the pipeline-worker-forge MCP server&#039;s tools to see the failed job/logs, matching what the claude adapter already gets via --mcp-config, and the run&#039;s escalate() path is no longer hit purely because Copilot couldn&#039;t see why CI failed</div></div><div class="ex-refs">Pins claims: U14, T4</div><textarea class="ex-note" name="exnote-E9" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-example" data-id="E10" data-example="Given the Claude-side system-prompt trim ships for the CI/pipeline-failure stage (T2&#039;s resolution); When runCiFixAttempt invokes the claude adapter for a reproducible, fixable failure (e.g. a lint error); Then the turn&#039;s recorded AgentUsage.inputTokens (recordAgentTokens, runState.ts) is lower than the pre-change baseline for an equivalent failure, while the agent still successfully fixes it — Edit/Write/Bash/MCP access is unchanged from today"><div class="ex-head"><span class="badge kind-example">E10 · must happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> the Claude-side system-prompt trim ships for the CI/pipeline-failure stage (T2&#039;s resolution)</div><div><span class="gwt-k">When</span> runCiFixAttempt invokes the claude adapter for a reproducible, fixable failure (e.g. a lint error)</div><div><span class="gwt-k">Then</span> the turn&#039;s recorded AgentUsage.inputTokens (recordAgentTokens, runState.ts) is lower than the pre-change baseline for an equivalent failure, while the agent still successfully fixes it — Edit/Write/Bash/MCP access is unchanged from today</div></div><div class="ex-refs">Pins claims: U13, T2</div><textarea class="ex-note" name="exnote-E10" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+<div class="card example-card ex-counter" data-id="E11" data-example="Given copilot.ts is updated per T3/T4 (--no-custom-instructions and --additional-mcp-config wired in) for the CI-fix stage; When the stage&#039;s own task prompt (buildFixPrompt) already tells the agent which forge to use and what pipeline failed; Then --no-custom-instructions must NOT be read as removing pipeline-worker&#039;s own prompt content or MCP tool output — it only drops the target repo&#039;s AGENTS.md-style custom instructions, so the agent still receives everything runCiFixAttempt explicitly hands it"><div class="ex-head"><span class="badge kind-counter">E11 · must NOT happen</span><div class="verdict-group ex-verdict"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Right — this is the behaviour I want">✓</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong outcome">✗</button></div></div><div class="ex-gwt"><div><span class="gwt-k">Given</span> copilot.ts is updated per T3/T4 (--no-custom-instructions and --additional-mcp-config wired in) for the CI-fix stage</div><div><span class="gwt-k">When</span> the stage&#039;s own task prompt (buildFixPrompt) already tells the agent which forge to use and what pipeline failed</div><div><span class="gwt-k">Then</span> --no-custom-instructions must NOT be read as removing pipeline-worker&#039;s own prompt content or MCP tool output — it only drops the target repo&#039;s AGENTS.md-style custom instructions, so the agent still receives everything runCiFixAttempt explicitly hands it</div></div><div class="ex-refs">Pins claims: T2, T3</div><textarea class="ex-note" name="exnote-E11" rows="2" placeholder="What should the outcome be instead?" hidden></textarea></div>
+      </section>
+
+      <section id="s5">
+        <h2>5 · Understanding Checklist — Confirm, Correct, or Fork Each Claim</h2>
+        <div class="card">
+          <p class="u-hint">
+            Each row is one claim I hold about your concept or your code. Mark it
+            ✓ correct, ≈ partly right, or ✗ wrong (and pick the right answer or
+            leave a note). Some rows are <strong>forks</strong> — I read them more
+            than one way, so choose the intended reading. Rows flagged
+            <strong>high stakes</strong> matter most: confirm those first. If I
+            missed something entirely, add it with the button below the table.
+          </p>
+          <div class="table-wrap">
+            <table id="u-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Area</th>
+                  <th>What I Understand</th>
+                  <th>Source</th>
+                  <th>Confidence</th>
+                  <th>Your Verdict</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-id="U1" data-statement="The goal is to reduce per-invocation token cost in three specific agent turns — intent capture (captureIntent.ts), conflict resolution (orchestrate.ts + watchPipeline.ts&#039;s merge-conflict loop), and CI/pipeline-failure fixing (watchPipeline.ts&#039;s runCiFixAttempt) — for both the claude and copilot adapters, via (a) a tighter tool allowlist and (b) removing/replacing the harness-injected system prompt."><td>U1</td><td>Concept</td><td class="u-statement"><div>The goal is to reduce per-invocation token cost in three specific agent turns — intent capture (captureIntent.ts), conflict resolution (orchestrate.ts + watchPipeline.ts&#039;s merge-conflict loop), and CI/pipeline-failure fixing (watchPipeline.ts&#039;s runCiFixAttempt) — for both the claude and copilot adapters, via (a) a tighter tool allowlist and (b) removing/replacing the harness-injected system prompt.</div></td><td><span class="badge src-user">you said</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U1" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U2" data-statement="For the merge-conflict (non-CI) resolution path specifically — orchestrate.ts&#039;s resolveApplyConflicts and watchPipeline.ts&#039;s resolveConflictsWithAgent — separate from the now-decided CI/pipeline-failure path (see U13), does &quot;essential only&quot; mean the same &quot;keep full edit tools, trim system prompt only&quot; treatment, or something stricter?" data-fork="true" data-priority="high"><td>U2</td><td>Change</td><td class="u-statement"><div>For the merge-conflict (non-CI) resolution path specifically — orchestrate.ts&#039;s resolveApplyConflicts and watchPipeline.ts&#039;s resolveConflictsWithAgent — separate from the now-decided CI/pipeline-failure path (see U13), does &quot;essential only&quot; mean the same &quot;keep full edit tools, trim system prompt only&quot; treatment, or something stricter?</div><div class="u-impact">⚠ If wrong: Getting this wrong either leaves conflict resolution unable to edit files, or leaves an unused MCP grant on a turn that never needed it.</div><div class="fork-hint">I can read this more than one way — pick the intended one:</div><div class="priority-flag">⚠ high stakes · confirm first</div></td><td><span class="badge src-inferred">inferred</span></td><td><span class="badge conf-low">low</span></td><td class="u-verdict u-fork"><label class="fork-opt"><input type="radio" name="fork-U2" value="0"><span>Same treatment as CI/pipeline-failure: keep Edit/Write/Bash tool access, trim system prompt only.</span></label><label class="fork-opt"><input type="radio" name="fork-U2" value="1"><span>Stricter: this path doesn&#039;t need forge MCP tools (it&#039;s a local git merge, not a CI diagnosis), so it could lose MCP config access even though it keeps Edit/Write/Bash.</span></label><label class="fork-opt fork-neither"><input type="radio" name="fork-U2" value="neither"><span>neither — I'll explain</span></label><textarea class="u-note" name="note-U2" rows="2" placeholder="The right reading is…" hidden></textarea></td></tr>
+<tr data-id="U3" data-statement="captureIntent.ts already restricts the claude adapter to exactly Read/Grep/Glob/&quot;Bash(git diff:*)&quot; via allowedTools, forwarded to claude&#039;s --allowedTools flag."><td>U3</td><td>Code</td><td class="u-statement"><div>captureIntent.ts already restricts the claude adapter to exactly Read/Grep/Glob/&quot;Bash(git diff:*)&quot; via allowedTools, forwarded to claude&#039;s --allowedTools flag.</div><div class="u-evidence">📎 src/workflow/captureIntent.ts:20,148-155; src/agent/claude.ts:113-114</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U3" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U4" data-statement="The copilot adapter never forwards allowedTools to the CLI — it always runs with --allow-all-tools, so captureIntent&#039;s READ_ONLY_TOOLS restriction currently has zero effect when the configured agent is copilot; every stage already gets full tool access under copilot today."><td>U4</td><td>Code</td><td class="u-statement"><div>The copilot adapter never forwards allowedTools to the CLI — it always runs with --allow-all-tools, so captureIntent&#039;s READ_ONLY_TOOLS restriction currently has zero effect when the configured agent is copilot; every stage already gets full tool access under copilot today.</div><div class="u-evidence">📎 src/agent/copilot.ts:19-21,75-100 (comment: &quot;no per-invocation tool allowlist -&gt; --allow-all-tools is always passed, so allowedTools is ignored&quot;)</div><div class="u-impact">⚠ If wrong: Without fixing this, the whole &quot;both copilot and claude&quot; ask only actually lands on the claude adapter for stages where narrowing is still wanted (e.g. captureIntent).</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U4" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U5" data-statement="The installed Copilot CLI (1.0.70) exposes --available-tools, --excluded-tools, and --model flags that copilot.ts&#039;s own code comments say don&#039;t exist — the adapter appears to predate CLI features it could now use." data-priority="high"><td>U5</td><td>Code</td><td class="u-statement"><div>The installed Copilot CLI (1.0.70) exposes --available-tools, --excluded-tools, and --model flags that copilot.ts&#039;s own code comments say don&#039;t exist — the adapter appears to predate CLI features it could now use.</div><div class="u-evidence">📎 `copilot --help` on this machine (Copilot CLI 1.0.70): &quot;--available-tools[=tools...] Only these tools will be available to the model&quot;, &quot;--excluded-tools[=tools...]&quot;, &quot;--model &lt;model&gt;&quot;; contrast with src/agent/copilot.ts:16-21&#039;s comment</div><div class="u-impact">⚠ If wrong: Relevant only where tool narrowing is actually wanted (captureIntent) — not the CI/pipeline-failure stage, which keeps full tools per U13.</div><div class="priority-flag">⚠ high stakes · confirm first</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-medium">medium</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U5" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U6" data-statement="The Claude adapter never sets --system-prompt, --append-system-prompt, --bare, or --exclude-dynamic-system-prompt-sections — every claude invocation today pays for Claude Code&#039;s full default system prompt on top of the task prompt."><td>U6</td><td>Code</td><td class="u-statement"><div>The Claude adapter never sets --system-prompt, --append-system-prompt, --bare, or --exclude-dynamic-system-prompt-sections — every claude invocation today pays for Claude Code&#039;s full default system prompt on top of the task prompt.</div><div class="u-evidence">📎 src/agent/claude.ts:104-123 (buildClaudeArgs)</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U6" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U7" data-statement="The installed Claude CLI (2.1.209) supports --system-prompt &lt;prompt&gt; as a genuine full override of the default system prompt (not merely an append), which is the mechanism that would let these stages drop the harness prompt and substitute a short task-specific one."><td>U7</td><td>Code</td><td class="u-statement"><div>The installed Claude CLI (2.1.209) supports --system-prompt &lt;prompt&gt; as a genuine full override of the default system prompt (not merely an append), which is the mechanism that would let these stages drop the harness prompt and substitute a short task-specific one.</div><div class="u-evidence">📎 `claude --help`: &quot;--system-prompt &lt;prompt&gt;  System prompt to use for the session&quot;; also &quot;--bare&quot; (minimal mode: skip hooks/LSP/plugin sync/attribution/auto-memory/CLAUDE.md discovery)</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U7" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U8" data-statement="The installed Copilot CLI (1.0.70) has no equivalent full system-prompt override — --no-custom-instructions only disables loading of repo-level AGENTS.md/custom instructions, not Copilot&#039;s own built-in agent system prompt, so there is a hard floor this change cannot get under with CLI flags alone."><td>U8</td><td>Code</td><td class="u-statement"><div>The installed Copilot CLI (1.0.70) has no equivalent full system-prompt override — --no-custom-instructions only disables loading of repo-level AGENTS.md/custom instructions, not Copilot&#039;s own built-in agent system prompt, so there is a hard floor this change cannot get under with CLI flags alone.</div><div class="u-evidence">📎 `copilot --help` (full option list): only --no-custom-instructions and --allow-all-mcp-server-instructions relate to prompt content; no --system-prompt/--instructions-override flag present</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-medium">medium</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U8" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U9" data-statement="The conflict-resolution turns (orchestrate.ts&#039;s resolveApplyConflicts, watchPipeline.ts&#039;s resolveConflictsWithAgent) and the CI-fix turn (runCiFixAttempt) all run with permissionMode &#039;acceptEdits&#039; and no allowedTools at all (full default tool set) today, and the CI-fix/merge-conflict turns are additionally handed an MCP config granting forge tool access, because the prompt itself never contains the failure content — the agent is told to go look it up."><td>U9</td><td>Code</td><td class="u-statement"><div>The conflict-resolution turns (orchestrate.ts&#039;s resolveApplyConflicts, watchPipeline.ts&#039;s resolveConflictsWithAgent) and the CI-fix turn (runCiFixAttempt) all run with permissionMode &#039;acceptEdits&#039; and no allowedTools at all (full default tool set) today, and the CI-fix/merge-conflict turns are additionally handed an MCP config granting forge tool access, because the prompt itself never contains the failure content — the agent is told to go look it up.</div><div class="u-evidence">📎 src/workflow/orchestrate.ts:63-81; src/workflow/watchPipeline.ts:230-249,431-486 (writeAgentMcpConfig, mcpConfigPath)</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U9" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U10" data-statement="Even after this change ships, the two adapters will likely land on different actual token-reduction ceilings: Claude can plausibly reach something close to a true bare minimum (real allowlist + real system-prompt override); Copilot cannot, because its CLI lacks a full system-prompt override (U8) and its tool-scoping flags are unverified in this codebase (U5)." data-priority="high"><td>U10</td><td>Change</td><td class="u-statement"><div>Even after this change ships, the two adapters will likely land on different actual token-reduction ceilings: Claude can plausibly reach something close to a true bare minimum (real allowlist + real system-prompt override); Copilot cannot, because its CLI lacks a full system-prompt override (U8) and its tool-scoping flags are unverified in this codebase (U5).</div><div class="u-impact">⚠ If wrong: Sets what &quot;done&quot; can honestly mean for the copilot side of this change.</div><div class="priority-flag">⚠ high stakes · confirm first</div></td><td><span class="badge src-inferred">inferred</span></td><td><span class="badge conf-medium">medium</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U10" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U11" data-statement="Should src/agent/pi.ts — a third adapter present in this codebase that already maps allowedTools to its own --tools flag — get the same system-prompt-stripping treatment for consistency, or is this change strictly claude.ts + copilot.ts as named?" data-fork="true" data-priority="high"><td>U11</td><td>Scope</td><td class="u-statement"><div>Should src/agent/pi.ts — a third adapter present in this codebase that already maps allowedTools to its own --tools flag — get the same system-prompt-stripping treatment for consistency, or is this change strictly claude.ts + copilot.ts as named?</div><div class="fork-hint">I can read this more than one way — pick the intended one:</div><div class="priority-flag">⚠ high stakes · confirm first</div></td><td><span class="badge src-inferred">inferred</span></td><td><span class="badge conf-low">low</span></td><td class="u-verdict u-fork"><label class="fork-opt"><input type="radio" name="fork-U11" value="0"><span>pi.ts is out of scope — only claude.ts and copilot.ts (and their call sites) change, matching exactly what was asked.</span></label><label class="fork-opt"><input type="radio" name="fork-U11" value="1"><span>pi.ts should get equivalent treatment so all three adapters have consistent token discipline, since it already has the allowedTools-mapping machinery to extend.</span></label><label class="fork-opt fork-neither"><input type="radio" name="fork-U11" value="neither"><span>neither — I'll explain</span></label><textarea class="u-note" name="note-U11" rows="2" placeholder="The right reading is…" hidden></textarea></td></tr>
+<tr data-id="U12" data-statement="The task-prompt bodies themselves (e.g. captureIntent.ts&#039;s ~150-word instruction string, buildConflictPrompt, buildFixPrompt) are presumed out of scope for this change — the request names tools and system prompt specifically, not the wording of the prompts pipeline-worker itself constructs."><td>U12</td><td>Scope</td><td class="u-statement"><div>The task-prompt bodies themselves (e.g. captureIntent.ts&#039;s ~150-word instruction string, buildConflictPrompt, buildFixPrompt) are presumed out of scope for this change — the request names tools and system prompt specifically, not the wording of the prompts pipeline-worker itself constructs.</div></td><td><span class="badge src-assumed">assumed</span></td><td><span class="badge conf-low">low</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U12" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U13" data-statement="For the CI/pipeline-failure stage specifically (runCiFixAttempt), the resolution is: keep full/curated tool access unchanged — including the forge MCP config — so the agent can pull the failing pipeline&#039;s jobs/logs and actually fix the code; token reduction there comes only from trimming the system prompt (Claude: shrink/override the injected prompt; Copilot: pass --no-custom-instructions), not from narrowing the tool allowlist."><td>U13</td><td>Change</td><td class="u-statement"><div>For the CI/pipeline-failure stage specifically (runCiFixAttempt), the resolution is: keep full/curated tool access unchanged — including the forge MCP config — so the agent can pull the failing pipeline&#039;s jobs/logs and actually fix the code; token reduction there comes only from trimming the system prompt (Claude: shrink/override the injected prompt; Copilot: pass --no-custom-instructions), not from narrowing the tool allowlist.</div><div class="u-impact">⚠ If wrong: Settles T1 for this stage and rules out the literal &quot;Read+git-diff-only&quot; reading there.</div></td><td><span class="badge src-user">you said</span></td><td><span class="badge conf-high">high</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U13" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+<tr data-id="U14" data-statement="The installed Copilot CLI (1.0.70) has an --additional-mcp-config &lt;json-or-@file&gt; flag that &quot;augments config from ~/.copilot/mcp-config.json for this session&quot; — a real per-invocation MCP mechanism the copilot.ts adapter&#039;s comment says doesn&#039;t exist. copilot.ts currently drops opts.mcpConfigPath entirely (only a console.error warning) instead of passing it through this flag, so today the CI-fix stage&#039;s forge MCP server is not actually reachable from Copilot per-run — only if a human has separately added it to their global ~/.copilot/mcp-config.json." data-priority="high"><td>U14</td><td>Code</td><td class="u-statement"><div>The installed Copilot CLI (1.0.70) has an --additional-mcp-config &lt;json-or-@file&gt; flag that &quot;augments config from ~/.copilot/mcp-config.json for this session&quot; — a real per-invocation MCP mechanism the copilot.ts adapter&#039;s comment says doesn&#039;t exist. copilot.ts currently drops opts.mcpConfigPath entirely (only a console.error warning) instead of passing it through this flag, so today the CI-fix stage&#039;s forge MCP server is not actually reachable from Copilot per-run — only if a human has separately added it to their global ~/.copilot/mcp-config.json.</div><div class="u-evidence">📎 `copilot --help`: &quot;--additional-mcp-config &lt;json&gt; ... augments config from ~/.copilot/mcp-config.json for this session&quot;; src/agent/copilot.ts:12-15,60-66; src/workflow/watchPipeline.ts:172-177</div><div class="u-impact">⚠ If wrong: Without wiring this in, &quot;keep the MCP server for Copilot&quot; (U13) cannot actually happen per-run — this is now a blocking prerequisite for the resolution just confirmed, not just a nice-to-have.</div><div class="priority-flag">⚠ high stakes · confirm first</div></td><td><span class="badge src-code">in code</span></td><td><span class="badge conf-medium">medium</span></td><td class="u-verdict"><div class="verdict-group"><button type="button" class="verdict-btn v-yes" data-verdict="yes" title="Correct">✓</button><button type="button" class="verdict-btn v-partly" data-verdict="partly" title="Partly right">≈</button><button type="button" class="verdict-btn v-no" data-verdict="no" title="Wrong">✗</button></div><div class="u-correction" hidden><textarea class="u-note" name="note-U14" rows="2" placeholder="What's off? Correct me…"></textarea></div></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="add-claim-row">
+            <button type="button" id="add-claim-btn" class="ghost-btn">
+              ＋ Add a claim I missed
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="s6">
+        <h2>6 · Tensions — What You Want vs. What the Code Allows</h2>
+        <p class="u-hint">
+          Reading the code, I found places where your intent and the current
+          reality pull against each other. Rather than silently pick for you, I'm
+          surfacing them: choose how each should resolve. An unresolved tension is
+          a likely source of a surprise later.
+        </p>
+        <div class="card tension-card" data-id="T1" data-summary="Conflict-resolution and CI-fix agent turns restricted to essential-only tools (read the literal instruction as: read files + check git diff only), to minimize their token cost the same way intent capture already is. — vs — orchestrate.ts&#039;s resolveApplyConflicts and watchPipeline.ts&#039;s resolveConflictsWithAgent / runCiFixAttempt all invoke the agent with permissionMode &#039;acceptEdits&#039; and no allowedTools (full default tool set), and the CI-fix/merge-conflict turns are additionally given an MCP config for forge tool access — because both turns exist specifically to edit the worktree, and the CI-fix turn is never given the failure content in-prompt, only told to go look it up via forge MCP tooling. A Read+git-diff-only allowlist would leave the agent structurally unable to make or apply any fix."><div class="tension-head"><span class="badge tension-badge">T1</span> Tension I found</div><div class="tension-cols"><div class="tension-col want"><h4>You want</h4><p>Conflict-resolution and CI-fix agent turns restricted to essential-only tools (read the literal instruction as: read files + check git diff only), to minimize their token cost the same way intent capture already is.</p></div><div class="tension-col code"><h4>But the code…</h4><p>orchestrate.ts&#039;s resolveApplyConflicts and watchPipeline.ts&#039;s resolveConflictsWithAgent / runCiFixAttempt all invoke the agent with permissionMode &#039;acceptEdits&#039; and no allowedTools (full default tool set), and the CI-fix/merge-conflict turns are additionally given an MCP config for forge tool access — because both turns exist specifically to edit the worktree, and the CI-fix turn is never given the failure content in-prompt, only told to go look it up via forge MCP tooling. A Read+git-diff-only allowlist would leave the agent structurally unable to make or apply any fix.</p><div class="u-evidence">📎 src/workflow/orchestrate.ts:63-81; src/workflow/watchPipeline.ts:230-249,286-406,431-486</div></div></div><div class="tension-rec"><strong>My recommendation:</strong> RESOLVED (v2) by the user for the CI/pipeline-failure stage: keep full/curated tool access unchanged, including the forge MCP config — token savings there come from trimming the system prompt (see T2), not narrowing tools (see U13). Making the MCP part actually true for Copilot needs a separate fix — see T4. The merge-conflict (non-CI) resolution path was not addressed by this decision and remains open — see OQ5/U2.</div><div class="tension-resolve"><span class="resolve-label">Your call:</span><label class="tension-opt"><input type="radio" name="tension-T1" value="0"><span>Keep conflict-resolution and CI-fix on full/curated tool access (only apply the tight allowlist + system-prompt stripping to captureIntent, which is genuinely read-only) — accept that &quot;essential only&quot; means a different tool set per stage.</span></label><label class="tension-opt"><input type="radio" name="tension-T1" value="1"><span>Restrict conflict/CI-fix to a curated superset (Read, Edit, Write, Bash, plus the forge MCP tools) that drops only clearly-irrelevant defaults (e.g. WebSearch, sub-agent spawning) — narrower than today&#039;s full set, but not read-only.</span></label><label class="tension-opt"><input type="radio" name="tension-T1" value="2"><span>Apply the literal Read+git-diff-only allowlist everywhere as stated, accepting that conflict resolution and CI auto-fix stop being able to make any edit (this effectively disables those two stages).</span></label><label class="tension-opt"><input type="radio" name="tension-T1" value="other"><span>other →</span></label><textarea class="t-note" name="tnote-T1" rows="2" placeholder="How we should resolve it…" hidden></textarea></div></div>
+<div class="card tension-card" data-id="T2" data-summary="The harness-injected system prompt removed for Copilot the same way it&#039;s removed for Claude. — vs — The installed Claude CLI (2.1.209) exposes --system-prompt (a genuine full override) and --bare (strips hooks/LSP/plugin sync/attribution/auto-memory/CLAUDE.md discovery), neither used by claude.ts today. The installed Copilot CLI (1.0.70) has no equivalent flag — its --help only shows --no-custom-instructions, which drops repo-level AGENTS.md/custom instructions, not Copilot&#039;s own built-in agent system prompt."><div class="tension-head"><span class="badge tension-badge">T2</span> Tension I found</div><div class="tension-cols"><div class="tension-col want"><h4>You want</h4><p>The harness-injected system prompt removed for Copilot the same way it&#039;s removed for Claude.</p></div><div class="tension-col code"><h4>But the code…</h4><p>The installed Claude CLI (2.1.209) exposes --system-prompt (a genuine full override) and --bare (strips hooks/LSP/plugin sync/attribution/auto-memory/CLAUDE.md discovery), neither used by claude.ts today. The installed Copilot CLI (1.0.70) has no equivalent flag — its --help only shows --no-custom-instructions, which drops repo-level AGENTS.md/custom instructions, not Copilot&#039;s own built-in agent system prompt.</p><div class="u-evidence">📎 src/agent/claude.ts:104-123; `copilot --help` (full option list has no --system-prompt/--instructions-override equivalent)</div></div></div><div class="tension-rec"><strong>My recommendation:</strong> RESOLVED (v2) for the CI/pipeline-failure stage: trim the Claude-side system prompt (via --system-prompt or --bare — exact mechanism is an implementation detail, see Section 10) rather than leaving Claude Code&#039;s full default; Copilot gets --no-custom-instructions for this stage (see T3). Full system-prompt parity is still impossible — Copilot&#039;s own built-in agent prompt has no override flag (U8) — and that gap is accepted rather than blocking.</div><div class="tension-resolve"><span class="resolve-label">Your call:</span><label class="tension-opt"><input type="radio" name="tension-T2" value="0"><span>Add --system-prompt (and/or --bare) to the Claude adapter now; leave Copilot&#039;s built-in system prompt as an accepted, unavoidable fixed cost, and only trim what Copilot does expose (--no-custom-instructions, a tighter --available-tools list per T3).</span></label><label class="tension-opt"><input type="radio" name="tension-T2" value="1"><span>Treat full system-prompt parity between the two adapters as a non-goal and document that &quot;bare minimum&quot; has a lower floor on Copilot than on Claude.</span></label><label class="tension-opt"><input type="radio" name="tension-T2" value="2"><span>Hold the whole change until Copilot CLI adds a system-prompt override upstream, shipping nothing in the meantime.</span></label><label class="tension-opt"><input type="radio" name="tension-T2" value="other"><span>other →</span></label><textarea class="t-note" name="tnote-T2" rows="2" placeholder="How we should resolve it…" hidden></textarea></div></div>
+<div class="card tension-card" data-id="T3" data-summary="allowedTools narrows Copilot&#039;s tool access the same way it narrows Claude&#039;s, so captureIntent&#039;s existing restriction (and any new conflict/CI-fix restriction) actually takes effect under copilot. — vs — copilot.ts always calls the CLI with --allow-all-tools and never reads opts.allowedTools or opts.model — its own code comment states the CLI has no per-invocation allowlist or model flag. But the installed Copilot CLI (1.0.70) --help now lists --available-tools/--excluded-tools and --model, flags the adapter&#039;s comment says don&#039;t exist, suggesting the comment predates a CLI feature addition (or is simply wrong for this version)."><div class="tension-head"><span class="badge tension-badge">T3</span> Tension I found</div><div class="tension-cols"><div class="tension-col want"><h4>You want</h4><p>allowedTools narrows Copilot&#039;s tool access the same way it narrows Claude&#039;s, so captureIntent&#039;s existing restriction (and any new conflict/CI-fix restriction) actually takes effect under copilot.</p></div><div class="tension-col code"><h4>But the code…</h4><p>copilot.ts always calls the CLI with --allow-all-tools and never reads opts.allowedTools or opts.model — its own code comment states the CLI has no per-invocation allowlist or model flag. But the installed Copilot CLI (1.0.70) --help now lists --available-tools/--excluded-tools and --model, flags the adapter&#039;s comment says don&#039;t exist, suggesting the comment predates a CLI feature addition (or is simply wrong for this version).</p><div class="u-evidence">📎 src/agent/copilot.ts:16-21,59-73,75-100; `copilot --help` (Copilot CLI 1.0.70): &quot;--available-tools&quot;, &quot;--excluded-tools&quot;, &quot;--model &lt;model&gt;&quot;</div></div></div><div class="tension-rec"><strong>My recommendation:</strong> Split into two decisions. (a) --no-custom-instructions on Copilot: RESOLVED (v2) — confirmed for the CI/pipeline-failure stage; whether it should also apply to intent-capture and merge-conflict resolution is open (see OQ6). (b) Verifying/adopting --available-tools/--excluded-tools/--model to actually narrow Copilot&#039;s tools: still open, and explicitly NOT wanted for the CI/pipeline-failure stage per U13 (which keeps full tool access there) — this only matters for stages where narrowing is still desired, i.e. captureIntent (see OQ4).</div><div class="tension-resolve"><span class="resolve-label">Your call:</span><label class="tension-opt"><input type="radio" name="tension-T3" value="0"><span>Verify --available-tools/--excluded-tools/--model against the installed 1.0.70 CLI with a manual smoke test, then wire them into copilot.ts so allowedTools/model stop being silently dropped.</span></label><label class="tension-opt"><input type="radio" name="tension-T3" value="1"><span>Leave copilot.ts as-is and accept that Copilot invocations keep full tool access and ignore any model override regardless of this change.</span></label><label class="tension-opt"><input type="radio" name="tension-T3" value="2"><span>Gate the new flags behind a Copilot CLI version check, since older installs may predate --available-tools/--excluded-tools.</span></label><label class="tension-opt"><input type="radio" name="tension-T3" value="other"><span>other →</span></label><textarea class="t-note" name="tnote-T3" rows="2" placeholder="How we should resolve it…" hidden></textarea></div></div>
+<div class="card tension-card" data-id="T4" data-summary="Keep the pipeline-worker forge MCP server available to the CI-fix agent turn on both adapters, so it can pull the failing pipeline&#039;s jobs/logs and fix the code (per U13&#039;s resolution). — vs — This already works on Claude via --mcp-config pointed at the per-run temp file writeAgentMcpConfig() writes. On Copilot, the exact same file path (opts.mcpConfigPath) is silently dropped by copilot.ts (only a console.error warning) — Copilot only reads a fixed ~/.copilot/mcp-config.json, so pipeline-worker&#039;s own forge MCP server isn&#039;t available to Copilot during a run unless a human has registered it there ahead of time, outside pipeline-worker&#039;s control. The installed Copilot CLI does appear to have gained a per-invocation flag for exactly this (--additional-mcp-config) since the adapter comment was written, but copilot.ts doesn&#039;t use it."><div class="tension-head"><span class="badge tension-badge">T4</span> Tension I found</div><div class="tension-cols"><div class="tension-col want"><h4>You want</h4><p>Keep the pipeline-worker forge MCP server available to the CI-fix agent turn on both adapters, so it can pull the failing pipeline&#039;s jobs/logs and fix the code (per U13&#039;s resolution).</p></div><div class="tension-col code"><h4>But the code…</h4><p>This already works on Claude via --mcp-config pointed at the per-run temp file writeAgentMcpConfig() writes. On Copilot, the exact same file path (opts.mcpConfigPath) is silently dropped by copilot.ts (only a console.error warning) — Copilot only reads a fixed ~/.copilot/mcp-config.json, so pipeline-worker&#039;s own forge MCP server isn&#039;t available to Copilot during a run unless a human has registered it there ahead of time, outside pipeline-worker&#039;s control. The installed Copilot CLI does appear to have gained a per-invocation flag for exactly this (--additional-mcp-config) since the adapter comment was written, but copilot.ts doesn&#039;t use it.</p><div class="u-evidence">📎 src/agent/copilot.ts:12-15,60-66 (mcpConfigPath ignored, warning only); src/workflow/watchPipeline.ts:172-177,472-484 (writeAgentMcpConfig, mcpConfigPath); `copilot --help`: &quot;--additional-mcp-config &lt;json&gt; ... augments config from ~/.copilot/mcp-config.json for this session&quot;</div></div></div><div class="tension-rec"><strong>My recommendation:</strong> Wire in --additional-mcp-config (option 1) — it&#039;s the direct mechanical fix that makes U13&#039;s resolution actually true for Copilot, and it mirrors exactly what already exists for Claude. Verify end-to-end (E9) since this flag&#039;s real behavior hasn&#039;t been exercised by this codebase yet.</div><div class="tension-resolve"><span class="resolve-label">Your call:</span><label class="tension-opt"><input type="radio" name="tension-T4" value="0"><span>Wire copilot.ts to pass mcpConfigPath via --additional-mcp-config @&lt;path&gt; (mirrors what Claude already gets via --mcp-config) — verify with a real CI-fix run under copilot before considering this resolved.</span></label><label class="tension-opt"><input type="radio" name="tension-T4" value="1"><span>Document that Copilot users must manually register pipeline-worker&#039;s forge server in ~/.copilot/mcp-config.json, and leave copilot.ts as-is.</span></label><label class="tension-opt"><input type="radio" name="tension-T4" value="2"><span>Drop MCP-based diagnosis for Copilot entirely and have pipeline-worker itself fetch and embed the failing job&#039;s logs directly in the prompt text for that adapter only.</span></label><label class="tension-opt"><input type="radio" name="tension-T4" value="other"><span>other →</span></label><textarea class="t-note" name="tnote-T4" rows="2" placeholder="How we should resolve it…" hidden></textarea></div></div>
+      </section>
+
+      <section id="s7">
+        <h2>7 · Scope Boundaries</h2>
+        <div class='card'><p><strong>In scope</strong></p><ul><li><code>src/agent/claude.ts</code>'s <code>buildClaudeArgs</code> — add a trimmed system-prompt override (<code>--system-prompt</code> and/or <code>--bare</code>) for the CI/pipeline-failure invocation (watchPipeline.ts:480)</li><li><code>src/agent/copilot.ts</code> — add <code>--no-custom-instructions</code>; wire <code>opts.mcpConfigPath</code> through <code>--additional-mcp-config @<path></code> instead of dropping it (T4)</li><li>Verifying both changes end-to-end against a real failing pipeline under each adapter (E9/E10) before considering the CI/pipeline-failure stage done</li><li>Unit tests for the touched adapter code and the watchPipeline.ts call site; a CHANGELOG entry marking the behavior change prominently (ships under an automatic patch bump per this repo's release pipeline)</li></ul><p><strong>Still open, not yet in scope until decided</strong></p><ul><li>The merge-conflict (non-CI) resolution path in <code>orchestrate.ts</code>/<code>watchPipeline.ts</code>'s merge branch (OQ5)</li><li>Intent-capture's copilot-side tool scoping (<code>--available-tools</code>/<code>--excluded-tools</code>/<code>--model</code>, OQ4) and whether <code>--no-custom-instructions</code> extends there too (OQ6)</li><li><code>src/agent/pi.ts</code> (OQ2)</li><li>Rewording the task-prompt bodies themselves (<code>buildConflictPrompt</code>, <code>buildFixPrompt</code>, captureIntent's instruction string) — pending U12</li></ul><p><strong>Out of scope</strong></p><ul><li>Removing forge MCP access or Edit/Write from the CI-fix turn — that breaks its stated purpose and was explicitly ruled out (U13/T1)</li><li><code>src/mcp/server.ts</code>'s own tool surface (pipeline-worker's forge MCP server) and non-agent stages (<code>runChecks.ts</code>, forge clients) — these don't invoke the agent</li></ul></div>
+      </section>
+
+      <section id="s8">
+        <h2>8 · Open Questions</h2>
+        <div class="card">
+          <p class="u-hint">Answers typed here are included in the copied review.</p>
+          <div class="table-wrap">
+            <table id="oq-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Question</th>
+                  <th>Why it Matters</th>
+                  <th>Proposed Default</th>
+                  <th>Status</th>
+                  <th>Your Answer</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-id="OQ1"><td>OQ1</td><td>For the CI/pipeline-failure stage, does &quot;essential only&quot; tool access mean the literal Read+git-diff allowlist, or a stage-appropriate set that keeps Edit/Write/Bash/MCP so the stage stays functional?</td><td>This determines whether CI auto-fix remains able to do its job after the change — get it wrong and the stage stops being able to make any edit, silently converting every CI failure into a human escalation.</td><td>Stage-appropriate: keep Edit/Write/Bash + forge MCP access, trim only the system prompt.</td><td>Resolved-in-v2</td><td><textarea class="oq-answer" name="answer-OQ1" rows="2" placeholder="Type your answer…"></textarea></td></tr>
+<tr data-id="OQ2"><td>OQ2</td><td>Should src/agent/pi.ts (the third existing adapter) get the same system-prompt-stripping treatment, or is this change strictly claude.ts + copilot.ts?</td><td>Leaving pi.ts out means the codebase ends up with three adapters at three different token-discipline levels; better to decide explicitly than by omission.</td><td>Out of scope for this change — pi.ts already has its own allowedTools-mapping; revisit separately if desired.</td><td>Open</td><td><textarea class="oq-answer" name="answer-OQ2" rows="2" placeholder="Type your answer…"></textarea></td></tr>
+<tr data-id="OQ3"><td>OQ3</td><td>Is an adapter-asymmetric result acceptable — Claude gets a real system-prompt override (--system-prompt/--bare) while Copilot only gets --no-custom-instructions plus whatever tool-scoping --available-tools turns out to support?</td><td>Sets correct expectations for what &quot;done&quot; means; otherwise this could later be reported as incomplete for Copilot when it&#039;s actually at that CLI&#039;s ceiling today.</td><td>Yes — document the asymmetry rather than blocking the whole change on upstream Copilot CLI support that doesn&#039;t exist yet.</td><td>Resolved-in-v2</td><td><textarea class="oq-answer" name="answer-OQ3" rows="2" placeholder="Type your answer…"></textarea></td></tr>
+<tr data-id="OQ4"><td>OQ4</td><td>For stages where tool narrowing is actually wanted (captureIntent — NOT the CI/pipeline-failure stage, which keeps full tools per U13) — should the --available-tools/--excluded-tools/--model flags found in the installed Copilot CLI 1.0.70 be verified and adopted?</td><td>Without this, captureIntent&#039;s allowlist stays silently ignored under copilot exactly as it is today (U4).</td><td>Yes — verify against the installed CLI and wire in as part of this change.</td><td>Open</td><td><textarea class="oq-answer" name="answer-OQ4" rows="2" placeholder="Type your answer…"></textarea></td></tr>
+<tr data-id="OQ5"><td>OQ5</td><td>Should the merge-conflict (non-CI) resolution path — orchestrate.ts&#039;s resolveApplyConflicts and watchPipeline.ts&#039;s resolveConflictsWithAgent&#039;s merge branch — get the same treatment just confirmed for CI/pipeline-failure (keep full/MCP tools, trim system prompt only), or something different?</td><td>This is a separate call site from runCiFixAttempt and wasn&#039;t named in the v2 resolution (&quot;for pipeline resolution...&quot;) — leaving it undecided makes it the only one of the three original stages still fully unresolved.</td><td>Same treatment as CI/pipeline-failure — it&#039;s structurally the same kind of edit-and-fix loop.</td><td>Open</td><td><textarea class="oq-answer" name="answer-OQ5" rows="2" placeholder="Type your answer…"></textarea></td></tr>
+<tr data-id="OQ6"><td>OQ6</td><td>Should --no-custom-instructions for Copilot also apply to the intent-capture and merge-conflict-resolution stages, or only to CI/pipeline-failure as stated?</td><td>Consistency vs. scope creep — the v2 instruction named &quot;pipeline resolution&quot; specifically.</td><td>Apply it everywhere Copilot is invoked — there&#039;s no apparent reason AGENTS.md loading would be wanted in any of these three automated stages.</td><td>Open</td><td><textarea class="oq-answer" name="answer-OQ6" rows="2" placeholder="Type your answer…"></textarea></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="s9">
+        <h2>9 · Risks &amp; Sharp Edges</h2>
+        <div class='card'><table><thead><tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr></thead><tbody><tr><td>copilot.ts's --additional-mcp-config wiring behaves differently than --help suggests (untested in this codebase)</td><td>Medium — flag presence isn't proof of working behavior</td><td>High — CI-fix under Copilot silently can't diagnose anything, exactly as today (T4)</td><td>Verify end-to-end with a real failing pipeline under copilot before shipping (E9)</td></tr><tr><td>--no-custom-instructions is misread as also dropping pipeline-worker's own prompt/MCP content</td><td>Low</td><td>Medium — could cause unnecessary hesitation to adopt the flag</td><td>E11 documents the distinction explicitly: it only drops target-repo AGENTS.md, not pipeline-worker's own instructions</td></tr><tr><td>Claude's --system-prompt override for CI-fix omits tool-usage guidance the model needs (e.g. how to use the forge MCP tools)</td><td>Low-Medium</td><td>Medium — CI-fix turns start failing to use MCP tooling correctly</td><td>Keep the replacement prompt explicit about available tools/MCP servers; validate against a real fixable failure (E10)</td></tr><tr><td>Merge-conflict (non-CI) path left undecided (OQ5) while CI-fix ships</td><td>High — explicitly not addressed by the v2 instruction</td><td>Low — no functional risk, just inconsistency between the two edit-loop stages until resolved</td><td>Track OQ5 as a follow-up decision, don't silently assume it inherits the same treatment</td></tr><tr><td>Behavior change ships under an automatic patch bump</td><td>High — structural to this repo's CI (no manual release step)</td><td>Medium — a broken CI-fix stage would reach npm immediately on merge</td><td>CHANGELOG entry marks the change prominently per CLAUDE.md; must pass build/lint/test gate before merge</td></tr></tbody></table></div>
+      </section>
+
+      <section id="s10">
+        <h2>10 · Implementation Sketch (Non-Binding)</h2>
+        <div class='card'><p><em>Non-binding — a starting order, not a spec.</em></p><ol><li><strong>Ship the CI/pipeline-failure stage first (now decided):</strong> in <code>src/agent/copilot.ts</code>, pass <code>mcpConfigPath</code> via <code>--additional-mcp-config @<path></code> and add <code>--no-custom-instructions</code>; in <code>src/agent/claude.ts</code>, add a trimmed <code>--system-prompt</code> (or <code>--bare</code>) for the <code>watchPipeline.ts:480</code> invocation. Leave <code>allowedTools</code>/<code>permissionMode</code> there untouched (full tools retained per U13).</li><li>Verify end-to-end: run a real (or simulated) failing pipeline under both adapters and confirm the agent can still see the failure and fix it (E9/E10) before merging.</li><li>Resolve OQ5 (merge-conflict path scope) and OQ6 (does --no-custom-instructions extend to the other two stages) with the user as a follow-up.</li><li>Once decided, apply the same pattern to captureIntent's copilot-side tool scoping (OQ4/T3b) and, if OQ5 says yes, to the merge-conflict path.</li><li>Extend unit tests for every touched call site; run <code>npm run build && npm run lint && npm test</code>.</li><li>CHANGELOG entry marking the behavior/token-cost change prominently (patch release, per this repo's release pipeline).</li></ol></div>
+      </section>
+    </main>
+
+    <div
+      id="sync-widget"
+      data-doc="Minimal Agent Token Footprint — Intent / Conflict / CI-Fix"
+      data-version="v2"
+      data-status="DRAFT"
+    >
+      <div class="sync-title">Understanding sync</div>
+      <div class="sync-counts">
+        <span id="sync-confirmed">0</span> agreed ·
+        <span id="sync-flagged">0</span> to fix ·
+        <span id="sync-pending">0</span> pending
+      </div>
+      <div class="sync-bar"><div id="sync-bar-fill"></div></div>
+      <div id="sync-gate" class="sync-gate">Review the claims above</div>
+      <button type="button" id="copy-review-btn" class="copy-qa-btn">
+        📋 Copy review for the AI
+      </button>
+    </div>
+
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "default",
+        securityLevel: "loose",
+      });
+    </script>
+
+    <script>
+      const toc = document.getElementById("toc");
+      const sections = document.querySelectorAll('section[id^="s"]');
+
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              const id = entry.target.id;
+              const link = toc.querySelector(`a[href="#${id}"]`);
+              toc
+                .querySelectorAll("a")
+                .forEach((a) => a.classList.remove("active"));
+              if (link) link.classList.add("active");
+            }
+          });
+        },
+        { threshold: 0.3, rootMargin: "-50% 0px -50% 0px" },
+      );
+
+      sections.forEach((section) => observer.observe(section));
+
+      toc.querySelectorAll("a").forEach((link) => {
+        link.addEventListener("click", (e) => {
+          e.preventDefault();
+          const target = document.querySelector(link.getAttribute("href"));
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        });
+      });
+    </script>
+
+    <script>
+      document.querySelectorAll("table").forEach((table) => {
+        if (table.closest(".table-wrap")) return;
+        const wrap = document.createElement("div");
+        wrap.className = "table-wrap";
+        table.parentNode.insertBefore(wrap, table);
+        wrap.appendChild(table);
+      });
+    </script>
+
+    <script>
+      (function () {
+        const backdrop = document.createElement("div");
+        backdrop.className = "diagram-backdrop";
+        document.body.appendChild(backdrop);
+
+        let activeCard = null;
+
+        function minimize(card) {
+          card.classList.remove("diagram-maximized");
+          const btn = card.querySelector(".diagram-toggle-btn");
+          if (btn) {
+            btn.textContent = "⛶";
+            btn.title = "Maximize diagram";
+          }
+          backdrop.classList.remove("active");
+          document.body.classList.remove("diagram-lock");
+          activeCard = null;
+        }
+
+        function maximize(card) {
+          if (activeCard && activeCard !== card) minimize(activeCard);
+          card.classList.add("diagram-maximized");
+          const btn = card.querySelector(".diagram-toggle-btn");
+          if (btn) {
+            btn.textContent = "✕";
+            btn.title = "Minimize diagram";
+          }
+          backdrop.classList.add("active");
+          document.body.classList.add("diagram-lock");
+          activeCard = card;
+        }
+
+        document.querySelectorAll("div.mermaid").forEach((diagram) => {
+          let card = diagram.closest(".mermaid-card");
+          if (!card) {
+            card = document.createElement("div");
+            card.className = "mermaid-card";
+            diagram.parentNode.insertBefore(card, diagram);
+            card.appendChild(diagram);
+          }
+          if (card.querySelector(".diagram-toggle-btn")) return;
+
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "diagram-toggle-btn";
+          btn.textContent = "⛶";
+          btn.title = "Maximize diagram";
+          btn.addEventListener("click", () => {
+            if (card.classList.contains("diagram-maximized")) {
+              minimize(card);
+            } else {
+              maximize(card);
+            }
+          });
+          card.appendChild(btn);
+        });
+
+        backdrop.addEventListener("click", () => {
+          if (activeCard) minimize(activeCard);
+        });
+
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape" && activeCard) minimize(activeCard);
+        });
+      })();
+    </script>
+
+    <script>
+      // Co-authoring engine: verdicts, forks, structured corrections, added
+      // claims, tension resolutions, example sign-off, recall, live sync, and
+      // the review export. All state persists per browser keyed by doc+version.
+      (function () {
+        const widget = document.getElementById("sync-widget");
+        if (!widget) return;
+
+        const docName = widget.dataset.doc || "";
+        const docVersion = widget.dataset.version || "";
+        const docStatus = widget.dataset.status || "";
+        const storeKey = "arch-review:" + docName + ":" + docVersion;
+
+        const state = load();
+        state.recall = state.recall || "";
+        state.claims = state.claims || {};
+        state.added = Array.isArray(state.added) ? state.added : [];
+        state.tensions = state.tensions || {};
+        state.examples = state.examples || {};
+        state.answers = state.answers || {};
+
+        function load() {
+          try {
+            return JSON.parse(localStorage.getItem(storeKey)) || {};
+          } catch (e) {
+            return {};
+          }
+        }
+        function save() {
+          try {
+            localStorage.setItem(storeKey, JSON.stringify(state));
+          } catch (e) {
+            /* private mode: review still works, just not persisted */
+          }
+        }
+        const txt = (el) => (el ? el.value.trim() : "");
+        const setText = (sel, val) => {
+          const el = document.querySelector(sel);
+          if (el) el.textContent = val;
+        };
+
+        // ---------- Recall / success statement ----------
+        const recall = document.getElementById("recall-box");
+        if (recall) {
+          recall.value = state.recall;
+          recall.addEventListener("input", () => {
+            state.recall = recall.value;
+            save();
+          });
+        }
+
+        // ---------- Understanding rows ----------
+        const uTableBody = document.querySelector("#u-table tbody");
+        const claimRows = () =>
+          Array.from(document.querySelectorAll("#u-table tbody tr[data-id]"));
+
+        function rowState(row) {
+          if (row.dataset.fork === "true") {
+            const c = row.dataset.forkChoice;
+            if (c && c !== "neither") return "agreed";
+            if (c === "neither") return "flagged";
+            return "pending";
+          }
+          const v = row.dataset.verdict;
+          if (v === "yes") return "agreed";
+          if (v === "no" || v === "partly") return "flagged";
+          return "pending";
+        }
+        function paintRow(row) {
+          row.dataset.state = rowState(row);
+        }
+
+        function applyVerdict(row, verdict) {
+          if (verdict) row.dataset.verdict = verdict;
+          else row.removeAttribute("data-verdict");
+          row.querySelectorAll(".verdict-btn").forEach((b) => {
+            b.classList.toggle("selected", b.dataset.verdict === verdict);
+          });
+          const correction = row.querySelector(".u-correction");
+          if (correction)
+            correction.hidden = !(verdict === "no" || verdict === "partly");
+          paintRow(row);
+        }
+
+        function wireClaim(row) {
+          const id = row.dataset.id;
+          const note = row.querySelector(".u-note");
+
+          if (row.dataset.fork === "true") {
+            row.querySelectorAll('input[type="radio"]').forEach((radio) => {
+              radio.addEventListener("change", () => {
+                row.dataset.forkChoice = radio.value;
+                if (note) note.hidden = radio.value !== "neither";
+                state.claims[id] = { fork: radio.value, note: txt(note) };
+                paintRow(row);
+                save();
+                refresh();
+              });
+            });
+            if (note)
+              note.addEventListener("input", () => {
+                state.claims[id] = {
+                  fork: row.dataset.forkChoice || "",
+                  note: note.value,
+                };
+                save();
+              });
+            const s = state.claims[id];
+            if (s && s.fork) {
+              row.querySelectorAll('input[type="radio"]').forEach((r) => {
+                if (r.value === s.fork) r.checked = true;
+              });
+              row.dataset.forkChoice = s.fork;
+              if (note) {
+                note.hidden = s.fork !== "neither";
+                note.value = s.note || "";
+              }
+            }
+            paintRow(row);
+            return;
+          }
+
+          row.querySelectorAll(".verdict-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              const next =
+                row.dataset.verdict === btn.dataset.verdict
+                  ? ""
+                  : btn.dataset.verdict;
+              applyVerdict(row, next);
+              const cur = state.claims[id] || {};
+              state.claims[id] = {
+                verdict: next,
+                note: txt(note),
+                correction: cur.correction || "",
+              };
+              save();
+              refresh();
+            });
+          });
+          row.querySelectorAll(".correction-opt").forEach((opt) => {
+            opt.addEventListener("click", () => {
+              const cur = state.claims[id] || {};
+              const nextVal =
+                cur.correction === opt.dataset.value ? "" : opt.dataset.value;
+              row.querySelectorAll(".correction-opt").forEach((o) =>
+                o.classList.toggle("selected", o.dataset.value === nextVal),
+              );
+              state.claims[id] = {
+                verdict: row.dataset.verdict || "",
+                note: txt(note),
+                correction: nextVal,
+              };
+              save();
+            });
+          });
+          if (note)
+            note.addEventListener("input", () => {
+              const cur = state.claims[id] || {};
+              state.claims[id] = {
+                verdict: row.dataset.verdict || "",
+                note: note.value,
+                correction: cur.correction || "",
+              };
+              save();
+            });
+
+          const s = state.claims[id];
+          if (s) {
+            if (note) note.value = s.note || "";
+            if (s.correction)
+              row.querySelectorAll(".correction-opt").forEach((o) =>
+                o.classList.toggle("selected", o.dataset.value === s.correction),
+              );
+            applyVerdict(row, s.verdict || "");
+          }
+        }
+
+        // ---------- Added claims (human authors what the AI missed) ----------
+        function renderAdded(item) {
+          const tr = document.createElement("tr");
+          tr.className = "added-row";
+          tr.dataset.addedId = item.id;
+          tr.innerHTML =
+            `<td>${item.id}</td><td>you</td>` +
+            `<td class="u-statement"><textarea class="added-text" name="added-${item.id}" placeholder="The thing I missed…"></textarea></td>` +
+            `<td><span class="badge src-user">you said</span></td>` +
+            `<td><span class="badge conf-high">high</span></td>` +
+            `<td><button type="button" class="remove-added">✕ remove</button></td>`;
+          uTableBody.appendChild(tr);
+          const ta = tr.querySelector(".added-text");
+          ta.value = item.text || "";
+          ta.addEventListener("input", () => {
+            item.text = ta.value;
+            save();
+          });
+          tr.querySelector(".remove-added").addEventListener("click", () => {
+            state.added = state.added.filter((x) => x.id !== item.id);
+            tr.remove();
+            save();
+            refresh();
+          });
+        }
+        const addBtn = document.getElementById("add-claim-btn");
+        if (addBtn) {
+          state.added.forEach(renderAdded);
+          addBtn.addEventListener("click", () => {
+            let n = state.added.length + 1;
+            let id = "A" + n;
+            while (state.added.some((x) => x.id === id)) id = "A" + ++n;
+            const item = { id: id, text: "" };
+            state.added.push(item);
+            renderAdded(item);
+            save();
+          });
+        }
+
+        // ---------- Tensions ----------
+        const tensionCards = Array.from(
+          document.querySelectorAll(".tension-card[data-id]"),
+        );
+        tensionCards.forEach((card) => {
+          const id = card.dataset.id;
+          const note = card.querySelector(".t-note");
+          card.querySelectorAll('input[type="radio"]').forEach((radio) => {
+            radio.addEventListener("change", () => {
+              card.dataset.choice = radio.value;
+              if (note) note.hidden = radio.value !== "other";
+              state.tensions[id] = { choice: radio.value, note: txt(note) };
+              save();
+              refresh();
+            });
+          });
+          if (note)
+            note.addEventListener("input", () => {
+              state.tensions[id] = {
+                choice: card.dataset.choice || "",
+                note: note.value,
+              };
+              save();
+            });
+          const s = state.tensions[id];
+          if (s && s.choice) {
+            card.querySelectorAll('input[type="radio"]').forEach((r) => {
+              if (r.value === s.choice) r.checked = true;
+            });
+            card.dataset.choice = s.choice;
+            if (note) {
+              note.hidden = s.choice !== "other";
+              note.value = s.note || "";
+            }
+          }
+        });
+
+        // ---------- Acceptance examples ----------
+        const exCards = Array.from(
+          document.querySelectorAll(".example-card[data-id]"),
+        );
+        exCards.forEach((card) => {
+          const id = card.dataset.id;
+          const note = card.querySelector(".ex-note");
+          card.querySelectorAll(".verdict-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+              const next =
+                card.dataset.verdict === btn.dataset.verdict
+                  ? ""
+                  : btn.dataset.verdict;
+              if (next) card.dataset.verdict = next;
+              else card.removeAttribute("data-verdict");
+              card.querySelectorAll(".verdict-btn").forEach((b) =>
+                b.classList.toggle("selected", b.dataset.verdict === next),
+              );
+              if (note) note.hidden = next !== "no";
+              state.examples[id] = { verdict: next, note: txt(note) };
+              save();
+              refresh();
+            });
+          });
+          if (note)
+            note.addEventListener("input", () => {
+              state.examples[id] = {
+                verdict: card.dataset.verdict || "",
+                note: note.value,
+              };
+              save();
+            });
+          const s = state.examples[id];
+          if (s) {
+            if (s.verdict) card.dataset.verdict = s.verdict;
+            card.querySelectorAll(".verdict-btn").forEach((b) =>
+              b.classList.toggle("selected", b.dataset.verdict === s.verdict),
+            );
+            if (note) {
+              note.hidden = s.verdict !== "no";
+              note.value = s.note || "";
+            }
+          }
+        });
+
+        // ---------- Open questions ----------
+        const oqRows = Array.from(
+          document.querySelectorAll("#oq-table tbody tr[data-id]"),
+        );
+        oqRows.forEach((row) => {
+          const id = row.dataset.id;
+          const ta = row.querySelector("textarea");
+          if (!ta) return;
+          if (state.answers[id]) ta.value = state.answers[id];
+          ta.addEventListener("input", () => {
+            state.answers[id] = ta.value;
+            save();
+          });
+        });
+
+        // ---------- Live sync tally + approval gate ----------
+        function refresh() {
+          let agreed = 0;
+          let flagged = 0;
+          let pending = 0;
+          let highPending = 0;
+
+          claimRows().forEach((row) => {
+            paintRow(row);
+            const s = rowState(row);
+            if (s === "agreed") agreed++;
+            else if (s === "flagged") flagged++;
+            else {
+              pending++;
+              if (row.dataset.priority === "high") highPending++;
+            }
+          });
+          tensionCards.forEach((card) => {
+            if (card.dataset.choice) agreed++;
+            else {
+              pending++;
+              highPending++;
+            }
+          });
+          exCards.forEach((card) => {
+            const v = card.dataset.verdict;
+            if (v === "yes") agreed++;
+            else if (v === "no") flagged++;
+            else pending++;
+          });
+
+          const total = agreed + flagged + pending;
+          setText("#sync-confirmed", agreed);
+          setText("#sync-flagged", flagged);
+          setText("#sync-pending", pending);
+          document.getElementById("sync-bar-fill").style.width = total
+            ? (agreed / total) * 100 + "%"
+            : "0%";
+
+          const gate = document.getElementById("sync-gate");
+          if (highPending > 0) {
+            gate.textContent =
+              "⚠ " +
+              highPending +
+              " high-stakes item" +
+              (highPending > 1 ? "s" : "") +
+              " need a decision";
+            gate.className = "sync-gate warn";
+          } else if (pending > 0) {
+            gate.textContent =
+              pending + " item" + (pending > 1 ? "s" : "") + " left to review";
+            gate.className = "sync-gate";
+          } else if (flagged > 0) {
+            gate.textContent =
+              "✓ all reviewed · " + flagged + " to revise next pass";
+            gate.className = "sync-gate";
+          } else {
+            gate.textContent = "✓ fully synced — ready to approve";
+            gate.className = "sync-gate ok";
+          }
+        }
+
+        claimRows().forEach(wireClaim);
+        refresh();
+
+        // ---------- Review export (the manifest carried to the next pass) ----------
+        function labelFor(input) {
+          const label = input && input.closest("label");
+          const span = label && label.querySelector("span");
+          return span ? span.textContent.trim() : "";
+        }
+        function checkedLabel(container, name) {
+          const input = container.querySelector(
+            'input[name="' + name + '"]:checked',
+          );
+          return input ? labelFor(input) : "";
+        }
+
+        function buildReview() {
+          const confirmed = [];
+          const forks = [];
+          const corrections = [];
+          const unreviewed = [];
+
+          claimRows().forEach((row) => {
+            const id = row.dataset.id;
+            const stmt = row.dataset.statement || "";
+            if (row.dataset.fork === "true") {
+              const c = row.dataset.forkChoice;
+              if (!c) {
+                unreviewed.push(id);
+              } else if (c === "neither") {
+                const note = txt(row.querySelector(".u-note"));
+                corrections.push(
+                  `${id} [FORK: none fit] "${stmt}"\n  Right reading: ${note || "(no note)"}`,
+                );
+              } else {
+                forks.push(`${id} → "${checkedLabel(row, "fork-" + id)}"`);
+                confirmed.push(id);
+              }
+              return;
+            }
+            const v = row.dataset.verdict;
+            const cur = state.claims[id] || {};
+            if (v === "yes") {
+              confirmed.push(id);
+            } else if (v === "no" || v === "partly") {
+              const tag = v === "no" ? "WRONG" : "PARTLY";
+              const fix = cur.correction
+                ? `right answer: "${cur.correction}"  (structured)`
+                : `note: ${txt(row.querySelector(".u-note")) || "(no note)"}  (prose)`;
+              corrections.push(`${id} [${tag}] "${stmt}"\n  ${fix}`);
+            } else {
+              unreviewed.push(id);
+            }
+          });
+
+          const added = state.added
+            .filter((a) => (a.text || "").trim())
+            .map((a) => `+${a.id}: ${a.text.trim()}`);
+
+          const tensions = tensionCards.map((card) => {
+            const id = card.dataset.id;
+            const c = card.dataset.choice;
+            if (!c) return `${id}: UNRESOLVED`;
+            if (c === "other")
+              return `${id} → other: ${txt(card.querySelector(".t-note")) || "(no note)"}`;
+            return `${id} → ${checkedLabel(card, "tension-" + id)}`;
+          });
+
+          const exApproved = [];
+          const exRejected = [];
+          const exUnreviewed = [];
+          exCards.forEach((card) => {
+            const id = card.dataset.id;
+            const v = card.dataset.verdict;
+            if (v === "yes") exApproved.push(id);
+            else if (v === "no")
+              exRejected.push(
+                `${id}: ${card.dataset.example}\n  should be: ${txt(card.querySelector(".ex-note")) || "(no note)"}`,
+              );
+            else exUnreviewed.push(id);
+          });
+
+          const answers = oqRows.map((row) => {
+            const q = row.children[1] ? row.children[1].textContent.trim() : "";
+            const a = txt(row.querySelector("textarea"));
+            return `${row.dataset.id}: ${q}\n→ ${a || "(no answer)"}`;
+          });
+
+          return [
+            `ARCH REVIEW — ${docName} ${docVersion} [${docStatus.toUpperCase()}]`,
+            "",
+            "YOUR SUCCESS STATEMENT (your words):",
+            state.recall.trim() || "(not provided)",
+            "(reconcile this against the AI Overview at the top of the doc)",
+            "",
+            `CONFIRMED CLAIMS: ${confirmed.join(", ") || "none"}`,
+            "",
+            forks.length ? "FORK CHOICES:\n" + forks.join("\n") : "FORK CHOICES: none",
+            "",
+            "CORRECTIONS (apply these):",
+            corrections.length ? corrections.join("\n") : "none",
+            "",
+            added.length
+              ? "NEW CLAIMS YOU ADDED:\n" + added.join("\n")
+              : "NEW CLAIMS YOU ADDED: none",
+            "",
+            "TENSIONS:",
+            tensions.length ? tensions.join("\n") : "none",
+            "",
+            "ACCEPTANCE EXAMPLES:",
+            `  APPROVED (binding): ${exApproved.join(", ") || "none"}`,
+            exRejected.length
+              ? "  REJECTED:\n    " + exRejected.join("\n    ")
+              : "  REJECTED: none",
+            `  UNREVIEWED: ${exUnreviewed.join(", ") || "none"}`,
+            "",
+            "OPEN QUESTION ANSWERS:",
+            answers.length ? answers.join("\n") : "none",
+            "",
+            `UNREVIEWED CLAIMS: ${unreviewed.join(", ") || "none"}`,
+            "",
+            "NEXT: reconcile my overview with your success statement; apply the corrections, fork choices, new claims, tension resolutions, and rejected-example fixes to the arch JSON; bump the version and add a revision-log row; regenerate with arch-inject.js. On APPROVED, the CONFIRMED claims + APPROVED examples are the acceptance criteria the implementation must satisfy — carry them into /feature as verification anchors.",
+          ].join("\n");
+        }
+
+        document
+          .getElementById("copy-review-btn")
+          .addEventListener("click", (e) => {
+            const btn = e.currentTarget;
+            navigator.clipboard.writeText(buildReview()).then(() => {
+              const original = btn.textContent;
+              btn.textContent = "✓ Copied";
+              btn.classList.add("copied");
+              setTimeout(() => {
+                btn.textContent = original;
+                btn.classList.remove("copied");
+              }, 1500);
+            });
+          });
+      })();
+    </script>
+  </body>
+</html>
