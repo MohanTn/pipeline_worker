@@ -74,13 +74,29 @@ function positiveNumber(value: unknown, fallback: number): number {
   return Number.isFinite(num) && num > 0 ? num : fallback;
 }
 
-/** Parses "true"/"false" (case-insensitive), falling back when unset or unrecognized. */
+const TRUE_VALUES = new Set(['true', '1', 'yes', 'y', 'on']);
+const FALSE_VALUES = new Set(['false', '0', 'no', 'n', 'off']);
+
+/**
+ * Parses a boolean env var: the usual spellings (true/false, 1/0, yes/no,
+ * on/off), case-insensitive and whitespace-tolerant. An unset or empty value
+ * falls back silently; anything else falls back *with a warning* — a typo'd
+ * or shell-quoted value used to silently resolve to the default, which for
+ * gating flags like PIPELINE_WORKER_RUN_LINT_AND_TEST meant the stage the
+ * user asked to skip ran anyway with no hint why.
+ */
 // fallow-ignore-next-line complexity
-function boolean(value: unknown, fallback: boolean): boolean {
+function boolean(name: string, value: unknown, fallback: boolean): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
-    if (value.toLowerCase() === 'true') return true;
-    if (value.toLowerCase() === 'false') return false;
+    const normalized = value.trim().toLowerCase();
+    if (normalized === '') return fallback;
+    if (TRUE_VALUES.has(normalized)) return true;
+    if (FALSE_VALUES.has(normalized)) return false;
+    console.error(
+      `Warning: ${name}=${JSON.stringify(value)} is not a boolean — using ${fallback}. ` +
+        'Accepted values: true/false, 1/0, yes/no, on/off.',
+    );
   }
   return fallback;
 }
@@ -172,8 +188,8 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
   warnIfToolchainUndetected(repoRoot, detected);
 
   const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE;
-  const autoMergeOnGreen = boolean(process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN, DEFAULT_CONFIG.autoMergeOnGreen);
-  const squashOnMerge = boolean(process.env.PIPELINE_WORKER_SQUASH_ON_MERGE, DEFAULT_CONFIG.squashOnMerge);
+  const autoMergeOnGreen = boolean('PIPELINE_WORKER_AUTO_MERGE_ON_GREEN', process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN, DEFAULT_CONFIG.autoMergeOnGreen);
+  const squashOnMerge = boolean('PIPELINE_WORKER_SQUASH_ON_MERGE', process.env.PIPELINE_WORKER_SQUASH_ON_MERGE, DEFAULT_CONFIG.squashOnMerge);
   warnIfSquashRacesAutoMerge(autoMergeOnGreen, squashOnMerge);
 
   return {
@@ -187,11 +203,11 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     maxFixAttempts: positiveNumber(process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS, DEFAULT_CONFIG.maxFixAttempts),
     pollIntervalSeconds: positiveNumber(process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS, DEFAULT_CONFIG.pollIntervalSeconds),
     branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || DEFAULT_CONFIG.branchPattern,
-    cleanupOnSuccess: boolean(process.env.PIPELINE_WORKER_CLEANUP, DEFAULT_CONFIG.cleanupOnSuccess),
-    cleanupEarly: boolean(process.env.PIPELINE_WORKER_CLEANUP_EARLY, DEFAULT_CONFIG.cleanupEarly),
+    cleanupOnSuccess: boolean('PIPELINE_WORKER_CLEANUP', process.env.PIPELINE_WORKER_CLEANUP, DEFAULT_CONFIG.cleanupOnSuccess),
+    cleanupEarly: boolean('PIPELINE_WORKER_CLEANUP_EARLY', process.env.PIPELINE_WORKER_CLEANUP_EARLY, DEFAULT_CONFIG.cleanupEarly),
     intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
-    runLintAndTest: boolean(process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
-    updateChangelog: boolean(process.env.PIPELINE_WORKER_UPDATE_CHANGELOG, DEFAULT_CONFIG.updateChangelog),
+    runLintAndTest: boolean('PIPELINE_WORKER_RUN_LINT_AND_TEST', process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
+    updateChangelog: boolean('PIPELINE_WORKER_UPDATE_CHANGELOG', process.env.PIPELINE_WORKER_UPDATE_CHANGELOG, DEFAULT_CONFIG.updateChangelog),
     autoMergeOnGreen,
     mergeMethod: pickName<MergeMethod>(process.env.PIPELINE_WORKER_MERGE_METHOD, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
     squashOnMerge,
