@@ -95,6 +95,8 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_SQUASH_ON_MERGE`       | `false`                      | once CI is green, collapse every commit this run made on the branch into one (titled from the captured intent) and force-push — keeps history clean regardless of the repo's merge-strategy setting. Off by default: rewrites published history (force-push), a materially different risk from everything else this tool does. Only reliable with auto-merge off — the forge may already have merged (and deleted) the branch before this step runs |
 | `PIPELINE_WORKER_PLAIN_OUTPUT`          | `false`                      | force the append-only, non-redrawing narration even on a real terminal (the same output CI/piped runs always get) — useful when pasting output into a bug report or feeding it to another tool |
 
+Boolean variables accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (case-insensitive, surrounding whitespace ignored). Any other value is ignored with a warning naming the variable, and the default applies.
+
 ### Branch naming
 
 `PIPELINE_WORKER_BRANCH_PATTERN` controls the feature branch name, built from three placeholders:

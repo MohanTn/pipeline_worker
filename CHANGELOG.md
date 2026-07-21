@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- Boolean env vars (`PIPELINE_WORKER_RUN_LINT_AND_TEST`, `PIPELINE_WORKER_CLEANUP`, `PIPELINE_WORKER_CLEANUP_EARLY`, `PIPELINE_WORKER_UPDATE_CHANGELOG`, `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN`, `PIPELINE_WORKER_SQUASH_ON_MERGE`) now accept `1`/`0`, `yes`/`no`, `on`/`off` and tolerate surrounding whitespace, on top of `true`/`false`. Anything else still falls back to the default but now prints a warning naming the variable, instead of silently resolving to the default — `PIPELINE_WORKER_RUN_LINT_AND_TEST=0` previously ran lint and test anyway with no hint why.
 - Added truncateToWidth() utility function to prevent spinner detail text from exceeding terminal width, preventing unwanted line wrapping. Integrated into runStep() render function to apply terminal-width-aware truncation.
 - `watchPipeline` no longer polls the full 2-hour safety window before crashing when a GitLab pipeline ends in `manual` or `scheduled` status (e.g. a manual deploy gate after tests) — both are now recognized as terminal and escalate to a human immediately, same as `canceled`/`skipped`.
 - Forge API calls (`forgeFetch`) now retry transient 429/5xx responses and network errors with bounded exponential backoff (honoring `Retry-After` on 429), instead of crashing the whole run on a single blip during a long CI-watch poll loop.
@@ -21,6 +22,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Changes `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN` default from `false` to `true`, enabling automatic MR/PR merging once CI passes. Runs now complete end-to-end with local target branch fast-forwarded, instead of stopping at "CI is green, merge it yourself." Includes comprehensive tests, config warnings for conflicting settings, and documentation updates.
 - Introduces a core diff-management module (src/git/diff.ts) that exports three functions: captureDiff for staged/unstaged changes and untracked files, changedFilesSinceRef for ref-based file queries used by adoptBranch, and resetRepo for cleanup. The orchestrate workflow is updated to import and use these functions. Tests verify diff capture accuracy with real git repos.
 - Implements TreeRenderer for interactive live TTY dashboard with step-tree rendering, terminal-aware truncation, automatic height/width adaptation via step collapsing, comprehensive edge-case tests (narrow terminals, unknown steps, resize handling), and architecture documentation.
 - Introduces box-drawing and text formatting utilities to format.ts, exports new structured output functions from steps.ts, and refactors the welcome banner to use a cleaner box-drawing presentation with version information

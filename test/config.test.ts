@@ -168,6 +168,44 @@ test('PIPELINE_WORKER_RUN_LINT_AND_TEST overrides the default', () => {
   });
 });
 
+test('PIPELINE_WORKER_RUN_LINT_AND_TEST accepts the usual boolean spellings, cased and padded', () => {
+  withTempDir((dir) => {
+    for (const value of ['false', 'FALSE', ' false ', '0', 'no', 'off']) {
+      process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = value;
+      assert.equal(loadConfig(dir).runLintAndTest, false, `expected ${JSON.stringify(value)} to disable lint/test`);
+    }
+    for (const value of ['true', 'TRUE', '1', 'yes', 'on']) {
+      process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = value;
+      assert.equal(loadConfig(dir).runLintAndTest, true, `expected ${JSON.stringify(value)} to enable lint/test`);
+    }
+  });
+});
+
+test('an unparseable boolean env var falls back to the default and warns instead of failing silently', () => {
+  withTempDir((dir) => {
+    const warnings: string[] = [];
+    const originalError = console.error;
+    console.error = (message: unknown) => warnings.push(String(message));
+    try {
+      process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = 'flase';
+      assert.equal(loadConfig(dir).runLintAndTest, true);
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(
+      warnings.some((w) => w.includes('PIPELINE_WORKER_RUN_LINT_AND_TEST') && w.includes('not a boolean')),
+      `expected a warning naming the variable, got: ${warnings.join(' | ')}`,
+    );
+  });
+});
+
+test('an empty boolean env var falls back to the default without warning', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = '';
+    assert.equal(loadConfig(dir).runLintAndTest, true);
+  });
+});
+
 test('loadConfig defaults updateChangelog to false', () => {
   withTempDir((dir) => {
     assert.equal(loadConfig(dir).updateChangelog, false);
