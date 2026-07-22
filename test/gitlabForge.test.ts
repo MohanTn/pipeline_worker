@@ -169,3 +169,53 @@ test('getJobLog returns the raw trace text from glab api', async () => {
     assert.equal(calls[0].args[1], 'projects/1/jobs/42/trace');
   });
 });
+
+// GitLab (Grape) rejects a request whose Content-Type declares JSON but whose
+// body is empty with HTTP 415 — seen on self-hosted/proxied instances — so a
+// body (glab's `--input -`) must appear exactly when one is sent, never on
+// GETs or body-less POSTs.
+test('GET requests pass no --input/body to glab', async () => {
+  await withGitlabEnv(async () => {
+    const { exec, calls } = fakeExecutor([() => '[]']);
+    const forge = createGitlabForge(gitlabConfig(), exec);
+    await forge.findExistingMr('feat/branch');
+    assert.equal(calls.length, 1);
+    assert.ok(!calls[0].args.includes('--input'));
+    assert.equal(calls[0].input, undefined);
+  });
+});
+
+test('body-less POST (retryPipeline) passes no --input/body to glab', async () => {
+  await withGitlabEnv(async () => {
+    const { exec, calls } = fakeExecutor([() => JSON.stringify({ id: 9, status: 'pending', web_url: '' })]);
+    const forge = createGitlabForge(gitlabConfig(), exec);
+    await forge.retryPipeline(9);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].args[1], 'projects/1/pipelines/9/retry');
+    assert.ok(!calls[0].args.includes('--input'));
+    assert.equal(calls[0].input, undefined);
+  });
+});
+
+test('POST with body passes --input - and the JSON body on stdin', async () => {
+  await withGitlabEnv(async () => {
+    const { exec, calls } = fakeExecutor([
+      () => JSON.stringify({ iid: 1, web_url: '', source_branch: 'feat/branch', target_branch: 'main', state: 'opened' }),
+    ]);
+    const forge = createGitlabForge(gitlabConfig(), exec);
+    await forge.createMergeRequest({
+      sourceBranch: 'feat/branch',
+      targetBranch: 'main',
+      title: 'title',
+      description: 'desc',
+    });
+    assert.equal(calls.length, 1);
+    assert.ok(calls[0].args.includes('--input') && calls[0].args.includes('-'));
+    assert.deepEqual(calls[0].input && JSON.parse(calls[0].input), {
+      source_branch: 'feat/branch',
+      target_branch: 'main',
+      title: 'title',
+      description: 'desc',
+    });
+  });
+});

@@ -125,6 +125,9 @@ async function apiText(exec: GlabExecutor, auth: GlabAuth, label: string, path: 
 
 async function apiWrite(exec: GlabExecutor, auth: GlabAuth, label: string, method: 'POST' | 'PUT', path: string, body?: object): Promise<any> {
   const args = ['api', path, '-X', method, '--hostname', auth.hostname];
+  // GitLab (Grape) returns 415 when Content-Type declares JSON but the
+  // request has no body, so `--input -` (and hence a JSON body) is only
+  // passed when a body is actually sent.
   const input = body === undefined ? undefined : JSON.stringify(body);
   if (input !== undefined) args.push('--input', '-');
   const stdout = await withGitlabRetry(label, () => exec(args, input));
