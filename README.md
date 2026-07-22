@@ -32,7 +32,7 @@ Polling costs zero agent tokens; the agent is invoked only when a pipeline actua
 | --- | ----------------------- | ----- | ------------------------------ |
 | [Claude Code](https://claude.com/claude-code) | `claude` | `npm install -g @anthropic-ai/claude-code` | ✅ (`--model`) |
 | [Pi](https://pi.dev) | `pi` | `npm install -g @earendil-works/pi-coding-agent` | ✅ (`--model`) — any provider/model |
-| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) | `copilot` | Install via [GitHub's docs](https://docs.github.com/en/copilot/how-tos/copilot-cli) | ❌ (uses its own configured model) |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) | `copilot` | Install via [GitHub's docs](https://docs.github.com/en/copilot/how-tos/copilot-cli) | ✅ (`--model`) — Copilot's own model names; the `haiku`/`sonnet` aliases are mapped automatically |
 
 Pi supports models from any provider — Anthropic, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, etc.
 Configure your provider/api-key via pi's own setup (`/login`), env vars, or `--provider` in the adapter.
@@ -84,7 +84,7 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_BRANCH_PATTERN`        | `pipeline-worker/{name}`     | feature branch naming template — see below                                    |
 | `PIPELINE_WORKER_CLEANUP`               | `true`                       | reset repoRoot to HEAD once cleanup fires (see `PIPELINE_WORKER_CLEANUP_EARLY` for when) (`false` to keep your local uncommitted changes as-is) |
 | `PIPELINE_WORKER_CLEANUP_EARLY`         | `false`                      | `true` resets repoRoot as soon as the MR/PR is opened (diff committed + pushed), instead of waiting for CI to go green — frees the repo (and the run lock) for a new `pipeline-worker run` while this run's CI-watch/fix loop keeps going in the background |
-| `PIPELINE_WORKER_INTENT_MODEL`          | `haiku`                      | model used for the intent-capture step (branch/commit/summary); claude and pi support per-invocation model selection — copilot ignores it |
+| `PIPELINE_WORKER_INTENT_MODEL`          | `haiku`                      | model used for the intent-capture step (branch/commit/summary). All three agents pass it via `--model`; for copilot, the `haiku`/`sonnet` aliases are translated to Copilot's own model names (`claude-haiku-4.5`/`claude-sonnet-4.5`), anything else is passed through verbatim |
 | `PIPELINE_WORKER_BUILD`                 | auto-detected from toolchain | build command override; set to an empty string to skip the stage                                                             |
 | `PIPELINE_WORKER_LINT`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage                                                              |
 | `PIPELINE_WORKER_TEST`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage                                                              |
