@@ -18,6 +18,7 @@ import { adoptBranch } from './workflow/adoptBranch.js';
 import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
 import { resumeSkeleton, adoptSkeleton } from './workflow/runPlan.js';
 import { beginRun, endRun, runStep, seedRunTokens } from './ui/steps.js';
+import { setCompletionSound } from './ui/notify.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
 import type { ForgeClient } from './forge/types.js';
@@ -135,6 +136,7 @@ program
     try {
       const repoRoot = await findRepoRoot(process.cwd());
       const config = loadConfig(repoRoot);
+      setCompletionSound(config.completionSound);
       const forge = createForge(config);
       const agent = selectAgent(config);
 

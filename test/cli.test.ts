@@ -84,8 +84,9 @@ class McpProbe {
 /**
  * The real GitLab forge shells out to the `glab` CLI, which this test
  * environment doesn't have installed. Stands a fake `glab` executable up on
- * PATH that translates `glab api <path> [-X method] [--hostname h] [--input -]`
- * into a plain HTTP request against `startGitlabStub`'s local server, so the
+ * PATH that translates `glab api <path> [-X method] [--hostname h]
+ * [--field/--raw-field k=v ...]` into a plain HTTP request against
+ * `startGitlabStub`'s local server, so the
  * spawned dist/cli.js subprocess still exercises the real request/response
  * plumbing without a real glab binary or real network access.
  */
@@ -97,11 +98,18 @@ const argv = process.argv.slice(2); // ['api', path, ...flags]
 const path = argv[1];
 let method = 'GET';
 let hostname = '';
-let useStdin = false;
+const fields = {};
 for (let i = 2; i < argv.length; i++) {
   if (argv[i] === '-X') method = argv[++i];
   else if (argv[i] === '--hostname') hostname = argv[++i];
-  else if (argv[i] === '--input') useStdin = argv[++i] === '-';
+  else if (argv[i] === '--field' || argv[i] === '--raw-field') {
+    const raw = argv[i] === '--raw-field';
+    const pair = argv[++i];
+    const eq = pair.indexOf('=');
+    const value = pair.slice(eq + 1);
+    // Mirror glab's --field type conversion; --raw-field stays a string.
+    fields[pair.slice(0, eq)] = raw ? value : value === 'true' ? true : value === 'false' ? false : isNaN(Number(value)) ? value : Number(value);
+  }
 }
 const [host, port] = hostname.split(':');
 function run(body) {
@@ -127,13 +135,7 @@ function run(body) {
   if (body) req.write(body);
   req.end();
 }
-if (useStdin) {
-  let input = '';
-  process.stdin.on('data', (c) => (input += c));
-  process.stdin.on('end', () => run(input));
-} else {
-  run();
-}
+run(Object.keys(fields).length > 0 ? JSON.stringify(fields) : undefined);
 `;
   const scriptPath = join(binDir, 'glab');
   writeFileSync(scriptPath, source);

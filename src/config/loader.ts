@@ -46,6 +46,7 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   autoMergeOnGreen: true,
   mergeMethod: 'squash',
   squashOnMerge: false,
+  completionSound: true,
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -211,5 +212,6 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     autoMergeOnGreen,
     mergeMethod: pickName<MergeMethod>(process.env.PIPELINE_WORKER_MERGE_METHOD, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
     squashOnMerge,
+    completionSound: boolean('PIPELINE_WORKER_COMPLETION_SOUND', process.env.PIPELINE_WORKER_COMPLETION_SOUND, DEFAULT_CONFIG.completionSound),
   };
 }

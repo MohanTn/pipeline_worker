@@ -88,7 +88,16 @@ test('isMrMerged is true only for GitLab state "merged", not "closed"', async ()
   }
 });
 
-test('updateMrDescription calls glab api PUT merge_requests/{iid} with the new description on stdin', async () => {
+/** Collects the `--field`/`--raw-field` key=value pairs out of a recorded glab argv. */
+function fieldPairs(args: string[]): string[] {
+  const pairs: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--field' || args[i] === '--raw-field') pairs.push(`${args[i]} ${args[i + 1]}`);
+  }
+  return pairs;
+}
+
+test('updateMrDescription calls glab api PUT merge_requests/{iid} with the new description as a raw field', async () => {
   await withGitlabEnv(async () => {
     const { exec, calls } = fakeExecutor([() => '{}']);
     const forge = createGitlabForge(gitlabConfig(), exec);
@@ -97,7 +106,7 @@ test('updateMrDescription calls glab api PUT merge_requests/{iid} with the new d
     assert.deepEqual(calls[0].args.slice(0, 2), ['api', 'projects/1/merge_requests/7']);
     assert.ok(calls[0].args.includes('-X') && calls[0].args.includes('PUT'));
     assert.ok(calls[0].args.includes('--hostname') && calls[0].args.includes('gitlab.example.com'));
-    assert.deepEqual(calls[0].input && JSON.parse(calls[0].input), { description: 'refreshed description' });
+    assert.deepEqual(fieldPairs(calls[0].args), ['--raw-field description=refreshed description']);
   });
 });
 
@@ -123,8 +132,9 @@ test('enableAutoMerge PUTs merge_requests/{iid}/merge with merge_when_pipeline_s
     await forge.enableAutoMerge(7, 'merge');
     assert.equal(calls.length, 2);
     assert.equal(calls[0].args[1], 'projects/1/merge_requests/7/merge');
-    assert.deepEqual(calls[0].input && JSON.parse(calls[0].input), { merge_when_pipeline_succeeds: true, squash: true });
-    assert.deepEqual(calls[1].input && JSON.parse(calls[1].input), { merge_when_pipeline_succeeds: true, squash: false });
+    // `--field` (not `--raw-field`) so glab type-converts these to JSON booleans.
+    assert.deepEqual(fieldPairs(calls[0].args), ['--field merge_when_pipeline_succeeds=true', '--field squash=true']);
+    assert.deepEqual(fieldPairs(calls[1].args), ['--field merge_when_pipeline_succeeds=true', '--field squash=false']);
   });
 });
 
@@ -170,22 +180,23 @@ test('getJobLog returns the raw trace text from glab api', async () => {
   });
 });
 
-// GitLab (Grape) rejects a request whose Content-Type declares JSON but whose
-// body is empty with HTTP 415 — seen on self-hosted/proxied instances — so a
-// body (glab's `--input -`) must appear exactly when one is sent, never on
-// GETs or body-less POSTs.
-test('GET requests pass no --input/body to glab', async () => {
+// Streaming a raw JSON body through `--input -` produces HTTP 415 on some
+// GitLab installations and proxies, so the body must always travel as
+// `--field`/`--raw-field` pairs (glab builds the request itself) and `--input`
+// must never appear — nor any body flag on GETs and body-less POSTs.
+test('GET requests pass no --input or field flags to glab', async () => {
   await withGitlabEnv(async () => {
     const { exec, calls } = fakeExecutor([() => '[]']);
     const forge = createGitlabForge(gitlabConfig(), exec);
     await forge.findExistingMr('feat/branch');
     assert.equal(calls.length, 1);
     assert.ok(!calls[0].args.includes('--input'));
+    assert.deepEqual(fieldPairs(calls[0].args), []);
     assert.equal(calls[0].input, undefined);
   });
 });
 
-test('body-less POST (retryPipeline) passes no --input/body to glab', async () => {
+test('body-less POST (retryPipeline) passes no --input or field flags to glab', async () => {
   await withGitlabEnv(async () => {
     const { exec, calls } = fakeExecutor([() => JSON.stringify({ id: 9, status: 'pending', web_url: '' })]);
     const forge = createGitlabForge(gitlabConfig(), exec);
@@ -193,11 +204,12 @@ test('body-less POST (retryPipeline) passes no --input/body to glab', async () =
     assert.equal(calls.length, 1);
     assert.equal(calls[0].args[1], 'projects/1/pipelines/9/retry');
     assert.ok(!calls[0].args.includes('--input'));
+    assert.deepEqual(fieldPairs(calls[0].args), []);
     assert.equal(calls[0].input, undefined);
   });
 });
 
-test('POST with body passes --input - and the JSON body on stdin', async () => {
+test('POST with body passes --raw-field pairs, never --input or stdin', async () => {
   await withGitlabEnv(async () => {
     const { exec, calls } = fakeExecutor([
       () => JSON.stringify({ iid: 1, web_url: '', source_branch: 'feat/branch', target_branch: 'main', state: 'opened' }),
@@ -210,12 +222,13 @@ test('POST with body passes --input - and the JSON body on stdin', async () => {
       description: 'desc',
     });
     assert.equal(calls.length, 1);
-    assert.ok(calls[0].args.includes('--input') && calls[0].args.includes('-'));
-    assert.deepEqual(calls[0].input && JSON.parse(calls[0].input), {
-      source_branch: 'feat/branch',
-      target_branch: 'main',
-      title: 'title',
-      description: 'desc',
-    });
+    assert.ok(!calls[0].args.includes('--input'));
+    assert.equal(calls[0].input, undefined);
+    assert.deepEqual(fieldPairs(calls[0].args), [
+      '--raw-field source_branch=feat/branch',
+      '--raw-field target_branch=main',
+      '--raw-field title=title',
+      '--raw-field description=desc',
+    ]);
   });
 });

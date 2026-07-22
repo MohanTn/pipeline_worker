@@ -48,6 +48,8 @@ export interface PipelineWorkerConfig {
    * forge may already have merged (and deleted) the branch before this runs.
    */
   squashOnMerge: boolean;
+  /** Play a soft system notification sound when the run settles (success or failure) — best-effort, silently skipped when no audio player is available. */
+  completionSound: boolean;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';
