@@ -17,6 +17,7 @@ Consequences:
 - TypeScript ESM (`"type": "module"`), Node >= 20.12. Imports use `.js` extensions.
 - Configuration is env-vars only (`PIPELINE_WORKER_*`), parsed once in `src/config/loader.ts`. No config files, no CLI flags for settings.
 - Runtime dependencies are deliberately minimal (commander + MCP SDK + toon). Do not add a dependency for something ~150 lines of hand-rolled code covers.
+- The GitLab forge (`src/forge/gitlab.ts`) integrates with GitLab through the `glab` CLI (`glab api ...`): it authenticates non-interactively by passing `GITLAB_TOKEN` and `--hostname` to the child process, using the same `PIPELINE_WORKER_GITLAB_*` config as before. The GitHub forge (`src/forge/github.ts`) instead calls GitHub's REST/GraphQL API directly via `fetch`. `glab` must be installed and on `PATH` wherever `PIPELINE_WORKER_FORGE=gitlab` runs.
 - Errors are plain `Error` with labeled messages, not typed error classes. Best-effort vs fatal is decided by where the try/catch sits.
 
 ## Never-throw contracts
@@ -32,7 +33,7 @@ Only code under `src/ui/` may write to `process.stdout` directly. Everything els
 ## Tests
 
 - `node:test` + `node:assert/strict`, run via tsx (`npm test`). No mocking libraries.
-- Forge/HTTP code is tested against a real local `http.createServer` stub.
+- GitHub forge/HTTP code is tested against a real local `http.createServer` stub. GitLab forge code is tested by injecting a fake `GlabExecutor` (see `createGitlabForge`'s second argument) that asserts on the `glab` argv/stdin it would have received — no real `glab` binary needed for `npm test`. `test/cli.test.ts`'s GitLab-touching case additionally stands up a throwaway `glab` shell script on `PATH` (see `writeFakeGlab`) since that test spawns the compiled CLI as a real subprocess and can't inject at the TS level.
 - Workflow code is tested with hand-written stub objects implementing `ForgeClient` / `AgentAdapter`.
 - Git-touching code is tested against real throwaway repos (`mkdtempSync` + `git init`, bare origin where needed), cleaned up in `finally`.
 - `test/cli.test.ts` exercises the built `dist/cli.js`, so run `npm run build` before `npm test` when touching the CLI.

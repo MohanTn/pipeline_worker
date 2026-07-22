@@ -22,6 +22,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- GitLab forge now shells out to `glab api` CLI instead of making direct HTTP requests, eliminating bespoke auth handling and leveraging GitLab's official CLI. Tests refactored to inject fake executors instead of mocking HTTP servers. New external requirement: `glab` CLI on PATH.
 - Changes `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN` default from `false` to `true`, enabling automatic MR/PR merging once CI passes. Runs now complete end-to-end with local target branch fast-forwarded, instead of stopping at "CI is green, merge it yourself." Includes comprehensive tests, config warnings for conflicting settings, and documentation updates.
 - Introduces a core diff-management module (src/git/diff.ts) that exports three functions: captureDiff for staged/unstaged changes and untracked files, changedFilesSinceRef for ref-based file queries used by adoptBranch, and resetRepo for cleanup. The orchestrate workflow is updated to import and use these functions. Tests verify diff capture accuracy with real git repos.
 - Implements TreeRenderer for interactive live TTY dashboard with step-tree rendering, terminal-aware truncation, automatic height/width adaptation via step collapsing, comprehensive edge-case tests (narrow terminals, unknown steps, resize handling), and architecture documentation.

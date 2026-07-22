@@ -1,7 +1,10 @@
 /**
  * Drives the compiled CLI's `serve` subcommand as a subprocess (mirroring
  * mcp-sonar-analysis's test/cli.test.ts convention), against a local HTTP
- * stub standing in for the GitLab API — no real network calls in CI.
+ * stub standing in for the GitLab API. The real GitLab forge shells out to
+ * the `glab` CLI, so tests that reach it also stand up a fake `glab` on
+ * PATH (see writeFakeGlab) that forwards to the stub — no real network
+ * calls or real glab binary needed in CI.
  *
  * NOTE: requires `npm run build` to have run first (exercises dist/cli.js).
  */
@@ -12,6 +15,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import http, { type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = join(projectRoot, 'dist', 'cli.js');
@@ -76,6 +81,66 @@ class McpProbe {
   }
 }
 
+/**
+ * The real GitLab forge shells out to the `glab` CLI, which this test
+ * environment doesn't have installed. Stands a fake `glab` executable up on
+ * PATH that translates `glab api <path> [-X method] [--hostname h] [--input -]`
+ * into a plain HTTP request against `startGitlabStub`'s local server, so the
+ * spawned dist/cli.js subprocess still exercises the real request/response
+ * plumbing without a real glab binary or real network access.
+ */
+function writeFakeGlab(): { binDir: string; cleanup: () => void } {
+  const binDir = mkdtempSync(join(tmpdir(), 'fake-glab-'));
+  const source = `#!/usr/bin/env node
+const http = require('node:http');
+const argv = process.argv.slice(2); // ['api', path, ...flags]
+const path = argv[1];
+let method = 'GET';
+let hostname = '';
+let useStdin = false;
+for (let i = 2; i < argv.length; i++) {
+  if (argv[i] === '-X') method = argv[++i];
+  else if (argv[i] === '--hostname') hostname = argv[++i];
+  else if (argv[i] === '--input') useStdin = argv[++i] === '-';
+}
+const [host, port] = hostname.split(':');
+function run(body) {
+  const req = http.request(
+    { hostname: host, port: Number(port) || 80, path: '/' + path.replace(/^\\/+/, ''), method, headers: { 'content-type': 'application/json' } },
+    (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          process.stderr.write(res.statusCode + ' ' + res.statusMessage + ': ' + data);
+          process.exitCode = 1;
+          return;
+        }
+        process.stdout.write(data);
+      });
+    },
+  );
+  req.on('error', (err) => {
+    process.stderr.write(String(err));
+    process.exitCode = 1;
+  });
+  if (body) req.write(body);
+  req.end();
+}
+if (useStdin) {
+  let input = '';
+  process.stdin.on('data', (c) => (input += c));
+  process.stdin.on('end', () => run(input));
+} else {
+  run();
+}
+`;
+  const scriptPath = join(binDir, 'glab');
+  writeFileSync(scriptPath, source);
+  chmodSync(scriptPath, 0o755);
+  return { binDir, cleanup: () => rmSync(binDir, { recursive: true, force: true }) };
+}
+
 function startGitlabStub(): Promise<{ server: Server; port: number }> {
   const server = http.createServer((req, res) => {
     if (req.url?.includes('/merge_requests/7/pipelines')) {
@@ -122,8 +187,10 @@ test('pipeline-worker serve lists all six GitLab MCP tools', async () => {
 
 test('pipeline-worker serve returns a TOON-encoded envelope for get_pipeline_status', async () => {
   const { server, port } = await startGitlabStub();
+  const { binDir, cleanup } = writeFakeGlab();
   const probe = new McpProbe({
     ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
     PIPELINE_WORKER_FORGE: 'gitlab',
     PIPELINE_WORKER_GITLAB_HOST: `http://127.0.0.1:${port}`,
     PIPELINE_WORKER_GITLAB_PROJECT_ID: '1',
@@ -143,5 +210,6 @@ test('pipeline-worker serve returns a TOON-encoded envelope for get_pipeline_sta
   } finally {
     probe.stop();
     server.close();
+    cleanup();
   }
 });
