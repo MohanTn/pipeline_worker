@@ -19,6 +19,7 @@ import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
 import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, note, noteRisk, reportAgentInvocation } from '../ui/steps.js';
+import { setCompletionSound } from '../ui/notify.js';
 import { freshRunSkeleton } from './runPlan.js';
 import { printWelcome } from '../ui/welcome.js';
 import type { AgentAdapter } from '../agent/types.js';
@@ -320,6 +321,7 @@ async function finalizeRun(
 // fallow-ignore-next-line complexity
 export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions = {}): Promise<void> {
   const config = loadConfig(repoRoot);
+  setCompletionSound(config.completionSound);
   if (config.forge === 'gitlab' && !options.ticket) {
     throw new Error('forge is gitlab, which requires a ticket id — pass one with --ticket <id>.');
   }

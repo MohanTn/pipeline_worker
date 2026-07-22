@@ -69,7 +69,37 @@ test('copilotAdapter passes a unique --name and reports it back as sessionId, si
   }
 });
 
-test('copilotAdapter ignores opts.model (no per-invocation model flag) but warns instead of failing silently', { skip: process.platform === 'win32' }, async () => {
+// Copilot's --model takes its own model names, so the Claude CLI aliases the
+// config defaults to (intentModel: "haiku") must be translated, while an
+// explicit copilot-native name must pass through untouched.
+for (const [model, expected] of [
+  ['haiku', 'claude-haiku-4.5'],
+  ['sonnet', 'claude-sonnet-4.5'],
+  ['gpt-5', 'gpt-5'],
+] as const) {
+  test(`copilotAdapter passes --model ${expected} for opts.model "${model}"`, { skip: process.platform === 'win32' }, async () => {
+    const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
+    const binDir = join(topDir, 'bin');
+    mkdirSync(binDir, { recursive: true });
+    const fakeCopilot = join(binDir, 'copilot');
+    const argsFile = join(topDir, 'args.txt');
+    writeFileSync(fakeCopilot, `#!/bin/sh\necho "$@" > "${argsFile}"\ncat > /dev/null\necho 'ok'\n`);
+    chmodSync(fakeCopilot, 0o755);
+
+    const origPath = process.env.PATH;
+    process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+    try {
+      await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir, model });
+      const args = readFileSync(argsFile, 'utf-8').trim().split(/\s+/);
+      assert.equal(args[args.indexOf('--model') + 1], expected);
+    } finally {
+      process.env.PATH = origPath;
+      rmSync(topDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('copilotAdapter passes no --model flag when opts.model is unset', { skip: process.platform === 'win32' }, async () => {
   const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
   const binDir = join(topDir, 'bin');
   mkdirSync(binDir, { recursive: true });
@@ -80,16 +110,10 @@ test('copilotAdapter ignores opts.model (no per-invocation model flag) but warns
 
   const origPath = process.env.PATH;
   process.env.PATH = binDir + (origPath ? ':' + origPath : '');
-  const origConsoleError = console.error;
-  const warnings: unknown[][] = [];
-  console.error = (...args: unknown[]) => warnings.push(args);
   try {
-    await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir, model: 'sonnet' });
-    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /sonnet|--model/);
-    assert.equal(warnings.length, 1);
-    assert.match(String(warnings[0][0]), /no per-invocation model flag.*sonnet/);
+    await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir });
+    assert.doesNotMatch(readFileSync(argsFile, 'utf-8'), /--model/);
   } finally {
-    console.error = origConsoleError;
     process.env.PATH = origPath;
     rmSync(topDir, { recursive: true, force: true });
   }

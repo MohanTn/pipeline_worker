@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Fixed
 
+- The copilot agent adapter now honors per-invocation model selection (`PIPELINE_WORKER_INTENT_MODEL`) via copilot CLI's `--model` flag, translating the Claude aliases `haiku`/`sonnet` to `claude-haiku-4.5`/`claude-sonnet-4.5` and passing any other value through verbatim, instead of ignoring the configured model with a warning.
+- GitLab write requests now pass their body as `glab api --field`/`--raw-field` pairs instead of streaming raw JSON through `--input -`, fixing HTTP 415 errors on GitLab installations and proxies that reject the streamed body.
 - GitLab API requests without a body (GETs, pipeline retry) no longer send `Content-Type: application/json`, fixing HTTP 415 errors on GitLab instances that reject body-less JSON requests.
 - Boolean env vars (`PIPELINE_WORKER_RUN_LINT_AND_TEST`, `PIPELINE_WORKER_CLEANUP`, `PIPELINE_WORKER_CLEANUP_EARLY`, `PIPELINE_WORKER_UPDATE_CHANGELOG`, `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN`, `PIPELINE_WORKER_SQUASH_ON_MERGE`) now accept `1`/`0`, `yes`/`no`, `on`/`off` and tolerate surrounding whitespace, on top of `true`/`false`. Anything else still falls back to the default but now prints a warning naming the variable, instead of silently resolving to the default — `PIPELINE_WORKER_RUN_LINT_AND_TEST=0` previously ran lint and test anyway with no hint why.
 - Added truncateToWidth() utility function to prevent spinner detail text from exceeding terminal width, preventing unwanted line wrapping. Integrated into runStep() render function to apply terminal-width-aware truncation.
@@ -23,6 +25,8 @@ All notable changes to this project are documented here. The format is based on 
 
 ### Added
 
+- Major feature release adding auto-merge-on-green as default (with env override available), cross-platform completion sound notifications, complete GitLab glab CLI migration (breaking: requires glab on PATH), improved boolean env var parsing with validation warnings, and various reliability fixes including retry logic, terminal truncation, and pipeline status improvements.
+- `PIPELINE_WORKER_COMPLETION_SOUND` (default `true`): when a run settles — success or failure — play the platform's soft notification sound (freedesktop "complete" chime via `paplay`/`canberra-gtk-play` on Linux, `afplay` Glass on macOS, the system notify sound on Windows). Best-effort and TTY-only: CI, tests, piped output, and machines with no audio player stay silent.
 - GitLab forge now shells out to `glab api` CLI for all API requests, eliminating custom auth handling and fixing HTTP 415 errors. Tests refactored to use fake executor injection instead of HTTP server mocking. New requirement: `glab` CLI on PATH.
 - GitLab forge now shells out to `glab api` CLI instead of making direct HTTP requests, eliminating bespoke auth handling and leveraging GitLab's official CLI. Tests refactored to inject fake executors instead of mocking HTTP servers. New external requirement: `glab` CLI on PATH.
 - Changes `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN` default from `false` to `true`, enabling automatic MR/PR merging once CI passes. Runs now complete end-to-end with local target branch fast-forwarded, instead of stopping at "CI is green, merge it yourself." Includes comprehensive tests, config warnings for conflicting settings, and documentation updates.

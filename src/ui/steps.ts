@@ -16,6 +16,7 @@ import { RunTree, type RunStatus, type StepSeed } from './runTree.js';
 import { LineRenderer, type Renderer } from './renderer.js';
 import { TreeRenderer } from './treeRenderer.js';
 import { boxHeader, formatBulletBlock } from './format.js';
+import { maybeChime } from './notify.js';
 import type { RiskLevel } from '../types.js';
 import type { AgentInvokeResult } from '../agent/types.js';
 
@@ -100,6 +101,8 @@ export function endRun(status: Exclude<RunStatus, 'running'>, detail?: string): 
   run.ended = true;
   run.tree.setHeader({ status });
   run.renderer.stop(status, detail, run.tree);
+  // After the renderer settles so the chime never interleaves with the final repaint.
+  maybeChime(status);
 }
 
 /** Adds a step that wasn't in the skeleton — the watch loop's fix/rebase attempts, conflict resolution, squash. */

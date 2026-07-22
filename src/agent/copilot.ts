@@ -13,9 +13,9 @@
  *    prompt and the JSON object is extracted from the response text;
  *  - no per-invocation MCP config flag -> Copilot only reads
  *    ~/.copilot/mcp-config.json, so `mcpConfigPath` is ignored with a warning.
- *  - no per-invocation model flag -> `opts.model` (e.g. the configured
- *    `PIPELINE_WORKER_INTENT_MODEL`) is ignored with a warning; switch
- *    Copilot's model via its own `/model` command or config instead.
+ *  - `--model` expects Copilot's own model names (e.g. `claude-haiku-4.5`),
+ *    not the Claude CLI aliases the config defaults to -> known aliases are
+ *    mapped (haiku/sonnet), anything else is passed through verbatim.
  *  - no per-invocation tool allowlist -> `--allow-all-tools` is always passed,
  *    so `allowedTools` is ignored; a read-only step (e.g. captureIntent.ts)
  *    gets full tool access under this adapter instead of being restricted.
@@ -56,7 +56,7 @@ function buildCopilotPrompt(prompt: string, jsonSchema?: object): string {
   return `${prompt}\n\nRespond with ONLY a single JSON object matching this JSON Schema — no prose, no code fences:\n${JSON.stringify(jsonSchema)}`;
 }
 
-/** Warns about the two AgentInvokeOptions Copilot CLI has no per-invocation flag for (see module comment). */
+/** Warns about the AgentInvokeOptions Copilot CLI has no per-invocation flag for (see module comment). */
 function warnUnsupportedOptions(opts: AgentInvokeOptions): void {
   if (opts.mcpConfigPath) {
     console.error(
@@ -64,12 +64,16 @@ function warnUnsupportedOptions(opts: AgentInvokeOptions): void {
         'Register the server in ~/.copilot/mcp-config.json to give copilot forge access.',
     );
   }
-  if (opts.model) {
-    console.error(
-      `pipeline-worker: copilot CLI has no per-invocation model flag; ignoring the configured model "${opts.model}". ` +
-        "Switch copilot's model via its own /model command or config instead.",
-    );
-  }
+}
+
+/** Copilot's `--model` takes its own model names, not the Claude CLI aliases config defaults to (see module comment). */
+const COPILOT_MODEL_ALIASES: Record<string, string> = {
+  haiku: 'claude-haiku-4.5',
+  sonnet: 'claude-sonnet-4.5',
+};
+
+function resolveCopilotModel(model: string): string {
+  return COPILOT_MODEL_ALIASES[model] ?? model;
 }
 
 export const copilotAdapter: AgentAdapter = {
@@ -78,10 +82,12 @@ export const copilotAdapter: AgentAdapter = {
     warnUnsupportedOptions(opts);
 
     const sessionName = `pipeline-worker-${randomUUID()}`;
+    const args = ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths', '--name', sessionName];
+    if (opts.model) args.push('--model', resolveCopilotModel(opts.model));
     const start = Date.now();
     const invocation = execFileAsync(
       'copilot',
-      ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths', '--name', sessionName],
+      args,
       {
         cwd: opts.cwd,
         timeout: AGENT_INVOKE_TIMEOUT_MS,

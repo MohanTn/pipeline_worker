@@ -115,7 +115,8 @@ const IntentShape = z.object({
  * `model` (config's `intentModel`, default "haiku" — see config/loader.ts)
  * lets a lighter model handle this step to keep its token cost down, since
  * naming a branch/commit/summary from a diff needs no deep reasoning.
- * Adapters with no per-invocation model selection (e.g. copilot) ignore it.
+ * Each adapter maps it onto its own CLI's model flag (copilot translates
+ * Claude aliases like "haiku" to its own model names).
  * The CI-fix path (watchPipeline.ts) deliberately never sets a model override
  * — fixing a real failing build needs the stronger default model.
  *

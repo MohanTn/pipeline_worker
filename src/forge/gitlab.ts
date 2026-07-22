@@ -125,12 +125,16 @@ async function apiText(exec: GlabExecutor, auth: GlabAuth, label: string, path: 
 
 async function apiWrite(exec: GlabExecutor, auth: GlabAuth, label: string, method: 'POST' | 'PUT', path: string, body?: object): Promise<any> {
   const args = ['api', path, '-X', method, '--hostname', auth.hostname];
-  // GitLab (Grape) returns 415 when Content-Type declares JSON but the
-  // request has no body, so `--input -` (and hence a JSON body) is only
-  // passed when a body is actually sent.
-  const input = body === undefined ? undefined : JSON.stringify(body);
-  if (input !== undefined) args.push('--input', '-');
-  const stdout = await withGitlabRetry(label, () => exec(args, input));
+  // Let glab construct the request body and headers. Sending a raw JSON stream
+  // through `--input -` produces HTTP 415 on some GitLab installations and
+  // proxies. `--raw-field` keeps strings literal; `--field` type-converts, so
+  // booleans (e.g. merge_when_pipeline_succeeds) reach the API as JSON booleans.
+  if (body !== undefined) {
+    for (const [key, value] of Object.entries(body)) {
+      args.push(typeof value === 'string' ? '--raw-field' : '--field', `${key}=${String(value)}`);
+    }
+  }
+  const stdout = await withGitlabRetry(label, () => exec(args));
   return stdout ? JSON.parse(stdout) : undefined;
 }
 
