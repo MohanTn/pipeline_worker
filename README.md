@@ -17,13 +17,14 @@ Automate the last mile of your local changes: pipeline-worker takes the uncommit
 
 While attached to a real terminal, the run renders as a live step tree — header line, then one row per step (capture, worktree, checks, ci-watch, merge, ...) with a status glyph, duration, and best-effort token count, updated in place. CI logs and piped output fall back to the previous append-only narration (or force it yourself with `PIPELINE_WORKER_PLAIN_OUTPUT=true`).
 
-Polling is plain REST and costs zero agent tokens; the agent is invoked only when a pipeline actually fails, and fetches whatever pipeline/job detail it needs through pipeline-worker's token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server (or an external forge MCP server, if the agent has one available).
+Polling costs zero agent tokens; the agent is invoked only when a pipeline actually fails, and fetches whatever pipeline/job detail it needs through pipeline-worker's token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server (or an external forge MCP server, if the agent has one available). GitHub polling is plain REST; GitLab polling shells out to the [`glab`](https://gitlab.com/gitlab-org/cli) CLI.
 
 ## Requirements
 
 - Node.js >= 20.12 and git
 - One coding agent CLI on your PATH: [Claude Code](https://claude.com/claude-code) (`claude`), [Pi](https://pi.dev) (`pi`), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (`copilot`)
 - A GitLab or GitHub token with API access to the repo
+- If `PIPELINE_WORKER_FORGE=gitlab`: the [`glab`](https://gitlab.com/gitlab-org/cli) CLI on your PATH — pipeline-worker authenticates it non-interactively by passing `GITLAB_TOKEN` and `--hostname` when it calls `glab api`
 
 ### Agents
 
