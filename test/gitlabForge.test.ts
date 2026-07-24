@@ -112,10 +112,14 @@ test('updateMrDescription calls glab api PUT merge_requests/{iid} with the new d
 
 test('getMrDescription reads the description off GET merge_requests/{iid}, treating a null description as empty', async () => {
   await withGitlabEnv(async () => {
-    const { exec, calls } = fakeExecutor([() => JSON.stringify({ description: 'Original description.' }), () => JSON.stringify({ description: null })]);
+    const { exec, calls } = fakeExecutor([() => JSON.stringify({ description: 'Original description.', updated_at: '2024-01-01T00:00:00Z' }), () => JSON.stringify({ description: null, updated_at: '2024-01-02T00:00:00Z' })]);
     const forge = createGitlabForge(gitlabConfig(), exec);
-    assert.equal(await forge.getMrDescription(7), 'Original description.');
-    assert.equal(await forge.getMrDescription(7), '');
+    const desc1 = await forge.getMrDescription(7);
+    assert.equal(desc1.text, 'Original description.');
+    assert.equal(desc1.version, '2024-01-01T00:00:00Z');
+    const desc2 = await forge.getMrDescription(7);
+    assert.equal(desc2.text, '');
+    assert.equal(desc2.version, '2024-01-02T00:00:00Z');
     assert.deepEqual(calls[0].args.slice(0, 2), ['api', 'projects/1/merge_requests/7']);
     assert.ok(!calls[0].args.includes('-X'));
   });

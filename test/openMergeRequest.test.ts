@@ -93,7 +93,7 @@ function mrForgeStub(overrides: Partial<ForgeClient>): ForgeClient {
     createMergeRequest: async (args) =>
       ({ iid: 1, webUrl: 'http://example/mr/1', sourceBranch: args.sourceBranch, targetBranch: args.targetBranch, state: 'open' }) as MergeRequest,
     updateMrDescription: async () => {},
-    getMrDescription: async () => '',
+    getMrDescription: async () => ({ text: '' }),
     getMrPipelines: async () => [],
     getFailedJobs: async () => [],
     getJobLog: async () => '',
@@ -204,7 +204,7 @@ test("appendToMergeRequest pushes the worktree's HEAD onto the MR/PR's branch an
     let updated: { mrIid: number; description: string } | undefined;
     const mr: MergeRequest = { iid: 12, webUrl: 'http://example/mr/12', sourceBranch: 'feature/reviewed', targetBranch: 'main', state: 'open' };
     const forge = mrForgeStub({
-      getMrDescription: async () => 'Original description.',
+      getMrDescription: async () => ({ text: 'Original description.' }),
       updateMrDescription: async (mrIid, description) => {
         updated = { mrIid, description };
       },

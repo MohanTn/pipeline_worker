@@ -85,8 +85,19 @@ export async function appendToMergeRequest(
   await runStep('push', `push this commit onto ${mr.sourceBranch}, the branch of ${mr.webUrl}`, () => push(worktreePath, 'origin', mr.sourceBranch));
 
   await runStep('mr', `appending the file-wise breakdown to ${mr.webUrl}'s description`, async () => {
-    const existing = await forge.getMrDescription(mr.iid);
-    await forge.updateMrDescription(mr.iid, appendSection(existing, buildFollowUpSection(intent, agentName, checks)));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const desc = await forge.getMrDescription(mr.iid);
+        const newDescription = appendSection(desc.text, buildFollowUpSection(intent, agentName, checks));
+        await forge.updateMrDescription(mr.iid, newDescription, desc.version);
+        return;
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('ConflictError') && attempt < 2) {
+          continue;
+        }
+        throw error;
+      }
+    }
   });
   note(mr.webUrl);
 }

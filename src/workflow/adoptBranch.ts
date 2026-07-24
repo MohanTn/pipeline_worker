@@ -81,7 +81,7 @@ async function adoptWithExistingMr(
   note(`${config.agent} says: ${intent.summary}`);
 
   await runStep('mr', `overwriting the description of MR/PR ${existingMr.webUrl}`, () =>
-    forge.updateMrDescription(existingMr.iid, buildDescription(intent, config.agent, [])),
+    forge.updateMrDescription(existingMr.iid, buildDescription(intent, config.agent, []), undefined),
   );
 
   state.mrIid = existingMr.iid;

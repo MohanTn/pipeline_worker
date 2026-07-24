@@ -13,14 +13,19 @@ export interface CreateMrArgs {
   description: string;
 }
 
+export interface MrDescription {
+  text: string;
+  version?: string;
+}
+
 export interface ForgeClient {
   /** Idempotency check: finds an already-open MR/PR for this branch, if any. */
   findExistingMr(sourceBranch: string): Promise<MergeRequest | undefined>;
   createMergeRequest(args: CreateMrArgs): Promise<MergeRequest>;
-  /** Overwrites an existing MR/PR's description — used by `resume`'s branch-adoption path to refresh it with newly captured intent. */
-  updateMrDescription(mrIid: number, description: string): Promise<void>;
-  /** The MR/PR's current description, '' when it has none — read before appending a follow-up run's section so nothing already written there is lost. */
-  getMrDescription(mrIid: number): Promise<string>;
+  /** Overwrites an existing MR/PR's description — used by `resume`'s branch-adoption path to refresh it with newly captured intent. Throws ConflictError when version doesn't match (concurrent edit detected). */
+  updateMrDescription(mrIid: number, description: string, version?: string): Promise<void>;
+  /** The MR/PR's current description with its version, '' when it has none — read before appending a follow-up run's section so nothing already written there is lost. */
+  getMrDescription(mrIid: number): Promise<MrDescription>;
   /** Latest-first pipelines (GitHub: workflow runs aggregated into one) for an MR/PR. */
   getMrPipelines(mrIid: number): Promise<Pipeline[]>;
   getFailedJobs(pipelineId: number): Promise<PipelineJob[]>;

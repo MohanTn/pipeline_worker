@@ -174,7 +174,8 @@ test('getMrDescription reads the PR body, and reads an absent body as an empty s
     try {
       await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
         const forge = createGithubForge(githubConfig());
-        assert.equal(await forge.getMrDescription(42), expected);
+        const result = await forge.getMrDescription(42);
+        assert.equal(result.text, expected);
       });
     } finally {
       server.close();

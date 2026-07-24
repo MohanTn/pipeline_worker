@@ -48,7 +48,7 @@ function remoteQueryOptions(repoRoot: string): { cwd: string; env: NodeJS.Proces
 
 /** True when `branch` exists as a head on `origin`. Throws only when origin itself can't be reached. */
 export async function remoteBranchExists(repoRoot: string, branch: string): Promise<boolean> {
-  const { stdout } = await execFileAsync('git', ['ls-remote', '--heads', 'origin', branch], remoteQueryOptions(repoRoot));
+  const { stdout } = await execFileAsync('git', ['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], remoteQueryOptions(repoRoot));
   return stdout.trim().length > 0;
 }
 

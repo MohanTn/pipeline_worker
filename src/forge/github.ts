@@ -162,14 +162,22 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       return toMergeRequest(await res.json());
     },
 
-    async updateMrDescription(mrIid: number, description: string): Promise<void> {
-      await githubRequest(auth, `/pulls/${mrIid}`, { method: 'PATCH', body: JSON.stringify({ body: description }) });
+    async updateMrDescription(mrIid: number, description: string, version?: string): Promise<void> {
+      const init: RequestInit = { method: 'PATCH', body: JSON.stringify({ body: description }) };
+      if (version) {
+        init.headers = { ...init.headers, 'If-Match': version };
+      }
+      const res = await githubRequest(auth, `/pulls/${mrIid}`, init);
+      if (res.status === 409) {
+        throw new Error('ConflictError: MR description was modified concurrently');
+      }
     },
 
-    async getMrDescription(mrIid: number): Promise<string> {
+    async getMrDescription(mrIid: number): Promise<{ text: string; version?: string }> {
       const res = await githubRequest(auth, `/pulls/${mrIid}`);
       const { body } = (await res.json()) as { body: string | null };
-      return body ?? '';
+      const version = res.headers.get('etag') ?? undefined;
+      return { text: body ?? '', version };
     },
 
     async getMrPipelines(mrIid: number): Promise<Pipeline[]> {
