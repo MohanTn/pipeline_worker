@@ -74,6 +74,25 @@ export async function changedFilesSinceRef(worktreePath: string, ref: string): P
 }
 
 /**
+ * The patch text (not just the file names changedFilesSinceRef returns) of
+ * everything committed since `ref`, for the AI review stage
+ * (workflow/reviewMergeRequest.ts) — it has to read the actual added lines,
+ * with enough surrounding context to judge them, and needs the `@@` hunk
+ * headers to compute each line's new-file number.
+ *
+ * Deliberately *not* `--binary` (unlike captureDiff, which has to replay its
+ * patch): the reviewer only reads the diff, and base64 blobs would burn the
+ * chunk budget on bytes no agent can review.
+ */
+export async function diffTextSinceRef(worktreePath: string, ref: string, context = 3): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['diff', `--unified=${context}`, ref], {
+    cwd: worktreePath,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return stdout;
+}
+
+/**
  * Discards repoRoot's now-redundant uncommitted changes once they're safely
  * captured on the opened MR/PR: `git reset --hard HEAD` undoes tracked
  * edits (whatever branch repoRoot happens to be on), then `untrackedFiles`

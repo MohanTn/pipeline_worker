@@ -26,6 +26,7 @@ export function freshRunSkeleton(targetBranch: string, agentName: string): StepS
     { id: 'commit', label: 'commit', detail: 'commit the applied changes' },
     { id: 'push', label: 'push', detail: 'push the feature branch to origin' },
     { id: 'mr', label: 'mr', detail: 'open the merge request' },
+    { id: 'review', label: 'review', detail: `${agentName} reviews the diff · inline comments` },
     { id: 'ci-watch', label: 'ci-watch', detail: 'watch CI · fix failures · resolve conflicts' },
     { id: 'cleanup', label: 'cleanup', detail: 'reset your repo to HEAD' },
     { id: 'merge', label: 'merge', detail: `auto-merge + sync local ${targetBranch}` },
@@ -51,7 +52,16 @@ export function adoptSkeleton(branch: string): StepSeed[] {
     { id: 'changelog', label: 'changelog', detail: 'CHANGELOG.md bullet' },
     { id: 'push', label: 'push', detail: 'push the branch to origin' },
     { id: 'mr', label: 'mr', detail: 'open or refresh the merge request' },
+    { id: 'review', label: 'review', detail: 'review the diff · inline comments' },
     { id: 'ci-watch', label: 'ci-watch', detail: 'watch CI · fix failures · resolve conflicts' },
     { id: 'merge', label: 'merge', detail: 'auto-merge + sync local target' },
+  ];
+}
+
+/** `pipeline-worker review --branch`: adopt the branch's open MR/PR and review it, nothing else. */
+export function reviewSkeleton(branch: string): StepSeed[] {
+  return [
+    { id: 'adopt', label: 'adopt', detail: `fetch + checkout origin/${branch}` },
+    { id: 'review', label: 'review', detail: 'review the diff · inline comments' },
   ];
 }

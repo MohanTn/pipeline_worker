@@ -16,7 +16,8 @@ import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
 import { adoptBranch } from './workflow/adoptBranch.js';
 import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
-import { resumeSkeleton, adoptSkeleton } from './workflow/runPlan.js';
+import { maybeReviewMergeRequest } from './workflow/reviewMr.js';
+import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './workflow/runPlan.js';
 import { beginRun, endRun, runStep, seedRunTokens } from './ui/steps.js';
 import { setCompletionSound } from './ui/notify.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
@@ -156,6 +157,10 @@ program
         beginRun(adoptSkeleton(opts.branch), { title: opts.branch });
         state = await adoptBranch(repoRoot, config, forge, agent, opts.branch, opts.target);
         worktreePath = state.worktreePath;
+        // Adoption is the one resume path that just (re)opened an MR/PR, so
+        // it is the one that has something new to review; a resumed run's
+        // MR/PR was already reviewed when its original run opened it.
+        await maybeReviewMergeRequest(forge, config, agent, worktreePath, state.targetBranch, state.mrIid);
       }
 
       const { cleanup } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
@@ -168,6 +173,45 @@ program
       console.log(`pipeline-worker: resumed run finished with phase "${state.phase}".`);
     } catch (error) {
       console.error('pipeline-worker resume failed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('review')
+  .description("Review an open MR/PR's diff with the configured agent and post line-anchored comments on it (nothing else — no checks, no CI watch)")
+  .requiredOption('--branch <name>', 'branch whose open MR/PR should be reviewed')
+  .action(async (opts: { branch: string }) => {
+    try {
+      const repoRoot = await findRepoRoot(process.cwd());
+      const config = loadConfig(repoRoot);
+      setCompletionSound(config.completionSound);
+      const forge = createForge(config);
+      const agent = selectAgent(config);
+
+      const mr = await forge.findExistingMr(opts.branch);
+      if (!mr) {
+        console.error(`pipeline-worker: no open MR/PR found for branch ${opts.branch} — open one first (pipeline-worker resume --branch ${opts.branch}).`);
+        process.exit(1);
+      }
+
+      beginRun(reviewSkeleton(opts.branch), { title: opts.branch });
+      const worktreePath = await runStep('adopt', `checkout ${opts.branch} into a disposable worktree`, () =>
+        checkoutExistingBranch(repoRoot, opts.branch),
+      );
+      try {
+        // Asking for a review explicitly *is* the opt-in, so config.review is
+        // overridden here — PIPELINE_WORKER_REVIEW only gates the automatic
+        // stage inside `run`/`resume`.
+        const posted = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid);
+        endRun('done', posted > 0 ? `posted ${posted} comment(s) on ${mr.webUrl}` : `nothing worth commenting on — ${mr.webUrl}`);
+      } finally {
+        await removeWorktree(repoRoot, worktreePath);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      endRun('failed', message);
+      console.error('pipeline-worker review failed:', message);
       process.exit(1);
     }
   });
@@ -241,6 +285,12 @@ Examples:
       Adopt a branch pipeline-worker never ran on: open a PR/MR against origin's
       default branch if none exists yet, or refresh an existing one's description
       and resume watching its CI. Pass --target <branch> to override the base branch.
+
+  $ pipeline-worker review --branch pipeline-worker/add-login
+      Review that branch's open MR/PR with the configured agent and post
+      line-anchored comments (with one-click \`\`\`suggestion fixes) on the lines
+      it flags. Runs regardless of PIPELINE_WORKER_REVIEW, which only gates the
+      automatic review inside \`run\`/\`resume\`.
 
   $ pipeline-worker status --branch pipeline-worker/add-login
       Print the persisted state of that run.

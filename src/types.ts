@@ -1,5 +1,9 @@
 /** Single source of truth for pipeline-worker's cross-module data shapes. */
 
+// The review pipeline owns its own shapes (review/types.ts, which imports
+// nothing); only the severity enum surfaces here, because it is configurable.
+import type { ReviewSeverity } from './review/types.js';
+
 export type AgentName = 'claude' | 'copilot' | 'pi';
 export type ForgeName = 'gitlab' | 'github';
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
@@ -50,6 +54,22 @@ export interface PipelineWorkerConfig {
   squashOnMerge: boolean;
   /** Play a soft system notification sound when the run settles (success or failure) — best-effort, silently skipped when no audio player is available. */
   completionSound: boolean;
+  /**
+   * Once the MR/PR is open, ask the agent to review its diff and post
+   * line-anchored comments on the lines it flags (see
+   * workflow/reviewMergeRequest.ts). Off by default: it spends agent tokens
+   * and writes to a place humans read, so it is opt-in rather than something
+   * a version bump switches on. Best-effort — never fails the run.
+   */
+  review: boolean;
+  /** Model for the review turns; '' uses the adapter's default (deliberately stronger than intentModel — finding real bugs is not the cheap-model job). */
+  reviewModel: string;
+  /** Findings below this severity are never posted — the anti-alert-fatigue gate. */
+  reviewMinSeverity: ReviewSeverity;
+  /** Hard cap on how many comments one run may post. */
+  reviewMaxComments: number;
+  /** Char budget per diff chunk sent to the agent (one agent turn per chunk). */
+  reviewChunkChars: number;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';

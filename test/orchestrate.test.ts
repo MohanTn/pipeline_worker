@@ -118,6 +118,7 @@ function lookupOnlyForge(onLookup: (branch: string) => MergeRequest | undefined)
     getJobLog: notUsed,
     retryPipeline: notUsed,
     createMrNote: notUsed,
+    createInlineComment: notUsed,
     hasMergeConflicts: notUsed,
     enableAutoMerge: notUsed,
     isMrMerged: notUsed,

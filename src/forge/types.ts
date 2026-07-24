@@ -18,6 +18,20 @@ export interface MrDescription {
   version?: string;
 }
 
+/** One line-anchored review comment (see ForgeClient.createInlineComment). */
+export interface InlineComment {
+  /** Repo-relative path as it appears on the diff's *new* side. */
+  path: string;
+  /**
+   * Line number in the file's NEW version. Both forges only accept a line
+   * that is part of the diff, and an *added* line is the only kind this
+   * feature anchors to — GitLab's position needs old_line as well for an
+   * unchanged line (see review/types.ts's DiffChunk.commentableLines).
+   */
+  line: number;
+  body: string;
+}
+
 export interface ForgeClient {
   /** Idempotency check: finds an already-open MR/PR for this branch, if any. */
   findExistingMr(sourceBranch: string): Promise<MergeRequest | undefined>;
@@ -32,6 +46,16 @@ export interface ForgeClient {
   getJobLog(jobId: number): Promise<string>;
   retryPipeline(pipelineId: number): Promise<Pipeline>;
   createMrNote(mrIid: number, body: string): Promise<{ id: number }>;
+  /**
+   * Posts one comment anchored to a line of the MR/PR's diff — GitHub's
+   * pull-request review comment (`commit_id` + `path` + `line` on the RIGHT
+   * side), GitLab's discussion with a `text` position. Both forges reject a
+   * line that isn't part of the diff, and both reject a position computed
+   * against a commit the branch has since moved past, so this throws far more
+   * readily than createMrNote: every caller treats a rejection as
+   * best-effort (a note, not a failed run) — see workflow/reviewMergeRequest.ts.
+   */
+  createInlineComment(mrIid: number, comment: InlineComment): Promise<{ id: number }>;
   /**
    * True only when the forge has *confirmed* the MR/PR has real merge
    * conflicts against its target branch (GitHub's `mergeable_state: "dirty"`,

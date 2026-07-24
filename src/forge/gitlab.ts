@@ -10,7 +10,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
-import type { CreateMrArgs, ForgeClient } from './types.js';
+import type { CreateMrArgs, ForgeClient, InlineComment } from './types.js';
 import { firstOrUndefined, isRetryableStatus } from './shared.js';
 import { writePromptToStdin } from '../agent/stdinPrompt.js';
 
@@ -211,6 +211,34 @@ export function createGitlabForge(config: PipelineWorkerConfig, executor?: GlabE
 
     async createMrNote(mrIid: number, body: string): Promise<{ id: number }> {
       const raw = await apiWrite(exec, auth, `GitLab API POST merge_requests/${mrIid}/notes`, 'POST', projectPath(auth, `/merge_requests/${mrIid}/notes`), { body });
+      return { id: raw.id };
+    },
+
+    async createInlineComment(mrIid: number, comment: InlineComment): Promise<{ id: number }> {
+      // GitLab anchors a diff comment to a position triple (base/start/head
+      // shas) that only the MR itself knows, so it is read per comment rather
+      // than guessed from the local worktree — a stale triple is rejected.
+      const mr = await apiGet(exec, auth, `GitLab API GET merge_requests/${mrIid}`, projectPath(auth, `/merge_requests/${mrIid}`));
+      const refs = mr.diff_refs ?? {};
+      const raw = await apiWrite(
+        exec,
+        auth,
+        `GitLab API POST merge_requests/${mrIid}/discussions`,
+        'POST',
+        projectPath(auth, `/merge_requests/${mrIid}/discussions`),
+        {
+          body: comment.body,
+          'position[position_type]': 'text',
+          'position[base_sha]': refs.base_sha,
+          'position[start_sha]': refs.start_sha,
+          'position[head_sha]': refs.head_sha,
+          'position[new_path]': comment.path,
+          // old_path is required even for an added line; for a file that was
+          // not renamed it is simply the same path.
+          'position[old_path]': comment.path,
+          'position[new_line]': comment.line,
+        },
+      );
       return { id: raw.id };
     },
 

@@ -15,10 +15,12 @@ import { detectChecks } from './detectChecks.js';
 import { deriveProjectPath } from '../git/resolveProjectPath.js';
 import { detectGithubRepo } from '../git/remote.js';
 import type { AgentName, ForgeName, MergeMethod, PipelineWorkerConfig } from '../types.js';
+import type { ReviewSeverity } from '../review/types.js';
 
 const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot', 'pi'];
 const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
 const MERGE_METHODS: readonly MergeMethod[] = ['merge', 'squash', 'rebase'];
+const REVIEW_SEVERITIES: readonly ReviewSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR'];
 
 // build/lint/test defaults come from detectChecks(repoRoot) at load time.
 const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
@@ -47,6 +49,13 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   mergeMethod: 'squash',
   squashOnMerge: false,
   completionSound: true,
+  review: false,
+  reviewModel: '',
+  reviewMinSeverity: 'MAJOR',
+  reviewMaxComments: 10,
+  // ~24k chars is a comfortably-reviewable slice for any current model while
+  // still keeping a typical MR/PR down to one or two agent turns.
+  reviewChunkChars: 24_000,
 };
 
 /** Loads <repoRoot>/.env into process.env; already-set variables always win. */
@@ -117,6 +126,23 @@ function resolveProjectId(value: string | undefined, fallback: number | string):
   if (!value) return fallback;
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : value;
+}
+
+/**
+ * Like pickName, but warns on an unrecognized value the way boolean() does —
+ * a typo'd PIPELINE_WORKER_REVIEW_MIN_SEVERITY would otherwise silently widen
+ * (or narrow) what gets posted with no hint why. Case-insensitive: `major` is
+ * the spelling most people reach for.
+ */
+function pickSeverity(value: string | undefined, fallback: ReviewSeverity): ReviewSeverity {
+  const normalized = (value ?? '').trim().toUpperCase();
+  if (normalized === '') return fallback;
+  if (REVIEW_SEVERITIES.includes(normalized as ReviewSeverity)) return normalized as ReviewSeverity;
+  console.error(
+    `Warning: PIPELINE_WORKER_REVIEW_MIN_SEVERITY=${JSON.stringify(value)} is not a severity — using ${fallback}. ` +
+      `Accepted values: ${REVIEW_SEVERITIES.join('/')}.`,
+  );
+  return fallback;
 }
 
 /**
@@ -213,5 +239,10 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     mergeMethod: pickName<MergeMethod>(process.env.PIPELINE_WORKER_MERGE_METHOD, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
     squashOnMerge,
     completionSound: boolean('PIPELINE_WORKER_COMPLETION_SOUND', process.env.PIPELINE_WORKER_COMPLETION_SOUND, DEFAULT_CONFIG.completionSound),
+    review: boolean('PIPELINE_WORKER_REVIEW', process.env.PIPELINE_WORKER_REVIEW, DEFAULT_CONFIG.review),
+    reviewModel: process.env.PIPELINE_WORKER_REVIEW_MODEL || DEFAULT_CONFIG.reviewModel,
+    reviewMinSeverity: pickSeverity(process.env.PIPELINE_WORKER_REVIEW_MIN_SEVERITY, DEFAULT_CONFIG.reviewMinSeverity),
+    reviewMaxComments: positiveNumber(process.env.PIPELINE_WORKER_REVIEW_MAX_COMMENTS, DEFAULT_CONFIG.reviewMaxComments),
+    reviewChunkChars: positiveNumber(process.env.PIPELINE_WORKER_REVIEW_CHUNK_CHARS, DEFAULT_CONFIG.reviewChunkChars),
   };
 }

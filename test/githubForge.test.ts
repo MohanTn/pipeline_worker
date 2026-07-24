@@ -271,6 +271,53 @@ test('enableAutoMerge throws when the GraphQL response reports errors', async ()
   }
 });
 
+/** Serves the PR (for its head sha) and records every request, so the comment POST can be asserted in full. */
+function startInlineCommentStub(headSha: string): Promise<{ server: Server; port: number; requests: Array<{ method?: string; path?: string; body: unknown }> }> {
+  const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      requests.push({ method: req.method, path: req.url, body: raw ? JSON.parse(raw) : undefined });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(req.method === 'POST' ? { id: 555 } : { head: { sha: headSha } }));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port, requests });
+    });
+  });
+}
+
+// A review comment against anything but the PR's current head sha is filed as
+// "outdated" and collapsed out of sight — the one thing this feature must not do.
+test('createInlineComment resolves the PR head sha, then POSTs a RIGHT-side comment on that path and line', async () => {
+  const { server, port, requests } = await startInlineCommentStub('abc123head');
+  try {
+    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      const comment = await forge.createInlineComment(7, { path: 'src/app.ts', line: 42, body: 'Hard-coded secret.' });
+      assert.deepEqual(comment, { id: 555 });
+    });
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].path, '/repos/acme/widgets/pulls/7');
+    assert.equal(requests[1].method, 'POST');
+    assert.equal(requests[1].path, '/repos/acme/widgets/pulls/7/comments');
+    assert.deepEqual(requests[1].body, {
+      commit_id: 'abc123head',
+      path: 'src/app.ts',
+      line: 42,
+      side: 'RIGHT',
+      body: 'Hard-coded secret.',
+    });
+  } finally {
+    server.close();
+  }
+});
+
 test('getCiConfigPath always resolves undefined with no HTTP request — GitHub has no custom-path concept', async () => {
   let calls = 0;
   const server = http.createServer((req, res) => {

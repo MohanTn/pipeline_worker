@@ -125,6 +125,36 @@ test('getMrDescription reads the description off GET merge_requests/{iid}, treat
   });
 });
 
+// A GitLab discussion only lands on the diff when its position carries the
+// MR's own base/start/head shas — a missing or stale triple is rejected, or
+// (worse) silently posted as an ordinary MR-level note.
+test('createInlineComment reads diff_refs off the MR, then POSTs a text position on the new side', async () => {
+  await withGitlabEnv(async () => {
+    const { exec, calls } = fakeExecutor([
+      () => JSON.stringify({ iid: 7, diff_refs: { base_sha: 'base1', start_sha: 'start1', head_sha: 'head1' } }),
+      () => JSON.stringify({ id: 99 }),
+    ]);
+    const forge = createGitlabForge(gitlabConfig(), exec);
+    const note = await forge.createInlineComment(7, { path: 'src/app.ts', line: 42, body: 'Hard-coded secret.' });
+
+    assert.deepEqual(note, { id: 99 });
+    assert.deepEqual(calls[0].args.slice(0, 2), ['api', 'projects/1/merge_requests/7']);
+    assert.deepEqual(calls[1].args.slice(0, 2), ['api', 'projects/1/merge_requests/7/discussions']);
+    assert.ok(calls[1].args.includes('-X') && calls[1].args.includes('POST'));
+    assert.deepEqual(fieldPairs(calls[1].args), [
+      '--raw-field body=Hard-coded secret.',
+      '--raw-field position[position_type]=text',
+      '--raw-field position[base_sha]=base1',
+      '--raw-field position[start_sha]=start1',
+      '--raw-field position[head_sha]=head1',
+      '--raw-field position[new_path]=src/app.ts',
+      '--raw-field position[old_path]=src/app.ts',
+      // `--field` so glab sends the line as a JSON number, not the string "42".
+      '--field position[new_line]=42',
+    ]);
+  });
+});
+
 test('createGitlabForge transparently retries a call that fails with a transient 500', async () => {
   await withGitlabEnv(async () => {
     const { exec, calls } = fakeExecutor([

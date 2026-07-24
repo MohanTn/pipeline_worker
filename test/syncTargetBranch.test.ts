@@ -30,6 +30,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     getJobLog: notUsed,
     retryPipeline: notUsed,
     createMrNote: notUsed,
+    createInlineComment: notUsed,
     hasMergeConflicts: notUsed,
     isMrMerged: notUsed,
     enableAutoMerge: notUsed,

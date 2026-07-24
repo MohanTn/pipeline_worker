@@ -36,6 +36,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
       throw new Error('not used');
     },
     createMrNote: async () => ({ id: 1 }),
+    createInlineComment: async () => ({ id: 1 }),
     hasMergeConflicts: async () => false,
     isMrMerged: async () => false,
     enableAutoMerge: async () => {
@@ -244,6 +245,7 @@ function fixLoopForge(overrides: Partial<ForgeClient> = {}): ForgeClient {
       throw new Error('not used');
     },
     createMrNote: async () => ({ id: 1 }),
+    createInlineComment: async () => ({ id: 1 }),
     hasMergeConflicts: async () => false,
     enableAutoMerge: async () => {
       throw new Error('not used');
