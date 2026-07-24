@@ -91,6 +91,17 @@ export async function checkoutExistingBranch(repoRoot: string, branch: string): 
   const worktreePath = newWorktreeDir();
   await execFileAsync('git', ['fetch', 'origin', branch], { cwd: repoRoot });
   await execFileAsync('git', ['worktree', 'add', '-B', branch, worktreePath, `origin/${branch}`], { cwd: repoRoot });
+  // Same dependency link a fresh run gets (see linkNodeModules): without it,
+  // every check in the adopted worktree runs against a repo with no
+  // node_modules — `npm run build` dies with "tsc: not found" before the
+  // branch ever reaches its MR/PR. Safe to link immediately here, unlike on
+  // the fresh-run path: nothing replays a `git apply` over this worktree, so
+  // there is no index/working-tree mismatch for the symlink to confuse.
+  try {
+    linkNodeModules(repoRoot, worktreePath);
+  } catch (error) {
+    console.error(`Warning: failed to link node_modules into ${worktreePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return worktreePath;
 }
 

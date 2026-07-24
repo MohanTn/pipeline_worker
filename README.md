@@ -183,12 +183,14 @@ A follow-up run on a branch whose MR/PR is already open reviews only the files *
 
 `pipeline-worker run` targets origin's default branch, resolved in this order: `--target <branch>` if you passed one (validated against origin before any work starts), else `refs/remotes/origin/HEAD`, else the remote's HEAD symref, else whichever of `main`/`master` origin actually has (when both exist, the one your HEAD's merge-base is closest to). Only if origin can't answer at all does it fall back to the branch you are standing on.
 
-### Adopting a branch pipeline-worker never ran on
+### Adopting a branch: never run, or run and stalled
 
-`pipeline-worker resume --branch <name>` also works for a branch pipeline-worker has no persisted state for at all — e.g. one you committed and pushed by hand. It checks out the branch and checks the forge for an open PR/MR for it:
+`pipeline-worker resume --branch <name>` also works for a branch with no *resumable* run behind it — one you committed and pushed by hand, or one whose run pushed the branch and then died before the PR/MR existed (the forge went down, the process was killed). Both are recovered the same way: it checks out the branch as origin has it and checks the forge for an open PR/MR for it:
 
 - **No PR/MR yet:** runs it like a fresh `pipeline-worker run` from this point on — build/lint/test checks (aborting the same way a normal run does on failure), intent capture, then opens the MR/PR — targeting `--target <branch>` if given, or origin's auto-detected default branch otherwise.
 - **PR/MR already open:** re-captures intent from the branch's actual diff, overwrites the PR/MR's description with it (using the PR/MR's own target branch — no guessing needed), and resumes the normal watch/fix loop: poll CI, and on failure pull the failed jobs' logs, hand them to the agent to fix, commit, push, and repoll.
+
+A stalled run's own target branch is reused unless you pass `--target`. If the branch was never pushed there is nothing to adopt, and the command says so rather than failing inside git.
 
 Every time a run hands a turn to the agent (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>`, `pi --session <id>`, or `copilot --resume <id>` opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
 

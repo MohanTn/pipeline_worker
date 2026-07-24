@@ -18,7 +18,7 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { checkoutExistingBranch } from '../git/worktree.js';
+import { checkoutExistingBranch, removeWorktree } from '../git/worktree.js';
 import { commit, hasChanges, mergeBase, stageAll } from '../git/commit.js';
 import { changedFilesSinceRef } from '../git/diff.js';
 import { detectDefaultBranch } from '../git/remote.js';
@@ -137,6 +137,50 @@ async function adoptWithoutMr(
   return state as ResumableRunState;
 }
 
+/**
+ * Which recovery path `pipeline-worker resume` should take for this branch.
+ * `adopt` carries why it was chosen so the caller can explain itself: "you
+ * never ran this branch" and "your run died before it opened anything" are
+ * the same recovery but very different news.
+ */
+export type AdoptReason = 'no-state' | 'no-mr-recorded';
+
+export type ResumeMode =
+  | { kind: 'resume'; state: ResumableRunState }
+  | { kind: 'adopt'; target: string | undefined; reason: AdoptReason };
+
+/**
+ * A state file with no `mrIid` used to *block* resuming — which made having
+ * one strictly worse than having none, since a branch pipeline-worker had
+ * never seen would happily go down the adoption path. That is exactly
+ * backwards for the case it hits hardest: a run that pushed its branch and
+ * then died before the MR/PR existed (the forge 500s, the process is killed,
+ * the network drops). The branch is on origin, the work is safe, and adoption
+ * is precisely the code that turns such a branch into an open MR/PR — so fall
+ * through to it instead of refusing.
+ *
+ * The dead run's target branch is reused when the caller passed no --target,
+ * so recovery lands on the same base the original run had chosen.
+ */
+export function resolveResumeMode(state: RunState | undefined, targetOverride: string | undefined): ResumeMode {
+  if (state?.mrIid !== undefined) return { kind: 'resume', state: state as ResumableRunState };
+  return {
+    kind: 'adopt',
+    target: targetOverride || state?.targetBranch || undefined,
+    reason: state ? 'no-mr-recorded' : 'no-state',
+  };
+}
+
+/** Why this branch is being adopted, in the user's terms — the two cases look identical from here on, but arriving at one of them is news. */
+function adoptionHeadline(branch: string, reason: AdoptReason): { title: string; detail: string } {
+  return reason === 'no-mr-recorded'
+    ? {
+        title: 'Adopting a stalled run',
+        detail: `a previous run for ${branch} died before opening an MR/PR — picking the branch up as origin has it`,
+      }
+    : { title: 'Adopting external branch', detail: `${branch} has no pipeline-worker run recorded for it — checking it out` };
+}
+
 export async function adoptBranch(
   repoRoot: string,
   config: PipelineWorkerConfig,
@@ -144,8 +188,10 @@ export async function adoptBranch(
   agent: AgentAdapter,
   branch: string,
   targetOverride: string | undefined,
+  reason: AdoptReason = 'no-state',
 ): Promise<ResumableRunState> {
-  announce('Adopting external branch', `${branch} has no pipeline-worker run recorded for it — checking it out`);
+  const headline = adoptionHeadline(branch, reason);
+  announce(headline.title, headline.detail);
 
   const worktreePath = await runStep('adopt', `fetch + checkout origin/${branch}`, () =>
     checkoutExistingBranch(repoRoot, branch),
@@ -154,10 +200,21 @@ export async function adoptBranch(
   const state: RunState = { branch, targetBranch: '', worktreePath, ciFixAttempt: 0, conflictAttempt: 0, phase: 'intent' };
   recordEvent(repoRoot, state, `Adopted external branch ${branch} into worktree ${worktreePath}`);
 
-  const existingMr = await forge.findExistingMr(branch);
-  if (existingMr) {
-    note(`found existing MR/PR ${existingMr.webUrl}`);
-    return adoptWithExistingMr(agent, config, forge, worktreePath, state, repoRoot, existingMr, targetOverride);
+  try {
+    const existingMr = await forge.findExistingMr(branch);
+    if (existingMr) {
+      note(`found existing MR/PR ${existingMr.webUrl}`);
+      return await adoptWithExistingMr(agent, config, forge, worktreePath, state, repoRoot, existingMr, targetOverride);
+    }
+    return await adoptWithoutMr(agent, config, forge, worktreePath, state, repoRoot, branch, targetOverride);
+  } catch (error) {
+    // The caller can only register cleanup once this returns a state, so a
+    // failure in here (checks fail, the forge is down, the agent errors) would
+    // otherwise strand the worktree — and git refuses to check the same branch
+    // out again while one holds it, so a single leak blocks *every* retry with
+    // "is already used by worktree". No MR/PR exists at this point, so there is
+    // nothing a preserved worktree could be resumed into either.
+    await removeWorktree(repoRoot, worktreePath);
+    throw error;
   }
-  return adoptWithoutMr(agent, config, forge, worktreePath, state, repoRoot, branch, targetOverride);
 }

@@ -14,7 +14,8 @@ import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
 import { findRepoRoot } from './git/commit.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
-import { adoptBranch } from './workflow/adoptBranch.js';
+import { remoteBranchExists } from './git/remote.js';
+import { adoptBranch, resolveResumeMode } from './workflow/adoptBranch.js';
 import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
 import { maybeReviewMergeRequest } from './workflow/reviewMr.js';
 import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './workflow/runPlan.js';
@@ -24,20 +25,22 @@ import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
 import type { ForgeClient } from './forge/types.js';
 import type { AgentAdapter } from './agent/types.js';
-import type { PipelineWorkerConfig, ResumableRunState, RunState } from './types.js';
+import type { PipelineWorkerConfig, ResumableRunState } from './types.js';
 
 /**
- * A state file exists for `branch` but has no MR/PR recorded yet — there's
- * nothing to resume (orchestrate.ts's cleanup only preserves the worktree
- * from the 'mr'/'watch' phases onward, so a pre-MR crash leaves nothing
- * behind to continue). Prints an error and exits(1).
+ * Adoption works off the branch as origin has it (see
+ * git/worktree.ts's checkoutExistingBranch), so a branch that was never
+ * pushed — a run that died before its push, leaving only a state file — has
+ * nothing to adopt. Caught here to say so plainly, rather than surfacing a
+ * raw `git fetch` failure.
  */
-function requireMrRecorded(branch: string, state: RunState): ResumableRunState {
-  if (state.mrIid === undefined) {
-    console.error(`pipeline-worker: no resumable run found for branch ${branch} (no merge request recorded yet).`);
-    process.exit(1);
-  }
-  return state as ResumableRunState;
+async function requirePushedBranch(repoRoot: string, branch: string): Promise<void> {
+  if (await remoteBranchExists(repoRoot, branch)) return;
+  console.error(
+    `pipeline-worker: branch ${branch} does not exist on origin — there is nothing to resume or adopt. ` +
+      'Re-run `pipeline-worker run` from your changes instead.',
+  );
+  process.exit(1);
 }
 
 /**
@@ -126,8 +129,9 @@ program
 program
   .command('resume')
   .description(
-    'Resume watching/fixing a previously started run after a crash, or adopt a branch pipeline-worker has no record of ' +
-      '(checks the forge for an open PR/MR and either opens one or refreshes its description before watching CI)',
+    'Resume watching/fixing a previously started run after a crash, or adopt a branch whose run never got as far as ' +
+      'opening a PR/MR — including one pipeline-worker has no record of at all (checks the forge for an open PR/MR and ' +
+      'either opens one or refreshes its description before watching CI)',
   )
   .requiredOption('--branch <name>', 'branch name of the run to resume or adopt')
   .option(
@@ -142,20 +146,20 @@ program
       const forge = createForge(config);
       const agent = selectAgent(config);
 
-      const existingState = loadRunState(repoRoot, opts.branch);
+      const mode = resolveResumeMode(loadRunState(repoRoot, opts.branch), opts.target);
       let state: ResumableRunState;
       let worktreePath: string;
-      if (existingState) {
-        const resumable = requireMrRecorded(opts.branch, existingState);
-        beginRun(resumeSkeleton(resumable.targetBranch), { title: opts.branch });
-        if (resumable.totalTokens !== undefined) seedRunTokens(resumable.totalTokens);
+      if (mode.kind === 'resume') {
+        beginRun(resumeSkeleton(mode.state.targetBranch), { title: opts.branch });
+        if (mode.state.totalTokens !== undefined) seedRunTokens(mode.state.totalTokens);
         worktreePath = await runStep('resume', 'reattach: reuse the crashed run\'s worktree, or recreate it from origin', () =>
-          resolveResumeWorktree(repoRoot, resumable),
+          resolveResumeWorktree(repoRoot, mode.state),
         );
-        state = resumable;
+        state = mode.state;
       } else {
+        await requirePushedBranch(repoRoot, opts.branch);
         beginRun(adoptSkeleton(opts.branch), { title: opts.branch });
-        state = await adoptBranch(repoRoot, config, forge, agent, opts.branch, opts.target);
+        state = await adoptBranch(repoRoot, config, forge, agent, opts.branch, mode.target, mode.reason);
         worktreePath = state.worktreePath;
         // Adoption is the one resume path that just (re)opened an MR/PR, so
         // it is the one that has something new to review; a resumed run's
@@ -280,6 +284,12 @@ Examples:
 
   $ pipeline-worker resume --branch pipeline-worker/add-login
       Resume watching/fixing a previously started run after a crash.
+
+  $ pipeline-worker resume --branch pipeline-worker/add-login
+      Also the recovery for a run that pushed its branch and then died before
+      the PR/MR existed (the forge was down, the process was killed): the branch
+      is adopted as origin has it and a PR/MR is opened for it, reusing the dead
+      run's target branch unless you pass --target.
 
   $ pipeline-worker resume --branch some-branch-you-pushed-by-hand
       Adopt a branch pipeline-worker never ran on: open a PR/MR against origin's

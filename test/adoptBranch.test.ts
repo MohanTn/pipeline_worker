@@ -5,12 +5,12 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { adoptBranch } from '../src/workflow/adoptBranch.js';
+import { adoptBranch, resolveResumeMode } from '../src/workflow/adoptBranch.js';
 import { removeWorktree } from '../src/git/worktree.js';
 import { loadRunState } from '../src/state/runState.js';
 import type { ForgeClient } from '../src/forge/types.js';
 import type { AgentAdapter } from '../src/agent/types.js';
-import type { MergeRequest, PipelineWorkerConfig } from '../src/types.js';
+import type { MergeRequest, PipelineWorkerConfig, RunState } from '../src/types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -178,5 +178,85 @@ test('adoptBranch with an existing MR/PR: skips local checks entirely and overwr
     if (worktreePath) await removeWorktree(repoRoot, worktreePath);
     rmSync(originDir, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+function runState(overrides: Partial<RunState> = {}): RunState {
+  return {
+    branch: 'pipeline-worker/add-login',
+    targetBranch: 'main',
+    worktreePath: '/tmp/gone',
+    ciFixAttempt: 0,
+    conflictAttempt: 0,
+    phase: 'intent',
+    ...overrides,
+  };
+}
+
+test('resolveResumeMode reattaches to a run that recorded an MR/PR', () => {
+  const state = runState({ mrIid: 12 });
+  assert.deepEqual(resolveResumeMode(state, undefined), { kind: 'resume', state });
+});
+
+// The regression this exists for: a run that pushed its branch and then died
+// before the forge gave it an MR/PR used to be *unresumable* purely because it
+// had left a state file — a branch pipeline-worker had never seen was handled
+// better than one it had.
+test('resolveResumeMode adopts a run that died before an MR/PR existed, reusing its target branch', () => {
+  assert.deepEqual(resolveResumeMode(runState({ targetBranch: 'release/2.0' }), undefined), {
+    kind: 'adopt',
+    target: 'release/2.0',
+    reason: 'no-mr-recorded',
+  });
+});
+
+test('resolveResumeMode lets an explicit --target win over the dead run\'s target branch', () => {
+  assert.equal(resolveResumeMode(runState({ targetBranch: 'main' }), 'release/2.0').kind, 'adopt');
+  assert.deepEqual(resolveResumeMode(runState({ targetBranch: 'main' }), 'release/2.0'), {
+    kind: 'adopt',
+    target: 'release/2.0',
+    reason: 'no-mr-recorded',
+  });
+});
+
+test('resolveResumeMode adopts an unknown branch, leaving the target to auto-detection', () => {
+  assert.deepEqual(resolveResumeMode(undefined, undefined), { kind: 'adopt', target: undefined, reason: 'no-state' });
+  assert.deepEqual(resolveResumeMode(undefined, 'main'), { kind: 'adopt', target: 'main', reason: 'no-state' });
+});
+
+// adoptBranch writes its state with targetBranch: '' before it knows one; that
+// placeholder must not be handed back as if it were a real branch name.
+test('resolveResumeMode treats an empty persisted target branch as "not known"', () => {
+  assert.equal(resolveResumeMode(runState({ targetBranch: '' }), undefined).kind, 'adopt');
+  assert.deepEqual(resolveResumeMode(runState({ targetBranch: '' }), undefined), {
+    kind: 'adopt',
+    target: undefined,
+    reason: 'no-mr-recorded',
+  });
+});
+
+// A leaked worktree is not just litter: git refuses to check the same branch
+// out again while one holds it, so a single failed adopt blocks *every*
+// subsequent retry with "is already used by worktree".
+test('adoptBranch removes its worktree when the adoption fails, so the branch can be retried', async () => {
+  const { repoRoot, originDir } = await makeRepoWithOrigin();
+  try {
+    await pushHandMadeBranch(repoRoot, 'feature/adopt-fails');
+    const forge = stubForge({
+      findExistingMr: async () => {
+        throw new Error('forge is down');
+      },
+    });
+
+    await assert.rejects(
+      () => adoptBranch(repoRoot, testConfig(), forge, stubAgent(), 'feature/adopt-fails', 'main'),
+      /forge is down/,
+    );
+
+    const { stdout } = await execFileAsync('git', ['worktree', 'list'], { cwd: repoRoot });
+    assert.ok(!stdout.includes('feature/adopt-fails'), `worktree left behind:\n${stdout}`);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
   }
 });
