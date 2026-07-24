@@ -357,3 +357,62 @@ test('checkoutExistingBranch checks out a branch already pushed to origin, reset
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });
+
+// resume/adopt runs the repo's own build/lint/test in the adopted worktree;
+// without the dependency link that is a repo with no node_modules, and
+// `npm run build` dies with "tsc: not found" before the branch ever gets a PR.
+test('checkoutExistingBranch links node_modules so checks can run in the adopted worktree', async () => {
+  const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-origin-'));
+  const repoRoot = await makeSampleRepo();
+  try {
+    await execFileAsync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: originDir });
+    await execFileAsync('git', ['branch', '-M', 'main'], { cwd: repoRoot });
+    await execFileAsync('git', ['remote', 'add', 'origin', originDir], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repoRoot });
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feature/adopted'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'added.txt'), 'x\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: repoRoot });
+    await execFileAsync('git', ['commit', '-q', '-m', 'feat: add'], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'feature/adopted'], { cwd: repoRoot });
+    await execFileAsync('git', ['checkout', '-q', 'main'], { cwd: repoRoot });
+    mkdirSync(join(repoRoot, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(repoRoot, 'node_modules', 'marker.txt'), 'installed\n');
+
+    const worktreePath = await checkoutExistingBranch(repoRoot, 'feature/adopted');
+    try {
+      assert.equal(readFileSync(join(worktreePath, 'node_modules', 'marker.txt'), 'utf-8'), 'installed\n');
+      assert.ok(existsSync(join(worktreePath, 'added.txt')), 'the branch content is still checked out');
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('checkoutExistingBranch is a no-op on the link when the repo has no node_modules (e.g. a .NET repo)', async () => {
+  const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-origin-'));
+  const repoRoot = await makeSampleRepo(DOTNET_FIXTURE);
+  try {
+    await execFileAsync('git', ['init', '-q', '--bare', '-b', 'main'], { cwd: originDir });
+    await execFileAsync('git', ['branch', '-M', 'main'], { cwd: repoRoot });
+    await execFileAsync('git', ['remote', 'add', 'origin', originDir], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repoRoot });
+    // Adopt a branch the repo is not standing on: `git worktree add` refuses a
+    // branch that is already checked out somewhere.
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feature/dotnet'], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'feature/dotnet'], { cwd: repoRoot });
+    await execFileAsync('git', ['checkout', '-q', 'main'], { cwd: repoRoot });
+
+    const worktreePath = await checkoutExistingBranch(repoRoot, 'feature/dotnet');
+    try {
+      assert.equal(existsSync(join(worktreePath, 'node_modules')), false);
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
