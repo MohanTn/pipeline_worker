@@ -94,6 +94,11 @@ pipeline-worker is configured entirely through real environment variables — se
 | `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN`   | `true`                       | once the MR/PR opens, ask the forge to merge it automatically as soon as CI (and any required approvals) allow — best-effort; if the forge rejects it (auto-merge not enabled for the repo, pending approvals, ...) the run continues normally and you merge manually. Once the forge confirms the merge landed, the run also fast-forwards your local target branch from origin (waiting a few seconds for the ref to settle first), so your local main is already up to date when the run ends. Set to `false` to go back to opening the MR/PR and merging it yourself |
 | `PIPELINE_WORKER_MERGE_METHOD`          | `squash`                     | `merge`, `squash`, or `rebase` — passed to auto-merge. GitLab has no per-request rebase option; `rebase` there falls back to the project's own default merge method |
 | `PIPELINE_WORKER_SQUASH_ON_MERGE`       | `false`                      | once CI is green, collapse every commit this run made on the branch into one (titled from the captured intent) and force-push — keeps history clean regardless of the repo's merge-strategy setting. Off by default: rewrites published history (force-push), a materially different risk from everything else this tool does. Only reliable with auto-merge off — the forge may already have merged (and deleted) the branch before this step runs |
+| `PIPELINE_WORKER_REVIEW`                | `false`                      | once the MR/PR is open, have the agent review its diff and post line-anchored comments on the lines it flags — see [AI code review](#ai-code-review). Best-effort: it never fails the run |
+| `PIPELINE_WORKER_REVIEW_MODEL`          | adapter default              | model for the review turns. Unset means the agent's own default (deliberately stronger than `PIPELINE_WORKER_INTENT_MODEL` — finding real bugs is not the cheap-model job) |
+| `PIPELINE_WORKER_REVIEW_MIN_SEVERITY`   | `MAJOR`                      | `CRITICAL`, `MAJOR`, or `MINOR` — findings below this are never posted. The anti-alert-fatigue gate: at the default, style nitpicks never reach the MR/PR |
+| `PIPELINE_WORKER_REVIEW_MAX_COMMENTS`   | `10`                         | hard cap on comments posted per run, most severe first                        |
+| `PIPELINE_WORKER_REVIEW_CHUNK_CHARS`    | `24000`                      | char budget per diff chunk (one agent turn per chunk) — lower it for a smaller-context model |
 | `PIPELINE_WORKER_PLAIN_OUTPUT`          | `false`                      | force the append-only, non-redrawing narration even on a real terminal (the same output CI/piped runs always get) — useful when pasting output into a bug report or feeding it to another tool |
 
 Boolean variables accept `true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off` (case-insensitive, surrounding whitespace ignored). Any other value is ignored with a warning naming the variable, and the default applies.
@@ -141,6 +146,7 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 | `pipeline-worker` (or `pipeline-worker run`) `[--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
 | `pipeline-worker serve`                      | Start the forge MCP server over stdio (used by the agent during fix runs) |
 | `pipeline-worker resume --branch <name>` `[--target <branch>]` | Resume watching/fixing a run after a crash, or adopt a branch pipeline-worker has no record of |
+| `pipeline-worker review --branch <name>`     | Review that branch's open MR/PR with the agent and post line-anchored comments (nothing else) |
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
 | `pipeline-worker sessions [--branch <name>]` | List every persisted run in this repo, or show one run's full step-by-step timeline |
 | `pipeline-worker update`                     | Install the latest release from npm (`npm install -g pipeline-worker@latest`) |
@@ -158,6 +164,20 @@ A reviewer comments, you make the fix locally, you run `pipeline-worker` again f
 - CI is then watched (and auto-fixed) exactly as on a first run. `PIPELINE_WORKER_SQUASH_ON_MERGE` is skipped here: rewriting the history of a PR under review would detach the comments anchored to it.
 
 The commit is made in the run's own worktree, so your local branch does not have it — `git pull` once the run finishes.
+
+### AI code review
+
+With `PIPELINE_WORKER_REVIEW=true`, the run adds one stage right after the MR/PR is opened and before CI is watched: the agent reviews the branch's own diff and comments **on the diff lines**, not in the description.
+
+- **Chunking** — the diff is split per file, and a file larger than `PIPELINE_WORKER_REVIEW_CHUNK_CHARS` is split further, so a large MR/PR never overflows the model's context. One agent turn per chunk; each carries the file name, its language, and the surrounding lines.
+- **Line targeting** — every line in a chunk is presented with its line number in the *new* file, and a finding may only anchor to an added (`+`) line. Anything else the model returns (an old-file number, a hallucinated one, a file not in the diff) is dropped before any API call.
+- **One-click fixes** — comments carry a ` ```suggestion ` block where a concrete fix fits, in the dialect the active forge accepts (GitLab's ` ```suggestion:-0+0 `).
+- **Gatekeeping** — the reviewer is instructed to report only logic errors, security holes, performance problems, and severe anti-patterns; on top of that, findings below `PIPELINE_WORKER_REVIEW_MIN_SEVERITY` are dropped, duplicates on the same file+line are collapsed, and at most `PIPELINE_WORKER_REVIEW_MAX_COMMENTS` are posted, most severe first. A clean diff produces no comments at all.
+- **Best-effort** — a failure anywhere in this stage (unusable agent output, a forge rejecting a position, an unreachable merge-base) becomes a note; the run's outcome is unchanged.
+
+A follow-up run on a branch whose MR/PR is already open reviews only the files *that* run touched, so lines a human has already reviewed are not commented on again.
+
+`pipeline-worker review --branch <name>` runs just this stage against a branch's open MR/PR — no checks, no commit, no CI watch — and ignores `PIPELINE_WORKER_REVIEW`, since asking for it explicitly is the opt-in.
 
 ### Target branch
 

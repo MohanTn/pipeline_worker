@@ -390,3 +390,48 @@ test('loadConfig: PIPELINE_WORKER_GITHUB_REPO takes precedence over origin-remot
     assert.equal(config.github.repo, 'env-owner/env-repo');
   });
 });
+
+test('review config defaults to off, MAJOR-only, 10 comments', () => {
+  withTempDir((dir) => {
+    const config = loadConfig(dir);
+    assert.equal(config.review, false); // opt-in: it spends tokens and writes where humans read
+    assert.equal(config.reviewModel, ''); // '' = the adapter's default (stronger) model
+    assert.equal(config.reviewMinSeverity, 'MAJOR');
+    assert.equal(config.reviewMaxComments, 10);
+    assert.equal(config.reviewChunkChars, 24_000);
+  });
+});
+
+test('PIPELINE_WORKER_REVIEW* overrides are honored, severity case-insensitively', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_REVIEW = 'yes';
+    process.env.PIPELINE_WORKER_REVIEW_MODEL = 'sonnet';
+    process.env.PIPELINE_WORKER_REVIEW_MIN_SEVERITY = 'critical';
+    process.env.PIPELINE_WORKER_REVIEW_MAX_COMMENTS = '3';
+    process.env.PIPELINE_WORKER_REVIEW_CHUNK_CHARS = '8000';
+    const config = loadConfig(dir);
+    assert.equal(config.review, true);
+    assert.equal(config.reviewModel, 'sonnet');
+    assert.equal(config.reviewMinSeverity, 'CRITICAL');
+    assert.equal(config.reviewMaxComments, 3);
+    assert.equal(config.reviewChunkChars, 8000);
+  });
+});
+
+test('an unrecognized PIPELINE_WORKER_REVIEW_MIN_SEVERITY falls back to MAJOR with a warning, never silently', () => {
+  withTempDir((dir) => {
+    const warnings: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => warnings.push(args.join(' '));
+    try {
+      process.env.PIPELINE_WORKER_REVIEW_MIN_SEVERITY = 'nitpick';
+      assert.equal(loadConfig(dir).reviewMinSeverity, 'MAJOR');
+    } finally {
+      console.error = originalError;
+    }
+    assert.ok(
+      warnings.some((line) => line.includes('PIPELINE_WORKER_REVIEW_MIN_SEVERITY')),
+      `expected a warning naming the variable, got: ${JSON.stringify(warnings)}`,
+    );
+  });
+});

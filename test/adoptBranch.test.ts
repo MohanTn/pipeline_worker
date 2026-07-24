@@ -51,6 +51,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
       throw new Error('not used');
     },
     createMrNote: async () => ({ id: 1 }),
+    createInlineComment: async () => ({ id: 1 }),
     hasMergeConflicts: async () => false,
     isMrMerged: async () => false,
     ...overrides,

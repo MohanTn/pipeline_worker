@@ -14,6 +14,7 @@ import { captureIntent } from './captureIntent.js';
 import { runChecks } from './runChecks.js';
 import { updateChangelog } from './updateChangelog.js';
 import { openMergeRequest, appendToMergeRequest } from './openMergeRequest.js';
+import { maybeReviewMergeRequest } from './reviewMr.js';
 import { watchPipeline } from './watchPipeline.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
@@ -562,6 +563,20 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
         : await runFreshMrStage(agent, config, options, forge, worktreePath, state, repoRoot, changedFiles, untrackedFiles, checks, targetBranch);
       state = staged.state;
       const { intent, mr } = staged;
+
+      // Line-anchored review of what this run is about to ask CI (and a
+      // human) to accept. A follow-up run is scoped to the files it just
+      // touched: the rest of the branch has already been through review.
+      const posted = await maybeReviewMergeRequest(
+        forge,
+        config,
+        agent,
+        worktreePath,
+        targetBranch,
+        mr.iid,
+        followUpMr ? changedFiles : undefined,
+      );
+      if (posted > 0) recordEvent(repoRoot, state, `Posted ${posted} review comment(s) on MR/PR #${mr.iid}`);
 
       // This runs before stage 12 (watching the pipeline) even though it's
       // numbered 13 — it's the same stage 13 that would otherwise run after

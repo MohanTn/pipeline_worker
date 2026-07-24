@@ -7,7 +7,7 @@
  */
 
 import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
-import type { CreateMrArgs, ForgeClient } from './types.js';
+import type { CreateMrArgs, ForgeClient, InlineComment } from './types.js';
 import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
 
 interface GithubAuth {
@@ -208,6 +208,19 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       const res = await githubRequest(auth, `/issues/${mrIid}/comments`, {
         method: 'POST',
         body: JSON.stringify({ body }),
+      });
+      return parseIdResponse(res);
+    },
+
+    async createInlineComment(mrIid: number, comment: InlineComment): Promise<{ id: number }> {
+      // commit_id must be the PR's current head: a review comment against an
+      // older commit is accepted but immediately shows as outdated, hiding it
+      // from the reviewer this whole feature exists to talk to.
+      const prRes = await githubRequest(auth, `/pulls/${mrIid}`);
+      const { head } = (await prRes.json()) as { head: { sha: string } };
+      const res = await githubRequest(auth, `/pulls/${mrIid}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ commit_id: head.sha, path: comment.path, line: comment.line, side: 'RIGHT', body: comment.body }),
       });
       return parseIdResponse(res);
     },
