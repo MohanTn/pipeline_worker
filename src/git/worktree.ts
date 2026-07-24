@@ -97,7 +97,11 @@ export async function checkoutExistingBranch(repoRoot: string, branch: string): 
   // branch ever reaches its MR/PR. Safe to link immediately here, unlike on
   // the fresh-run path: nothing replays a `git apply` over this worktree, so
   // there is no index/working-tree mismatch for the symlink to confuse.
-  linkNodeModules(repoRoot, worktreePath);
+  try {
+    linkNodeModules(repoRoot, worktreePath);
+  } catch (error) {
+    console.error(`Warning: failed to link node_modules into ${worktreePath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   return worktreePath;
 }
 
