@@ -37,6 +37,61 @@ export function buildDescription(intent: CapturedIntent, agentName: string, chec
 }
 
 /**
+ * A follow-up run's block, appended to (never replacing) the MR/PR's existing
+ * description: the reviewer's own text, the original intent, and every
+ * earlier follow-up all stay readable above it, so the description reads as
+ * the change log of the review conversation. Same per-file breakdown as
+ * buildDescription's, since that file-wise documentation is the point of
+ * appending at all.
+ */
+export function buildFollowUpSection(intent: CapturedIntent, agentName: string, checks: CheckResult[]): string {
+  const fileChanges = intent.fileChanges.map((f) => `- \`${f.file}\`: ${f.summary}`).join('\n');
+  const risk = intent.risk.charAt(0).toUpperCase() + intent.risk.slice(1);
+
+  return (
+    `### 🔁 Follow-up: ${intent.commitMessage}\n\n` +
+    `**Summary:** ${intent.summary}\n\n` +
+    `**File changes:**\n${fileChanges}\n\n` +
+    `**Risk:** ${risk} — ${intent.riskReason}\n\n` +
+    `**Checks:**\n${formatChecks(checks)}\n\n` +
+    `_Appended by \`pipeline-worker\` (intent via **${agentName}**) when this commit was added to the open MR/PR._`
+  );
+}
+
+/** Joins a follow-up section onto an existing description with a horizontal rule, tolerating an empty/whitespace-only description. */
+export function appendSection(existingDescription: string, section: string): string {
+  const existing = existingDescription.trimEnd();
+  return existing.length === 0 ? section : `${existing}\n\n---\n\n${section}`;
+}
+
+/**
+ * The "reviewer asked for a change" path: this run's commit belongs on the
+ * branch of an already-open MR/PR, not on a new branch of its own. Pushes the
+ * worktree's HEAD onto that branch and appends the file-wise breakdown to the
+ * description.
+ *
+ * Deliberately does not touch auto-merge or the title: both may have been
+ * changed by a human since the MR/PR was opened, and a follow-up commit is no
+ * reason to overrule them.
+ */
+export async function appendToMergeRequest(
+  forge: ForgeClient,
+  worktreePath: string,
+  mr: MergeRequest,
+  intent: CapturedIntent,
+  agentName: string,
+  checks: CheckResult[],
+): Promise<void> {
+  await runStep('push', `push this commit onto ${mr.sourceBranch}, the branch of ${mr.webUrl}`, () => push(worktreePath, 'origin', mr.sourceBranch));
+
+  await runStep('mr', `appending the file-wise breakdown to ${mr.webUrl}'s description`, async () => {
+    const existing = await forge.getMrDescription(mr.iid);
+    await forge.updateMrDescription(mr.iid, appendSection(existing, buildFollowUpSection(intent, agentName, checks)));
+  });
+  note(mr.webUrl);
+}
+
+/**
  * Best-effort: repo settings (GitHub's "Allow auto-merge" toggle unset, no
  * required checks configured) or GitLab's async merge-status computation can
  * both cause the forge to reject this — never let that fail an otherwise

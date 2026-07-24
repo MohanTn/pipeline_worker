@@ -185,6 +185,11 @@ export function createGitlabForge(config: PipelineWorkerConfig, executor?: GlabE
       await apiWrite(exec, auth, `GitLab API PUT merge_requests/${mrIid}`, 'PUT', projectPath(auth, `/merge_requests/${mrIid}`), { description });
     },
 
+    async getMrDescription(mrIid: number): Promise<string> {
+      const raw = await apiGet(exec, auth, `GitLab API GET merge_requests/${mrIid}`, projectPath(auth, `/merge_requests/${mrIid}`));
+      return raw.description ?? '';
+    },
+
     async getMrPipelines(mrIid: number): Promise<Pipeline[]> {
       const list = await apiGet(exec, auth, `GitLab API GET merge_requests/${mrIid}/pipelines`, projectPath(auth, `/merge_requests/${mrIid}/pipelines`));
       return list.map(toPipeline);

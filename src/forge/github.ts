@@ -166,6 +166,12 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       await githubRequest(auth, `/pulls/${mrIid}`, { method: 'PATCH', body: JSON.stringify({ body: description }) });
     },
 
+    async getMrDescription(mrIid: number): Promise<string> {
+      const res = await githubRequest(auth, `/pulls/${mrIid}`);
+      const { body } = (await res.json()) as { body: string | null };
+      return body ?? '';
+    },
+
     async getMrPipelines(mrIid: number): Promise<Pipeline[]> {
       const prRes = await githubRequest(auth, `/pulls/${mrIid}`);
       const pr = (await prRes.json()) as { head: { sha: string } };

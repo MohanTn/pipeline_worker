@@ -15,8 +15,17 @@ export async function commit(worktreePath: string, message: string): Promise<voi
   await execFileAsync('git', ['commit', '-m', message], { cwd: worktreePath });
 }
 
+/**
+ * Pushes the worktree's HEAD to `remote`'s `branch`. Deliberately an explicit
+ * `HEAD:refs/heads/<branch>` refspec rather than the bare branch name: a
+ * follow-up run adding a commit to an already-open MR/PR works in a worktree
+ * whose *local* branch is still the disposable temp branch (the PR's own
+ * branch is checked out in repoRoot, and git refuses to check out one branch
+ * in two worktrees), so the local and remote names differ there. For a normal
+ * run the two are the same and this is exactly `git push -u origin <branch>`.
+ */
 export async function push(worktreePath: string, remote: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['push', '--set-upstream', remote, branch], { cwd: worktreePath });
+  await execFileAsync('git', ['push', '--set-upstream', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
 }
 
 /**
@@ -28,7 +37,7 @@ export async function push(worktreePath: string, remote: string, branch: string)
  * rewrites already-pushed history.
  */
 export async function forcePushWithLease(worktreePath: string, remote: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['push', '--force-with-lease', remote, branch], { cwd: worktreePath });
+  await execFileAsync('git', ['push', '--force-with-lease', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
 }
 
 /** True when the worktree has staged, unstaged, or untracked changes. */

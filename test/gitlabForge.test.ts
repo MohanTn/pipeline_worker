@@ -110,6 +110,17 @@ test('updateMrDescription calls glab api PUT merge_requests/{iid} with the new d
   });
 });
 
+test('getMrDescription reads the description off GET merge_requests/{iid}, treating a null description as empty', async () => {
+  await withGitlabEnv(async () => {
+    const { exec, calls } = fakeExecutor([() => JSON.stringify({ description: 'Original description.' }), () => JSON.stringify({ description: null })]);
+    const forge = createGitlabForge(gitlabConfig(), exec);
+    assert.equal(await forge.getMrDescription(7), 'Original description.');
+    assert.equal(await forge.getMrDescription(7), '');
+    assert.deepEqual(calls[0].args.slice(0, 2), ['api', 'projects/1/merge_requests/7']);
+    assert.ok(!calls[0].args.includes('-X'));
+  });
+});
+
 test('createGitlabForge transparently retries a call that fails with a transient 500', async () => {
   await withGitlabEnv(async () => {
     const { exec, calls } = fakeExecutor([

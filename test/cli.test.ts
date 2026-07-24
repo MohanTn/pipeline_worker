@@ -215,3 +215,16 @@ test('pipeline-worker serve returns a TOON-encoded envelope for get_pipeline_sta
     cleanup();
   }
 });
+
+test('pipeline-worker run --help documents the --target base-branch flag and the default branch it resolves', async () => {
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = spawn('node', [cliPath, 'run', '--help']);
+    let out = '';
+    child.stdout.on('data', (chunk) => (out += chunk));
+    child.on('error', reject);
+    child.on('close', () => resolve(out));
+  });
+
+  assert.match(stdout, /--target <branch>/);
+  assert.match(stdout, /main or master/);
+});

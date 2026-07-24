@@ -24,6 +24,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     findExistingMr: notUsed,
     createMergeRequest: notUsed,
     updateMrDescription: notUsed,
+    getMrDescription: notUsed,
     getMrPipelines: notUsed,
     getFailedJobs: notUsed,
     getJobLog: notUsed,

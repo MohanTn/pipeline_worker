@@ -98,11 +98,12 @@ program
   .command('run', { isDefault: true })
   .description('Capture the current diff, validate it, and drive it through to a green MR/PR')
   .option('--ticket <id>', 'ticket/issue id to interpolate into the configured branchPattern\'s {ticket} placeholder')
-  .action(async (opts: { ticket?: string }) => {
+  .option('--target <branch>', "base branch for the MR/PR (default: origin's default branch, main or master)")
+  .action(async (opts: { ticket?: string; target?: string }) => {
     try {
       await ensureLatestVersion(pkg.name, pkg.version);
       const repoRoot = await findRepoRoot(process.cwd());
-      await runWorkflow(repoRoot, { ticket: opts.ticket });
+      await runWorkflow(repoRoot, { ticket: opts.ticket, target: opts.target });
     } catch (error) {
       console.error('pipeline-worker run failed:', error instanceof Error ? error.message : error);
       process.exit(1);
@@ -222,10 +223,16 @@ program.addHelpText(
   `
 Examples:
   $ pipeline-worker run
-      Capture your uncommitted changes and drive them to a green MR/PR.
+      Capture your uncommitted changes and drive them to a green MR/PR, targeting
+      origin's default branch (main or master). If the branch you are on already has
+      an open MR/PR, the change is committed onto it and its description gains a
+      file-wise breakdown of this follow-up instead of a new MR/PR being opened.
 
   $ pipeline-worker run --ticket PROJ-123
       Same, but interpolate PROJ-123 into the configured branchPattern.
+
+  $ pipeline-worker run --target release/2.0
+      Same, but open the MR/PR against release/2.0 instead of the default branch.
 
   $ pipeline-worker resume --branch pipeline-worker/add-login
       Resume watching/fixing a previously started run after a crash.

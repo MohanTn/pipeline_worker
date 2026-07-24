@@ -10,7 +10,7 @@ Automate the last mile of your local changes: pipeline-worker takes the uncommit
 2. Replays them in a disposable git worktree.
 3. Asks a coding agent (Claude Code, [Pi](https://pi.dev), or GitHub Copilot CLI) to infer the intent: change type, branch slug, commit message, summary.
 4. Runs your `build` / `lint` / `test` commands, fail-fast.
-5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`.
+5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`, and the MR/PR targets origin's default branch (`main` or `master`, auto-detected), or whatever you pass to `--target`. **If the branch you are standing on already has an open MR/PR** (the reviewer-asked-for-a-change case), nothing new is opened: the commit lands on that same branch and a file-wise breakdown of this follow-up is *appended* to its description, leaving everything already written there intact.
 6. Polls the CI pipeline; on failure it hands the pipeline URL to the agent, which pulls the failed jobs and logs itself via whatever GitLab/GitHub MCP tooling is available (pipeline-worker's own forge MCP server, or an external one the agent already has configured), commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
 7. Once the MR/PR is ready to merge (or, with `PIPELINE_WORKER_CLEANUP_EARLY`, as soon as the MR/PR is opened), resets your repo's current branch back to HEAD (see `PIPELINE_WORKER_CLEANUP` below) — your changes now live safely on the feature branch instead of sitting uncommitted locally too.
 8. By default (`PIPELINE_WORKER_AUTO_MERGE_ON_GREEN`), waits for the forge to confirm the auto-merge actually landed, then (after a few seconds' grace for the ref to settle) fast-forwards your local target branch from origin — so your local main already contains the merged result when the run ends. Best-effort: if the merge is held up (e.g. by required approvals), you switched branches mid-run, or your local target branch diverged, it leaves everything untouched and tells you to `git pull` instead. Set `PIPELINE_WORKER_AUTO_MERGE_ON_GREEN=false` to go back to opening the MR/PR and merging it yourself.
@@ -138,7 +138,7 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 
 | Command                                      | What it does                                                              |
 | -------------------------------------------- | ------------------------------------------------------------------------- |
-| `pipeline-worker` (or `pipeline-worker run`) `[--ticket <id>]` | Capture the current diff and drive it to a green MR/PR        |
+| `pipeline-worker` (or `pipeline-worker run`) `[--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
 | `pipeline-worker serve`                      | Start the forge MCP server over stdio (used by the agent during fix runs) |
 | `pipeline-worker resume --branch <name>` `[--target <branch>]` | Resume watching/fixing a run after a crash, or adopt a branch pipeline-worker has no record of |
 | `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
@@ -146,6 +146,22 @@ A stage with no command (`—`) is skipped. If no toolchain is detected and no c
 | `pipeline-worker update`                     | Install the latest release from npm (`npm install -g pipeline-worker@latest`) |
 
 Before doing any work, `pipeline-worker run` checks npm for a newer published version and installs it automatically if the locally installed one is out of date (the update takes effect on the next run). This check is best-effort: if npm is unreachable or the install fails, the run proceeds anyway on whatever version is already installed.
+
+### Following up on a PR/MR under review
+
+A reviewer comments, you make the fix locally, you run `pipeline-worker` again from the same branch. Because that branch already has an open MR/PR, the run does **not** open a second one:
+
+- the target branch comes from the MR/PR itself, not from `--target`/default-branch detection;
+- the worktree rebases onto the MR/PR's own branch first, so a commit pushed there in the meantime (a reviewer's fixup, another run) is never clobbered;
+- checks, intent capture, and the commit all run as usual, then the commit is pushed onto that same branch;
+- the file-wise breakdown of this change is **appended** to the MR/PR description under a `🔁 Follow-up` heading — the original description, the reviewer's edits, and any earlier follow-ups all stay above it;
+- CI is then watched (and auto-fixed) exactly as on a first run. `PIPELINE_WORKER_SQUASH_ON_MERGE` is skipped here: rewriting the history of a PR under review would detach the comments anchored to it.
+
+The commit is made in the run's own worktree, so your local branch does not have it — `git pull` once the run finishes.
+
+### Target branch
+
+`pipeline-worker run` targets origin's default branch, resolved in this order: `--target <branch>` if you passed one (validated against origin before any work starts), else `refs/remotes/origin/HEAD`, else the remote's HEAD symref, else whichever of `main`/`master` origin actually has (when both exist, the one your HEAD's merge-base is closest to). Only if origin can't answer at all does it fall back to the branch you are standing on.
 
 ### Adopting a branch pipeline-worker never ran on
 
