@@ -8,11 +8,12 @@ import { captureDiff, resetRepo } from '../git/diff.js';
 import { buildBranchName } from '../git/branchName.js';
 import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, renameBranch, generateTempBranchName } from '../git/worktree.js';
 import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers, forcePushWithLease } from '../git/commit.js';
+import { detectDefaultBranch, remoteBranchExists } from '../git/remote.js';
 import { squashCommitsSinceMergeBase } from '../git/squash.js';
 import { captureIntent } from './captureIntent.js';
 import { runChecks } from './runChecks.js';
 import { updateChangelog } from './updateChangelog.js';
-import { openMergeRequest } from './openMergeRequest.js';
+import { openMergeRequest, appendToMergeRequest } from './openMergeRequest.js';
 import { watchPipeline } from './watchPipeline.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
@@ -84,6 +85,44 @@ async function resolveApplyConflicts(agent: AgentAdapter, repoRoot: string, stat
 export interface RunWorkflowOptions {
   /** Ticket/issue id to interpolate into config.branchPattern's {ticket} placeholder, if it has one. */
   ticket?: string;
+  /** `--target`: base branch for the MR/PR, overriding origin's auto-detected default branch. */
+  target?: string;
+}
+
+/**
+ * The branch this run's MR/PR targets: `--target` if given, else origin's
+ * default branch (`main`/`master` — see git/remote.ts), else, only when
+ * origin can't answer at all, the branch the caller is standing on.
+ *
+ * That last tier is what every run used to do unconditionally, which meant
+ * running from a feature branch silently opened a stacked MR/PR into that
+ * feature branch instead of into trunk.
+ */
+export async function resolveTargetBranch(repoRoot: string, override?: string): Promise<string> {
+  if (override) {
+    let exists: boolean;
+    try {
+      exists = await remoteBranchExists(repoRoot, override);
+    } catch {
+      exists = true; // origin unreachable — let the sync step be the one to complain
+    }
+    if (!exists) {
+      throw new Error(`pipeline-worker: --target ${override} does not exist on origin — push it first, or pass a branch that does.`);
+    }
+    return override;
+  }
+
+  try {
+    return await detectDefaultBranch(repoRoot);
+  } catch {
+    // No origin, or a repo whose trunk is named something else entirely.
+  }
+
+  const branch = await currentBranch(repoRoot);
+  if (branch === 'HEAD') {
+    throw new Error("pipeline-worker: detached HEAD and no default branch on origin to target — pass --target <branch> explicitly.");
+  }
+  return branch;
 }
 
 /** Step 'capture': read the uncommitted diff, or null (already reported) when there's nothing to process. */
@@ -127,7 +166,25 @@ async function applyCapturedDiff(
   }
 }
 
-/** Stages 5-6: ask the agent to infer intent from the change, then rename the worktree to the resulting feature branch. */
+/** Stage 5: ask the agent to infer the change's type, slug, commit message, summary, and per-file breakdown. */
+async function captureRunIntent(
+  agent: AgentAdapter,
+  config: PipelineWorkerConfig,
+  worktreePath: string,
+  changedFiles: string[],
+  untrackedFiles: string[],
+): Promise<{ intent: CapturedIntent; intentTokens?: number }> {
+  const { intent, usage } = await runStep(
+    'intent',
+    `ask ${config.agent} to infer a change type, branch slug, commit message, and summary`,
+    () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath, config.intentModel),
+  );
+  note(`${config.agent} says: ${intent.summary}`);
+  noteRisk(intent.risk, intent.riskReason);
+  return { intent, intentTokens: usage?.totalTokens };
+}
+
+/** Stages 5-6: capture intent, then rename the worktree to the resulting feature branch. */
 async function captureIntentAndBranch(
   agent: AgentAdapter,
   config: PipelineWorkerConfig,
@@ -136,13 +193,7 @@ async function captureIntentAndBranch(
   changedFiles: string[],
   untrackedFiles: string[],
 ): Promise<{ intent: CapturedIntent; intentTokens?: number; actualBranchName: string }> {
-  const { intent, usage } = await runStep(
-    'intent',
-    `ask ${config.agent} to infer a change type, branch slug, commit message, and summary`,
-    () => captureIntent(agent, [...changedFiles, ...untrackedFiles], worktreePath, config.intentModel),
-  );
-  note(`${config.agent} says: ${intent.summary}`);
-  noteRisk(intent.risk, intent.riskReason);
+  const { intent, intentTokens } = await captureRunIntent(agent, config, worktreePath, changedFiles, untrackedFiles);
 
   const branchName = buildBranchName(config.branchPattern, { type: intent.changeType, ticket: options.ticket, name: intent.branchSlug });
   const actualBranchName = await runStep(
@@ -154,7 +205,7 @@ async function captureIntentAndBranch(
     note(`"${branchName}" already exists locally — using "${actualBranchName}" instead`);
   }
   setRunHeader({ title: actualBranchName });
-  return { intent, intentTokens: usage?.totalTokens, actualBranchName };
+  return { intent, intentTokens, actualBranchName };
 }
 
 /**
@@ -232,6 +283,103 @@ async function commitAndOpenMr(
 }
 
 /**
+ * Follow-up counterpart of commitAndOpenMr: commit this run's fix and add it
+ * to the MR/PR that already exists for the branch the caller is on (the
+ * "reviewer left a comment, I fixed it, run pipeline-worker again" case).
+ * Nothing new is opened — the commit lands on the same branch and the
+ * file-wise breakdown is appended to the same description.
+ */
+async function commitOntoExistingMr(
+  forge: ForgeClient,
+  worktreePath: string,
+  state: RunState,
+  existingMr: MergeRequest,
+  intent: CapturedIntent,
+  config: PipelineWorkerConfig,
+  checks: CheckResult[],
+  repoRoot: string,
+): Promise<MergeRequest> {
+  await runStep('commit', `commit message: "${intent.commitMessage}"`, () => commit(worktreePath, intent.commitMessage));
+
+  await appendToMergeRequest(forge, worktreePath, existingMr, intent, config.agent, checks);
+
+  state.mrIid = existingMr.iid;
+  state.phase = 'mr';
+  recordEvent(repoRoot, state, `Added a follow-up commit to existing MR/PR ${existingMr.webUrl}`);
+  return existingMr;
+}
+
+/** What stages 5-11 produced, whichever of the two paths ran: the state to carry forward, the captured intent, and the MR/PR the run now watches. */
+interface MrStageResult {
+  state: RunState;
+  intent: CapturedIntent;
+  mr: MergeRequest;
+}
+
+/**
+ * The MR/PR already open for the branch the caller is standing on, if any —
+ * its existence is what makes this run a follow-up (a reviewer asked for a
+ * change, you made it, you ran pipeline-worker again) rather than a new
+ * feature branch. A detached HEAD has no branch name to match on, so it can
+ * never be one. Exported for unit testing.
+ */
+export async function findFollowUpMr(forge: ForgeClient, repoRoot: string): Promise<MergeRequest | undefined> {
+  const branch = await currentBranch(repoRoot);
+  if (branch === 'HEAD') return undefined;
+  return forge.findExistingMr(branch);
+}
+
+/** Stages 5-11, follow-up path: capture intent, commit, and add both to the MR/PR already open for this branch. */
+async function runFollowUpMrStage(
+  agent: AgentAdapter,
+  config: PipelineWorkerConfig,
+  forge: ForgeClient,
+  worktreePath: string,
+  state: RunState,
+  repoRoot: string,
+  changedFiles: string[],
+  untrackedFiles: string[],
+  checks: CheckResult[],
+  followUpMr: MergeRequest,
+): Promise<MrStageResult> {
+  const { intent, intentTokens } = await captureRunIntent(agent, config, worktreePath, changedFiles, untrackedFiles);
+
+  skipStep('branch', `this commit belongs on ${followUpMr.sourceBranch}, the branch of the open MR/PR — no new branch`);
+  setRunHeader({ title: followUpMr.sourceBranch });
+
+  const nextState: RunState = { ...state, branch: followUpMr.sourceBranch, phase: 'intent' };
+  recordEvent(repoRoot, nextState, `Captured intent for a follow-up commit on ${followUpMr.sourceBranch}`, 'info', intentTokens);
+
+  await maybeUpdateChangelog(config, worktreePath, intent);
+  const mr = await commitOntoExistingMr(forge, worktreePath, nextState, followUpMr, intent, config, checks, repoRoot);
+  return { state: nextState, intent, mr };
+}
+
+/** Stages 5-11, normal path: capture intent, move onto a fresh feature branch, commit, and open the MR/PR. */
+async function runFreshMrStage(
+  agent: AgentAdapter,
+  config: PipelineWorkerConfig,
+  options: RunWorkflowOptions,
+  forge: ForgeClient,
+  worktreePath: string,
+  state: RunState,
+  repoRoot: string,
+  changedFiles: string[],
+  untrackedFiles: string[],
+  checks: CheckResult[],
+  targetBranch: string,
+): Promise<MrStageResult> {
+  const { intent, intentTokens, actualBranchName } = await captureIntentAndBranch(agent, config, options, worktreePath, changedFiles, untrackedFiles);
+
+  const nextState: RunState = { ...state, branch: actualBranchName, phase: 'intent' };
+  recordEvent(repoRoot, nextState, `Captured intent; renamed to feature branch ${actualBranchName}`, 'info', intentTokens);
+
+  await maybeUpdateChangelog(config, worktreePath, intent);
+  const mr = await commitAndOpenMr(forge, worktreePath, nextState, targetBranch, intent, config, checks, repoRoot);
+  return { state: nextState, intent, mr };
+}
+
+/**
  * Stage 13, run early: once the MR/PR is open, repoRoot's copy is redundant
  * even though CI hasn't run yet, so free it (and the run lock) for a new
  * `pipeline-worker run` immediately, rather than making the caller wait out
@@ -287,9 +435,17 @@ async function finalizeRun(
   worktreePath: string,
   targetBranch: string,
   intent: CapturedIntent,
+  isFollowUp: boolean,
 ): Promise<void> {
   if (finalPhase === 'done') {
-    await maybeSquashCommits(config, worktreePath, state.branch, targetBranch, intent);
+    if (isFollowUp) {
+      // Squashing here would rewrite an MR/PR a human is already reviewing,
+      // collapsing the commits their comments are anchored to.
+      addDynamicStep('ci-watch', 'ci-watch/squash', 'squash');
+      skipStep('ci-watch/squash', 'this run added a commit to an MR/PR already under review — not rewriting its history');
+    } else {
+      await maybeSquashCommits(config, worktreePath, state.branch, targetBranch, intent);
+    }
 
     if (config.cleanupOnSuccess) {
       // Only run the cleanup step here when it hasn't already run early,
@@ -304,6 +460,10 @@ async function finalizeRun(
       }
     } else {
       skipStep('cleanup', 'config.cleanupOnSuccess is disabled — leaving your changes on the local repo for you to inspect');
+    }
+
+    if (isFollowUp && config.cleanupOnSuccess) {
+      note(`your local ${state.branch} does not have this commit yet — the run made it in its own worktree; \`git pull\` to catch up`);
     }
 
     // After cleanup on purpose: with cleanupOnSuccess on, the working tree is
@@ -334,10 +494,19 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     const agent = selectAgent(config);
     await printWelcome(config, repoRoot);
 
-    // The skeleton needs the target branch for its sync/merge details, so
-    // read it before the first step renders (both are read-only).
-    const targetBranch = await currentBranch(repoRoot);
+    // Both reads happen before the first step renders, since the skeleton
+    // needs the target branch for its sync/merge details. A follow-up run
+    // inherits the open MR/PR's own target instead of resolving one: the
+    // MR/PR already decided what it merges into.
+    const followUpMr = await findFollowUpMr(forge, repoRoot);
+    const targetBranch = followUpMr ? followUpMr.targetBranch : await resolveTargetBranch(repoRoot, options.target);
+    // A follow-up run rebases onto the MR/PR's own branch, so a commit pushed
+    // there since (a reviewer's fixup, another run) is never clobbered.
+    const syncBranch = followUpMr ? followUpMr.sourceBranch : targetBranch;
     beginRun(freshRunSkeleton(targetBranch, config.agent), { title: basename(repoRoot) });
+    if (followUpMr) {
+      note(`${followUpMr.sourceBranch} already has an open MR/PR (${followUpMr.webUrl}) — adding this change to it instead of opening a new one`);
+    }
 
     const diff = await captureRunDiff(repoRoot);
     if (!diff) {
@@ -383,18 +552,16 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     });
 
     try {
-      await applyCapturedDiff(agent, repoRoot, state, worktreePath, targetBranch, diffText, untrackedFiles);
+      await applyCapturedDiff(agent, repoRoot, state, worktreePath, syncBranch, diffText, untrackedFiles);
 
       const checks = await runAndReportChecks(config, worktreePath, state, repoRoot);
       if (!checks) return;
 
-      const { intent, intentTokens, actualBranchName } = await captureIntentAndBranch(agent, config, options, worktreePath, changedFiles, untrackedFiles);
-      state = { ...state, branch: actualBranchName, phase: 'intent' };
-      recordEvent(repoRoot, state, `Captured intent; renamed to feature branch ${actualBranchName}`, 'info', intentTokens);
-
-      await maybeUpdateChangelog(config, worktreePath, intent);
-
-      const mr = await commitAndOpenMr(forge, worktreePath, state, targetBranch, intent, config, checks, repoRoot);
+      const staged = followUpMr
+        ? await runFollowUpMrStage(agent, config, forge, worktreePath, state, repoRoot, changedFiles, untrackedFiles, checks, followUpMr)
+        : await runFreshMrStage(agent, config, options, forge, worktreePath, state, repoRoot, changedFiles, untrackedFiles, checks, targetBranch);
+      state = staged.state;
+      const { intent, mr } = staged;
 
       // This runs before stage 12 (watching the pipeline) even though it's
       // numbered 13 — it's the same stage 13 that would otherwise run after
@@ -407,7 +574,7 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       // boundary so TS uses the declared RunPhase return type instead of the
       // 'mr' literal it narrowed state.phase to just before the call.
       const finalPhase = readPhase(state);
-      await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent);
+      await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent, followUpMr !== undefined);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');

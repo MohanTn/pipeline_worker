@@ -162,6 +162,27 @@ test('updateMrDescription PATCHes /pulls/{iid} with the new body', async () => {
   }
 });
 
+test('getMrDescription reads the PR body, and reads an absent body as an empty string', async () => {
+  for (const [body, expected] of [['Original description.', 'Original description.'], [null, '']] as Array<[string | null, string]>) {
+    const server = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ body }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address ? address.port : 0;
+    try {
+      await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+        const forge = createGithubForge(githubConfig());
+        const result = await forge.getMrDescription(42);
+        assert.equal(result.text, expected);
+      });
+    } finally {
+      server.close();
+    }
+  }
+});
+
 test('createGithubForge transparently retries a transient 500 via forgeFetch', async () => {
   let calls = 0;
   const server = http.createServer((req, res) => {

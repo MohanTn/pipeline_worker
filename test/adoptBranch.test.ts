@@ -43,6 +43,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     updateMrDescription: async () => {
       throw new Error('not used');
     },
+    getMrDescription: async () => '',
     getMrPipelines: async () => [],
     getFailedJobs: async () => [],
     getJobLog: async () => '',

@@ -28,6 +28,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
       throw new Error('not used');
     },
     updateMrDescription: async () => {},
+    getMrDescription: async () => '',
     getMrPipelines: async () => [],
     getFailedJobs: async () => [],
     getJobLog: async () => '',
@@ -235,6 +236,7 @@ function fixLoopForge(overrides: Partial<ForgeClient> = {}): ForgeClient {
       throw new Error('not used');
     },
     updateMrDescription: async () => {},
+    getMrDescription: async () => '',
     getMrPipelines: async () => [],
     getFailedJobs: async () => [],
     getJobLog: async () => '',

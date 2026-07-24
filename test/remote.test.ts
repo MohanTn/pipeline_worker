@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { detectGithubRepo, detectDefaultBranch } from '../src/git/remote.js';
+import { detectGithubRepo, detectDefaultBranch, remoteBranchExists } from '../src/git/remote.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,6 +14,43 @@ async function makeRepo(remoteUrl?: string): Promise<string> {
   await execFileAsync('git', ['init', '-q'], { cwd: dir });
   if (remoteUrl) await execFileAsync('git', ['remote', 'add', 'origin', remoteUrl], { cwd: dir });
   return dir;
+}
+
+/**
+ * A repo wired to a bare origin holding `branches` (the first is checked out
+ * locally), with no `refs/remotes/origin/HEAD` anywhere — the shape that
+ * forces detectDefaultBranch past both symref tiers onto the main/master probe.
+ */
+async function makeRepoWithRemoteBranches(branches: string[]): Promise<{ repoDir: string; originDir: string }> {
+  const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-origin-'));
+  const repoDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-remote-'));
+  await execFileAsync('git', ['init', '-q', '--bare'], { cwd: originDir });
+  await execFileAsync('git', ['init', '-q', '-b', branches[0]], { cwd: repoDir });
+  await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: repoDir });
+  await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: repoDir });
+  await execFileAsync('git', ['commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repoDir });
+  await execFileAsync('git', ['remote', 'add', 'origin', originDir], { cwd: repoDir });
+  for (const branch of branches) {
+    await execFileAsync('git', ['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], { cwd: repoDir });
+  }
+  await execFileAsync('git', ['fetch', '-q', 'origin'], { cwd: repoDir });
+  await blindOriginHead(repoDir, originDir);
+  return { repoDir, originDir };
+}
+
+/**
+ * Removes every trace of a default-branch symref — origin's own HEAD (pointed
+ * at a branch that doesn't exist, as a repo whose trunk was renamed ends up)
+ * and the local `refs/remotes/origin/HEAD` a modern `git fetch` sets. What's
+ * left can only be resolved by probing for main/master.
+ */
+async function blindOriginHead(repoDir: string, originDir: string): Promise<void> {
+  await execFileAsync('git', ['--git-dir', originDir, 'symbolic-ref', 'HEAD', 'refs/heads/never-created'], { cwd: originDir });
+  try {
+    await execFileAsync('git', ['remote', 'set-head', 'origin', '-d'], { cwd: repoDir });
+  } catch {
+    // Older git doesn't set origin/HEAD on fetch, so there's nothing to delete.
+  }
 }
 
 test('detectGithubRepo parses an https origin remote', async () => {
@@ -109,5 +146,72 @@ test('detectDefaultBranch throws a clear error when there is no origin remote to
     await assert.rejects(() => detectDefaultBranch(dir), /could not auto-detect/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('detectDefaultBranch probes origin for master when neither symref tier can answer', async () => {
+  const { repoDir, originDir } = await makeRepoWithRemoteBranches(['master']);
+  try {
+    assert.equal(await detectDefaultBranch(repoDir), 'master');
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('detectDefaultBranch probes origin for main when neither symref tier can answer', async () => {
+  const { repoDir, originDir } = await makeRepoWithRemoteBranches(['main']);
+  try {
+    assert.equal(await detectDefaultBranch(repoDir), 'main');
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('detectDefaultBranch still throws when origin has neither main nor master and no symref', async () => {
+  const { repoDir, originDir } = await makeRepoWithRemoteBranches(['develop']);
+  try {
+    await assert.rejects(() => detectDefaultBranch(repoDir), /could not auto-detect/);
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+/** Advances `branch` by one commit on origin, so HEAD's merge-base with it becomes more recent than with the other trunk. */
+async function advanceRemoteBranch(repoDir: string, branch: string): Promise<void> {
+  await execFileAsync('git', ['commit', '-q', '--allow-empty', '-m', `move ${branch}`], { cwd: repoDir });
+  await execFileAsync('git', ['push', '-q', 'origin', `HEAD:refs/heads/${branch}`], { cwd: repoDir });
+  await execFileAsync('git', ['fetch', '-q', 'origin'], { cwd: repoDir });
+}
+
+for (const live of ['main', 'master']) {
+  const abandoned = live === 'main' ? 'master' : 'main';
+  test(`detectDefaultBranch picks ${live} over ${abandoned} when both exist and HEAD forked from ${live}`, async () => {
+    const { repoDir, originDir } = await makeRepoWithRemoteBranches(['main', 'master']);
+    try {
+      // Both trunks start at the same commit; only `live` keeps moving, and
+      // the working branch is cut from its new tip — so HEAD's merge-base
+      // with `live` is strictly newer than its merge-base with `abandoned`.
+      await advanceRemoteBranch(repoDir, live);
+      await execFileAsync('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: repoDir });
+
+      assert.equal(await detectDefaultBranch(repoDir), live);
+    } finally {
+      rmSync(originDir, { recursive: true, force: true });
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('remoteBranchExists distinguishes a branch origin has from one it does not', async () => {
+  const { repoDir, originDir } = await makeRepoWithRemoteBranches(['main']);
+  try {
+    assert.equal(await remoteBranchExists(repoDir, 'main'), true);
+    assert.equal(await remoteBranchExists(repoDir, 'release/2.0'), false);
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(repoDir, { recursive: true, force: true });
   }
 });

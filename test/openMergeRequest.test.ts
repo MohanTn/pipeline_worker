@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { buildDescription, openMergeRequest } from '../src/workflow/openMergeRequest.js';
+import { buildDescription, buildFollowUpSection, appendSection, appendToMergeRequest, openMergeRequest } from '../src/workflow/openMergeRequest.js';
 import type { CapturedIntent, CheckResult, MergeMethod, MergeRequest } from '../src/types.js';
 import type { ForgeClient } from '../src/forge/types.js';
 
@@ -53,6 +53,22 @@ test('buildDescription renders a placeholder instead of an empty list when no ch
   assert.match(description, /\*\*Checks:\*\*\n_Not run locally for this update — see the CI pipeline below\._/);
 });
 
+test('buildFollowUpSection documents the follow-up commit file by file, with its own checks and risk', () => {
+  const section = buildFollowUpSection(INTENT, 'claude', CHECKS);
+  assert.match(section, /### 🔁 Follow-up: feat: add login page/);
+  assert.match(section, /\*\*File changes:\*\*\n- `src\/login\.ts`: Adds the login form component\.\n- `src\/routes\.ts`: Registers the \/login route\./);
+  assert.match(section, /\*\*Risk:\*\* Low — New, isolated component with no existing callers\./);
+  assert.match(section, /\*\*Checks:\*\*\n- ✅ build \(1\.2s\)/);
+});
+
+test('appendSection keeps the existing description above the new section, separated by a rule', () => {
+  assert.equal(appendSection('Reviewer notes.\n', 'NEW'), 'Reviewer notes.\n\n---\n\nNEW');
+});
+
+test('appendSection returns just the section when the MR/PR has no description yet', () => {
+  assert.equal(appendSection('   \n', 'NEW'), 'NEW');
+});
+
 /** A repo with an `origin` remote already holding `main` and `branch` pushed — enough for openMergeRequest's stage-10 push to succeed. */
 async function makeRepoOnBranch(branch: string): Promise<{ worktreePath: string; originDir: string }> {
   const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-openmr-origin-'));
@@ -77,6 +93,7 @@ function mrForgeStub(overrides: Partial<ForgeClient>): ForgeClient {
     createMergeRequest: async (args) =>
       ({ iid: 1, webUrl: 'http://example/mr/1', sourceBranch: args.sourceBranch, targetBranch: args.targetBranch, state: 'open' }) as MergeRequest,
     updateMrDescription: async () => {},
+    getMrDescription: async () => ({ text: '' }),
     getMrPipelines: async () => [],
     getFailedJobs: async () => [],
     getJobLog: async () => '',
@@ -167,6 +184,39 @@ test('openMergeRequest does not call enableAutoMerge when reusing an already-exi
 
     assert.equal(mr.iid, 9);
     assert.equal(called, false);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test("appendToMergeRequest pushes the worktree's HEAD onto the MR/PR's branch and appends to its description", async () => {
+  // The follow-up shape: the PR's branch is checked out elsewhere (repoRoot),
+  // so this worktree sits on a temp branch and can only reach the PR's branch
+  // through an explicit refspec push.
+  const { worktreePath, originDir } = await makeRepoOnBranch('feature/reviewed');
+  try {
+    await execFileAsync('git', ['checkout', '-q', '-b', 'pipeline-worker/tmp-abc1234'], { cwd: worktreePath });
+    writeFileSync(join(worktreePath, 'file.txt'), 'reviewer asked for this\n');
+    await execFileAsync('git', ['commit', '-q', '-am', 'fix: address review comment'], { cwd: worktreePath });
+    const { stdout: localSha } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: worktreePath });
+
+    let updated: { mrIid: number; description: string } | undefined;
+    const mr: MergeRequest = { iid: 12, webUrl: 'http://example/mr/12', sourceBranch: 'feature/reviewed', targetBranch: 'main', state: 'open' };
+    const forge = mrForgeStub({
+      getMrDescription: async () => ({ text: 'Original description.' }),
+      updateMrDescription: async (mrIid, description) => {
+        updated = { mrIid, description };
+      },
+    });
+
+    await appendToMergeRequest(forge, worktreePath, mr, INTENT, 'claude', CHECKS);
+
+    const { stdout: pushedSha } = await execFileAsync('git', ['rev-parse', 'feature/reviewed'], { cwd: originDir });
+    assert.equal(pushedSha.trim(), localSha.trim(), "the MR/PR's branch on origin should now point at this run's commit");
+    assert.equal(updated?.mrIid, 12);
+    assert.match(updated!.description, /^Original description\.\n\n---\n\n### 🔁 Follow-up: feat: add login page/);
+    assert.match(updated!.description, /- `src\/login\.ts`: Adds the login form component\./);
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
