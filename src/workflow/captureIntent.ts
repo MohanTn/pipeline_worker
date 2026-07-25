@@ -137,8 +137,8 @@ const IntentShape = z.object({
  * naming a branch/commit/summary from a diff needs no deep reasoning.
  * Each adapter maps it onto its own CLI's model flag (copilot translates
  * Claude aliases like "haiku" to its own model names).
- * The CI-fix path (watchPipeline.ts) deliberately never sets a model override
- * — fixing a real failing build needs the stronger default model.
+ * The CI-fix path (watchPipeline.ts) sets the same "haiku" override on its
+ * fix turns, keeping pipeline-fix cost down too.
  *
  * `baseRef` defaults to `HEAD`, matching a normal run's uncommitted diff. The
  * `resume` branch-adoption path (adoptBranch.ts) passes a fixed merge-base

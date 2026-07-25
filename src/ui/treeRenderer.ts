@@ -27,6 +27,7 @@ import { styleText } from 'node:util';
 import { truncateToWidth } from './steps.js';
 import { formatTokens, formatUsageInline, usageFooter } from './format.js';
 import { formatElapsed, formatAttempt, type Renderer } from './renderer.js';
+import { mocha, type MochaRole } from './theme.js';
 import type { RunStatus, RunTree, StepNode, TreeEvent, TreeRow } from './runTree.js';
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -208,18 +209,18 @@ export class TreeRenderer implements Renderer {
     return truncateToWidth(parts.join(' · '), this.columns());
   }
 
-  private statusGlyph(node: StepNode): { glyph: string; color: Parameters<typeof styleText>[0] } {
+  private statusGlyph(node: StepNode): { glyph: string; color: MochaRole } {
     switch (node.status) {
       case 'done':
         return { glyph: '✓', color: 'green' };
       case 'failed':
         return { glyph: '✗', color: 'red' };
       case 'running':
-        return { glyph: SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length], color: 'cyan' };
+        return { glyph: SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length], color: 'sky' };
       case 'skipped':
-        return { glyph: '–', color: 'dim' };
+        return { glyph: '–', color: 'overlay1' };
       default:
-        return { glyph: '○', color: 'dim' };
+        return { glyph: '○', color: 'overlay1' };
     }
   }
 
@@ -247,7 +248,7 @@ export class TreeRenderer implements Renderer {
     const width = this.columns();
     if (isElision(row)) {
       const indent = '   '.repeat(row.depth + 1);
-      return styleText('dim', truncateToWidth(`${indent}${row.summary}`, width));
+      return mocha('overlay1', truncateToWidth(`${indent}${row.summary}`, width));
     }
     const { node } = row;
     const { glyph, color } = this.statusGlyph(node);
@@ -264,7 +265,7 @@ export class TreeRenderer implements Renderer {
     const bodyRoom = room - figuresPart.length;
     const text = `${bodyRoom > 0 ? truncateToWidth(body, bodyRoom) : ''}${figuresPart}`;
     const dimRow = node.status === 'skipped' || node.status === 'pending';
-    return `${prefix}${styleText(color, glyph)} ${dimRow ? styleText('dim', text) : text}`;
+    return `${prefix}${mocha(color, glyph)} ${dimRow ? mocha('overlay1', text) : text}`;
   }
 
   private buildFrame(status: RunStatus): string[] {
@@ -292,12 +293,12 @@ export class TreeRenderer implements Renderer {
     const lines = this.buildFrame(status);
     this.eraseRegion();
     this.out.write(`${lines.join('\n')}\n`);
-    if (detail) this.out.write(styleText('dim', `  ${truncateToWidth(detail, this.columns())}`) + '\n');
+    if (detail) this.out.write(mocha('overlay1', `  ${truncateToWidth(detail, this.columns())}`) + '\n');
     // The per-turn token table lands in scrollback beneath the settled tree,
     // where it has the room the width-capped step rows don't.
     const footer = usageFooter(tree.usageRows(), tree.totalTokens());
     if (footer.length > 0) this.out.write('\n');
-    for (const line of footer) this.out.write(styleText('dim', truncateToWidth(line, this.columns())) + '\n');
+    for (const line of footer) this.out.write(mocha('overlay1', truncateToWidth(line, this.columns())) + '\n');
     this.stopped = true;
     this.renderedLines = 0;
     this.out.write(SHOW_CURSOR);

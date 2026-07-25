@@ -17,10 +17,11 @@ import { LineRenderer, type Renderer } from './renderer.js';
 import { TreeRenderer } from './treeRenderer.js';
 import { boxHeader, formatBulletBlock } from './format.js';
 import { maybeChime } from './notify.js';
+import { mocha, type MochaRole } from './theme.js';
 import type { RiskLevel } from '../types.js';
 import type { AgentInvokeResult } from '../agent/types.js';
 
-const RISK_COLOR: Record<RiskLevel, 'green' | 'yellow' | 'red'> = { low: 'green', medium: 'yellow', high: 'red' };
+const RISK_COLOR: Record<RiskLevel, MochaRole> = { low: 'green', medium: 'yellow', high: 'red' };
 
 interface ActiveRun {
   tree: RunTree;
@@ -188,7 +189,7 @@ export function announce(text: string, detail?: string): void {
   const run = ensureActive();
   run.renderer.log('');
   run.renderer.log(styleText('bold', text));
-  if (detail) run.renderer.log(styleText('dim', `  ${detail}`));
+  if (detail) run.renderer.log(mocha('overlay1', `  ${detail}`));
 }
 
 /**
@@ -198,12 +199,12 @@ export function announce(text: string, detail?: string): void {
  * otherwise a multi-line value would break out of the "one dim line" format.
  */
 export function note(text: string): void {
-  ensureActive().renderer.log(styleText('dim', `  ${text.replace(/\s*\n\s*/g, ' ')}`));
+  ensureActive().renderer.log(mocha('overlay1', `  ${text.replace(/\s*\n\s*/g, ' ')}`));
 }
 
 /** Like note(), but colors the text by risk level (green/yellow/red for low/medium/high). */
 export function noteRisk(risk: RiskLevel, reason: string): void {
-  ensureActive().renderer.log(styleText('dim', '  ') + styleText(RISK_COLOR[risk], `risk: ${risk} — ${reason.replace(/\s*\n\s*/g, ' ')}`));
+  ensureActive().renderer.log(mocha('overlay1', '  ') + mocha(RISK_COLOR[risk], `risk: ${risk} — ${reason.replace(/\s*\n\s*/g, ' ')}`));
 }
 
 /**
