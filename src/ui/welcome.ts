@@ -16,11 +16,11 @@ export function repositoryUrl(config: PipelineWorkerConfig): string {
 }
 
 export function agentDescription(config: PipelineWorkerConfig): string {
-  // claude and pi support per-invocation model selection; copilot does not.
-  if (config.agent === "claude" || config.agent === "pi") {
-    return `${config.agent} (${config.intentModel} for intent capture, default model for CI fixes)`;
-  }
-  return "copilot";
+  // copilot is the one adapter with no per-invocation model selection, so it
+  // is the only one whose line can't name a model. Every other agent — and
+  // any added later — reports the intent model it was configured with.
+  if (config.agent === "copilot") return "copilot";
+  return `${config.agent} (${config.intentModel} for intent capture, default model for CI fixes)`;
 }
 
 export async function printWelcome(

@@ -34,6 +34,9 @@ Polling costs zero agent tokens; the agent is invoked only when a pipeline actua
 | [Claude Code](https://claude.com/claude-code) | `claude` | `npm install -g @anthropic-ai/claude-code` | ✅ (`--model`) |
 | [Pi](https://pi.dev) | `pi` | `npm install -g @earendil-works/pi-coding-agent` | ✅ (`--model`) — any provider/model |
 | [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) | `copilot` | Install via [GitHub's docs](https://docs.github.com/en/copilot/how-tos/copilot-cli) | ✅ (`--model`) — Copilot's own model names; the `haiku`/`sonnet` aliases are mapped automatically |
+| [little-coder](https://github.com/itayinbarr/little-coder) | `little-coder` | Follow its README (llama.cpp or Ollama serving a 5-25GB local model) | ✅ (`--model <provider/id>`, e.g. `llamacpp/qwen3-30b`) |
+
+little-coder is pi tuned for small local models, so pipeline-worker drives it with pi's flags (`-p`, `--model`, `--tools`, prompt over stdin) plus two settings of its own — see [Running on a local model](#running-on-a-local-model).
 
 Pi supports models from any provider — Anthropic, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, etc.
 Configure your provider/api-key via pi's own setup (`/login`), env vars, or `--provider` in the adapter.
@@ -101,6 +104,9 @@ names them.
 | `cleanupEarly`          | `false`                      | `true` resets repoRoot as soon as the MR/PR is opened (diff committed + pushed), instead of waiting for CI to go green — frees the repo (and the run lock) for a new `pipeline-worker run` while this run's CI-watch/fix loop keeps going in the background |
 | `switchToFeatureBranch` | `true`                       | when the run finishes green, check the feature branch out in your repo so your next change becomes a follow-up commit on the same MR/PR — see [Following up on a PR/MR under review](#following-up-on-a-prmr-under-review). Skipped (with a note) when the working tree still has uncommitted changes |
 | `intentModel`           | `haiku`                      | model used for the intent-capture step (branch/commit/summary). All three agents pass it via `--model`; for copilot, the `haiku`/`sonnet` aliases are translated to Copilot's own model names (`claude-haiku-4.5`/`claude-sonnet-4.5`), anything else is passed through verbatim |
+| `bareAgentMode`         | `true`                       | run every agent turn as lean as the CLI allows. For `claude` that means `--bare` (no hooks, no LSP, no plugin sync, no `CLAUDE.md` auto-discovery, no attribution) alongside the per-step `--system-prompt` and `--tools` gate every turn already gets. **Turn this off if you sign in to Claude Code with a subscription:** `--bare` reads credentials only from `ANTHROPIC_API_KEY` (or an `apiKeyHelper` via `--settings`), never from OAuth or the keychain, so turns would fail with an API error — pipeline-worker warns at startup when it sees that combination |
+| `littleCoder.binary`    | `little-coder`               | binary name or absolute path for the `little-coder` agent                     |
+| `littleCoder.maxPromptChars` | `12000`                 | hard cap on the characters of one prompt sent to little-coder; a longer prompt is trimmed middle-out with a visible marker so a small local context is never overrun. `0` disables the cap |
 | `build`                 | auto-detected from toolchain | build command override; set to an empty string to skip the stage              |
 | `lint`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage               |
 | `test`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage               |
@@ -147,6 +153,43 @@ pipeline-worker run --ticket PROJ-123
 
 A pattern that includes `{ticket}` requires `--ticket` to be passed; the run fails fast at the naming step otherwise.
 
+### What each agent turn is allowed to do
+
+Every turn runs with a one- or two-sentence `--system-prompt` stating only its job, and with its tool set gated to what that job needs. On `claude` the gate is real: `--tools` decides which built-in tools exist for the turn at all, so a turn cannot reach for a tool by asking permission (verified — a Read-only turn told to run `echo` answers "BLOCKED", with no permission prompt and no denial to record).
+
+| Turn | Tools | Why |
+| ---- | ----- | --- |
+| intent capture | `Read` | The prompt already carries the change as a patch — pipeline-worker runs `git diff` itself (capped at 20000 chars, trimmed middle-out) so the agent judges the delta without needing a shell. `Read` covers the new/untracked files a diff cannot show |
+| conflict resolution (diff-apply and CI-watch merge) | `Read`, `Write`, `Edit` | Resolving conflict markers is a text edit. Staging and committing stay with pipeline-worker, so the turn needs no shell at all |
+| MR/PR review | `Read` | Works from the diff in its prompt — the prompt tells it not to read the changed file back in full, so one review turn's context is bounded by `reviewChunkChars`, not by how big the touched files are. `Read` remains available for a *different* file (a caller, a type) it cannot infer from the chunk |
+| CI fix / local check fix | unrestricted | Fixing a red build legitimately means running the failing command, and pulling job logs through the forge MCP server |
+
+`copilot` has no per-invocation tool allowlist (`--allow-all-tools` is required for unattended runs), so under that agent these turns get full tool access; the system prompt still applies. `pi` and `little-coder` map the allowlist onto their own `--tools` flag.
+
+### Running on a local model
+
+`"agent": "little-coder"` drives [little-coder](https://github.com/itayinbarr/little-coder) — pi plus extensions, tuned for 5-25GB local models on llama.cpp/Ollama. Point it at a served model and keep the prompts small:
+
+```json
+{
+  "agent": "little-coder",
+  "littleCoder": { "binary": "little-coder", "maxPromptChars": 12000 },
+  "intentModel": "llamacpp/qwen3-30b",
+  "reviewModel": "llamacpp/qwen3-30b",
+  "reviewChunkChars": 6000,
+  "review": false
+}
+```
+
+What makes this workable on a small context window:
+
+- **Prompt cap.** Every prompt is trimmed to `littleCoder.maxPromptChars` before it is handed over, middle-out, keeping the system instruction at the head and the JSON contract at the tail — the two parts a small model cannot do without. An over-long prompt otherwise fails quietly, losing whichever end the runtime drops.
+- **Fewer tools per turn.** The turns above are gated to `Read` or to read/write, which for a local model also means fewer tool-use rounds to get wrong.
+- **Smaller review chunks.** `reviewChunkChars` decides how much diff one review turn carries; drop it well below the 24000 default (the example uses 6000), or leave `review` off entirely and let the local model handle intent capture and CI fixes only.
+- **Model naming.** `intentModel`/`reviewModel` are passed through as `--model`, so use little-coder's `provider/id` form (`llamacpp/…`, `ollama/…`), not the `haiku`/`sonnet` aliases.
+
+little-coder's own `LITTLE_CODER_BASH_ALLOW` and model profiles (`.pi/settings.json`) stay yours to configure; pipeline-worker does not write them.
+
 ### Check command auto-detection
 
 `build` / `lint` / `test` are picked from the repo's toolchain (first marker found wins; mixed-language repos should set `build` / `lint` / `test` explicitly):
@@ -192,7 +235,7 @@ If the working tree still holds uncommitted changes when the run ends (`"cleanup
 
 With `"review": true`, the run adds one stage right after the MR/PR is opened and before CI is watched: the agent reviews the branch's own diff and comments **on the diff lines**, not in the description.
 
-- **Chunking** — the diff is split per file, and a file larger than `reviewChunkChars` is split further, so a large MR/PR never overflows the model's context. One agent turn per chunk; each carries the file name, its language, and the surrounding lines.
+- **Chunking** — the diff is split per file, and a file larger than `reviewChunkChars` is split further, so a large MR/PR never overflows the model's context. One agent turn per chunk; each carries the file name, its language, and the surrounding lines. The reviewer works from that diff only — it is told not to read the changed file back in full, and its tool set is gated to `Read` (see [What each agent turn is allowed to do](#what-each-agent-turn-is-allowed-to-do)).
 - **Line targeting** — every line in a chunk is presented with its line number in the *new* file, and a finding may only anchor to an added (`+`) line. Anything else the model returns (an old-file number, a hallucinated one, a file not in the diff) is dropped before any API call.
 - **One-click fixes** — comments carry a ` ```suggestion ` block where a concrete fix fits, in the dialect the active forge accepts (GitLab's ` ```suggestion:-0+0 `).
 - **Gatekeeping** — the reviewer is instructed to report only logic errors, security holes, performance problems, and severe anti-patterns; on top of that, findings below `reviewMinSeverity` are dropped, duplicates on the same file+line are collapsed, and at most `reviewMaxComments` are posted, most severe first. A clean diff produces no comments at all.

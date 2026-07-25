@@ -143,14 +143,18 @@ test('posts one inline comment per surviving finding, on the right file and line
   }
 });
 
-test('passes the review model through only when one is configured, with read-only tools', async () => {
+test('passes the review model through only when one is configured, with reading files as the only tool', async () => {
   const { worktreePath, originDir } = await makeReviewableBranch();
   const calls: AgentInvokeOptions[] = [];
   try {
     await maybeReviewMergeRequest(forgeStub(), reviewConfig(), agentReturning('[]', calls), worktreePath, 'main', 7);
     assert.equal(calls[0].model, undefined);
-    assert.deepEqual(calls[0].allowedTools, ['Read', 'Grep', 'Glob']);
-    assert.match(calls[0].prompt, /Staff Software Engineer/);
+    assert.deepEqual(calls[0].allowedTools, ['Read']);
+    // The persona is the turn's system prompt now, not a prefix repeated in
+    // every chunk's prompt — and the chunk is told not to read the file back.
+    assert.match(calls[0].systemPrompt ?? '', /Staff Software Engineer/);
+    assert.doesNotMatch(calls[0].prompt, /Staff Software Engineer/);
+    assert.match(calls[0].prompt, /Do not open the changed file/);
     assert.match(calls[0].prompt, /File: app\.ts/);
 
     calls.length = 0;

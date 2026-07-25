@@ -429,6 +429,64 @@ test('loadConfig: github.repo in the file takes precedence over origin-remote au
   });
 });
 
+test('agent hardening defaults: bare mode on, little-coder binary and a small prompt budget', () => {
+  withTempDir((dir) => {
+    const config = loadConfig(dir);
+    assert.equal(config.bareAgentMode, true);
+    assert.deepEqual(config.littleCoder, { binary: 'little-coder', maxPromptChars: 12_000 });
+  });
+});
+
+test('bareAgentMode can be turned off — a subscription (OAuth) claude sign-in cannot use --bare', () => {
+  withTempDir((dir) => {
+    writeSettings({ bareAgentMode: false });
+    assert.equal(loadConfig(dir).bareAgentMode, false);
+  });
+});
+
+test('bare mode with no ANTHROPIC_API_KEY warns at load time, since --bare never reads OAuth or the keychain', () => {
+  withTempDir((dir) => {
+    const savedKey = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    try {
+      const warnings = captureWarnings(() => loadConfig(dir));
+      assert.ok(
+        warnings.some((w) => w.includes('bareAgentMode') && w.includes('ANTHROPIC_API_KEY')),
+        `expected a warning about bare-mode auth, got: ${warnings.join(' | ')}`,
+      );
+
+      // Silent once a key exists, and silent for a non-claude agent (no --bare there to break).
+      process.env.ANTHROPIC_API_KEY = 'sk-test';
+      assert.ok(!captureWarnings(() => loadConfig(dir)).some((w) => w.includes('bareAgentMode')));
+      delete process.env.ANTHROPIC_API_KEY;
+      writeSettings({ agent: 'little-coder' });
+      assert.ok(!captureWarnings(() => loadConfig(dir)).some((w) => w.includes('bareAgentMode')));
+    } finally {
+      if (savedKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = savedKey;
+    }
+  });
+});
+
+test('the littleCoder section is configurable, and maxPromptChars accepts 0 as "no cap"', () => {
+  withTempDir((dir) => {
+    writeSettings({ agent: 'little-coder', littleCoder: { binary: '/opt/little-coder/bin/little-coder', maxPromptChars: 0 } });
+    const config = loadConfig(dir);
+    assert.equal(config.agent, 'little-coder');
+    assert.equal(config.littleCoder.binary, '/opt/little-coder/bin/little-coder');
+    assert.equal(config.littleCoder.maxPromptChars, 0);
+  });
+});
+
+test('a negative or unparseable maxPromptChars falls back to the default instead of disabling the cap', () => {
+  withTempDir((dir) => {
+    writeSettings({ littleCoder: { maxPromptChars: -1 } });
+    assert.equal(loadConfig(dir).littleCoder.maxPromptChars, 12_000);
+    writeSettings({ littleCoder: { maxPromptChars: 'lots' } });
+    assert.equal(loadConfig(dir).littleCoder.maxPromptChars, 12_000);
+  });
+});
+
 test('review config defaults to off, MAJOR-only, 10 comments', () => {
   withTempDir((dir) => {
     const config = loadConfig(dir);

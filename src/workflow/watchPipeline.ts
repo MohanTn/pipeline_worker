@@ -160,6 +160,26 @@ export async function pollForNextAction(
   throw new Error(`MR ${mrIid} did not reach a terminal pipeline state or a resolvable conflict within the polling window`);
 }
 
+/**
+ * Conflict resolution is a pure text edit, so the turn is given exactly two
+ * capabilities — read a file, write a file — and no shell at all. The claude
+ * adapter turns this into `--tools Read,Write,Edit`, so the "do not run git
+ * commands" line in the prompt below is enforced by the gate rather than
+ * trusted: staging and committing stay with pipeline-worker
+ * (finalizeMergeResolution), which is what the later steps depend on.
+ */
+const CONFLICT_TOOLS = ['Read', 'Write', 'Edit'];
+
+/** Replaces the agent's default system prompt for a conflict turn. */
+const CONFLICT_SYSTEM =
+  'You resolve git merge conflicts by editing the conflicted files. You may only read and write files — you run ' +
+  'no commands, and you make no change beyond resolving the conflicts you are given.';
+
+/** Replaces the agent's default system prompt for a fix turn (a local check or a red CI pipeline). */
+const FIX_SYSTEM =
+  'You fix a failing build, lint, or test in this repository. Make the smallest change that makes it pass, and do ' +
+  'not touch anything the failure does not implicate.';
+
 function buildConflictPrompt(conflictedFiles: string[]): string {
   return (
     `This branch has merge conflicts with the target branch in the following file(s): ${conflictedFiles.join(', ')}. ` +
@@ -237,7 +257,15 @@ async function resolveConflictsWithAgent(stepId: string, agent: AgentAdapter, wo
     agentResult = await runPhase(
       stepId,
       `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-      () => agent.invoke({ prompt: buildConflictPrompt(conflictedFiles), cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
+      () =>
+        agent.invoke({
+          prompt: buildConflictPrompt(conflictedFiles),
+          systemPrompt: CONFLICT_SYSTEM,
+          cwd: worktreePath,
+          mcpConfigPath,
+          permissionMode: 'acceptEdits',
+          allowedTools: CONFLICT_TOOLS,
+        }),
     );
   } finally {
     unlinkSync(mcpConfigPath);
@@ -359,7 +387,9 @@ export async function tryResolveConflicts(
       const agentResult = await runPhase(
         stepId,
         `asking the agent to fix the ${lastLocalFailure.name} failure the merge introduced`,
-        () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), cwd: worktreePath, permissionMode: 'acceptEdits' }),
+        // No allowedTools: unlike a conflict edit, fixing a broken build
+        // legitimately needs to run the failing command to see it pass.
+        () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits' }),
       );
       reportAgentInvocation(agentResult, worktreePath);
       recordAgentTokens(repoRoot, state, 'fix local check failure after merge', agentResult.usage);
@@ -477,7 +507,9 @@ export async function runCiFixAttempt(
         lastLocalFailure
           ? `asking the agent to fix the ${lastLocalFailure.name} failure its last edit left behind`
           : `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
-        () => agent.invoke({ prompt, cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
+        // No allowedTools here either: this turn pulls failed jobs and logs
+        // through the forge MCP server and re-runs checks locally.
+        () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
       );
     } finally {
       unlinkSync(mcpConfigPath);

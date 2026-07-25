@@ -16,6 +16,8 @@
  *  - `--model` expects Copilot's own model names (e.g. `claude-haiku-4.5`),
  *    not the Claude CLI aliases the config defaults to -> known aliases are
  *    mapped (haiku/sonnet), anything else is passed through verbatim.
+ *  - no `--system-prompt` flag -> `opts.systemPrompt` is prepended to the
+ *    prompt text instead (see promptText.ts);
  *  - no per-invocation tool allowlist -> `--allow-all-tools` is always passed,
  *    so `allowedTools` is ignored; a read-only step (e.g. captureIntent.ts)
  *    gets full tool access under this adapter instead of being restricted.
@@ -40,6 +42,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult } from './types.js';
 import { writePromptToStdin } from './stdinPrompt.js';
+import { composePrompt } from './promptText.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -48,12 +51,6 @@ function extractJsonObject(text: string): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   return start !== -1 && end > start ? text.slice(start, end + 1) : text;
-}
-
-/** Embeds a JSON-Schema instruction in the prompt text — Copilot CLI has no native structured-output flag (see module comment). */
-function buildCopilotPrompt(prompt: string, jsonSchema?: object): string {
-  if (!jsonSchema) return prompt;
-  return `${prompt}\n\nRespond with ONLY a single JSON object matching this JSON Schema — no prose, no code fences:\n${JSON.stringify(jsonSchema)}`;
 }
 
 /** Warns about the AgentInvokeOptions Copilot CLI has no per-invocation flag for (see module comment). */
@@ -78,7 +75,9 @@ function resolveCopilotModel(model: string): string {
 
 export const copilotAdapter: AgentAdapter = {
   async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
-    const prompt = buildCopilotPrompt(opts.prompt, opts.jsonSchema);
+    // Copilot CLI has no --system-prompt or --json-schema flag, so both are
+    // folded into the prompt text (see promptText.ts).
+    const prompt = composePrompt(opts);
     warnUnsupportedOptions(opts);
 
     const sessionName = `pipeline-worker-${randomUUID()}`;

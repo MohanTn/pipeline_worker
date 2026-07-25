@@ -49,6 +49,13 @@ export function shouldPreserveWorktreeOnInterrupt(phase: RunPhase): boolean {
   return RESUMABLE_PHASES.includes(phase);
 }
 
+/** Same two-capability gate as watchPipeline.ts's conflict turn: read and write files, no shell. */
+const CONFLICT_TOOLS = ['Read', 'Write', 'Edit'];
+
+const CONFLICT_SYSTEM =
+  'You resolve git merge conflicts by editing the conflicted files. You may only read and write files — you run ' +
+  'no commands, and you make no change beyond resolving the conflicts you are given.';
+
 function buildApplyConflictPrompt(conflictedFiles: string[]): string {
   return (
     `Applying your diff produced merge conflicts (the target branch moved since the diff was captured) in: ${conflictedFiles.join(', ')}. ` +
@@ -68,7 +75,14 @@ async function resolveApplyConflicts(agent: AgentAdapter, repoRoot: string, stat
   const agentResult = await runStep(
     'apply/conflicts',
     `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-    () => agent.invoke({ prompt: buildApplyConflictPrompt(conflictedFiles), cwd: worktreePath, permissionMode: 'acceptEdits' }),
+    () =>
+      agent.invoke({
+        prompt: buildApplyConflictPrompt(conflictedFiles),
+        systemPrompt: CONFLICT_SYSTEM,
+        cwd: worktreePath,
+        permissionMode: 'acceptEdits',
+        allowedTools: CONFLICT_TOOLS,
+      }),
   );
   reportAgentInvocation(agentResult, worktreePath);
   recordAgentTokens(repoRoot, state, 'resolve diff-apply conflicts', agentResult.usage);

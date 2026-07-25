@@ -1,9 +1,9 @@
 /**
  * Headless Claude Code adapter. Flags verified against the locally installed
  * `claude` CLI: `-p/--print`, `--output-format json`, `--permission-mode`,
- * `--json-schema`, `--mcp-config`, `--allowedTools`. There is no `--cwd`
- * flag — working directory is controlled by the spawned process's `cwd`
- * option.
+ * `--json-schema`, `--mcp-config`, `--allowedTools`, `--tools`,
+ * `--system-prompt`, `--bare`. There is no `--cwd` flag — working directory is
+ * controlled by the spawned process's `cwd` option.
  *
  * The prompt is written to the child's stdin rather than passed as a CLI
  * argument. Some invocations (e.g. watchPipeline.ts's CI-fix prompt, which
@@ -100,17 +100,48 @@ export function formatProcessError(err: ExecErrorShape): string {
   return lines.join('\n');
 }
 
+/**
+ * The built-in tool names behind an allowlist entry: `--allowedTools` takes
+ * scoped patterns (`Bash(git diff:*)`), but `--tools` — the gate deciding
+ * which built-ins exist for the turn at all — takes bare names only, so the
+ * scope is stripped here. Deduplicated, order preserved. Exported for unit
+ * testing.
+ */
+export function toolGateNames(allowedTools: string[]): string[] {
+  const names = allowedTools.map((entry) => entry.replace(/\(.*$/, '').trim()).filter((entry) => entry.length > 0);
+  return [...new Set(names)];
+}
+
+/**
+ * `bare` (config's bareAgentMode) adds `--bare`: no hooks, no LSP, no plugin
+ * sync, no CLAUDE.md auto-discovery — none of which a scripted, single-purpose
+ * turn wants, and all of which cost context. It also makes Anthropic auth
+ * strictly ANTHROPIC_API_KEY, which is why it is a setting and not a constant.
+ *
+ * `--tools` is passed whenever the caller named an allowlist: `--allowedTools`
+ * alone only decides what runs unprompted, so a turn meant to be read-only
+ * could still shell out by asking for permission it is granted by
+ * `--permission-mode acceptEdits`. Naming the gate as well removes the tool
+ * from the turn entirely.
+ */
 // fallow-ignore-next-line complexity
-function buildClaudeArgs(opts: AgentInvokeOptions): string[] {
+export function buildClaudeArgs(opts: AgentInvokeOptions, bare = false): string[] {
   const args = [
     '-p',
     '--output-format', 'json',
     '--permission-mode', opts.permissionMode ?? 'acceptEdits',
   ];
+  if (bare) {
+    args.push('--bare');
+  }
+  if (opts.systemPrompt) {
+    args.push('--system-prompt', opts.systemPrompt);
+  }
   if (opts.jsonSchema) {
     args.push('--json-schema', JSON.stringify(opts.jsonSchema));
   }
   if (opts.allowedTools?.length) {
+    args.push('--tools', toolGateNames(opts.allowedTools).join(','));
     args.push('--allowedTools', ...opts.allowedTools);
   }
   if (opts.mcpConfigPath) {
@@ -206,11 +237,21 @@ function parseClaudeResult(stdout: string, start: number): AgentInvokeResult {
   }
 }
 
-export const claudeAdapter: AgentAdapter = {
-  async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
-    const args = buildClaudeArgs(opts);
-    const start = Date.now();
-    const stdout = await runClaudeProcess(args, opts);
-    return parseClaudeResult(stdout, start);
-  },
-};
+export interface ClaudeAdapterOptions {
+  /** config.bareAgentMode — see buildClaudeArgs. */
+  bare?: boolean;
+}
+
+export function createClaudeAdapter(adapterOpts: ClaudeAdapterOptions = {}): AgentAdapter {
+  return {
+    async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
+      const args = buildClaudeArgs(opts, adapterOpts.bare === true);
+      const start = Date.now();
+      const stdout = await runClaudeProcess(args, opts);
+      return parseClaudeResult(stdout, start);
+    },
+  };
+}
+
+/** Default instance for callers with no config in hand (tests, ad-hoc use); `selectAgent` builds a config-aware one. */
+export const claudeAdapter: AgentAdapter = createClaudeAdapter();

@@ -1,23 +1,39 @@
 /** Step 3: ask the configured agent what a diff is *for*, in a structured, reusable shape. */
 
 import { z } from 'zod';
+import { diffTextSinceRef } from '../git/diff.js';
+import { truncateToBudget } from '../agent/promptText.js';
 import type { AgentAdapter, AgentUsage } from '../agent/types.js';
 import type { CapturedIntent } from '../types.js';
-import { noteSession } from '../ui/steps.js';
+import { note, noteSession } from '../ui/steps.js';
 
 const COMMIT_MESSAGE_MAX_LENGTH = 72;
 
 /**
- * Read-only tools the agent may use to inspect the change set itself (see
- * captureIntent below): `Read` for new/untracked files (`git diff` shows
- * nothing for those), `Bash(git diff:*)` for modified tracked files, and
- * `Grep`/`Glob` for broader repo context when judging risk or test
- * scenarios. Deliberately excludes Write/Edit and any git subcommand that
- * can mutate state (commit, checkout, reset, ...) — this step only reports
- * intent, it must not be able to change the worktree the later
- * apply/commit/checkout steps depend on.
+ * The only tool this step gets: reading files — for the new/untracked files a
+ * diff cannot show (see captureIntent, which embeds the diff itself). No
+ * Write/Edit (this step reports intent, it must not touch the worktree the
+ * later apply/commit/checkout steps depend on) and, deliberately, no Bash: a
+ * step that can run one command can run another, and pipeline-worker runs the
+ * one command this step actually needs (`git diff`) on its behalf. The claude
+ * adapter turns this list into `--tools Read` as well as `--allowedTools Read`,
+ * so the turn has no shell to reach for.
  */
-const READ_ONLY_TOOLS = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)'];
+const READ_ONLY_TOOLS = ['Read'];
+
+/**
+ * Cap on the embedded diff. A generated lockfile or a vendored bundle can run
+ * to megabytes, which would swamp the model's context (and, before the cap
+ * existed, was the reason this step listed file names instead of embedding a
+ * diff at all). Truncation is middle-out, marked, and the prompt tells the
+ * agent it may Read a file whose diff was cut.
+ */
+const MAX_INTENT_DIFF_CHARS = 20_000;
+
+/** Replaces the agent's default system prompt: this turn classifies a change set and returns JSON, nothing else. */
+const INTENT_SYSTEM =
+  'You summarize a git diff as structured JSON. You may only read files — you never modify the ' +
+  'repository and never run commands. Answer with the requested JSON object and nothing else.';
 
 const RISK_CRITERIA =
   'low: the change is isolated to independent components with a small blast radius. ' +
@@ -102,15 +118,19 @@ const IntentShape = z.object({
 });
 
 /**
- * Rather than embedding the (potentially huge — generated lockfiles, binary
- * assets, etc.) diff text in the prompt, this only lists which files
- * changed and lets the agent read each one's diff itself with its own
- * tools, scoped to `worktreePath` (the isolated worktree the change was
- * already applied into by orchestrate.ts's "Applying your changes" step).
- * That keeps the prompt itself small and constant-size regardless of how
- * large any individual file's diff is, and lets the agent skip files it
- * judges irrelevant to intent (lockfiles, generated assets) instead of
- * paying to read them.
+ * The prompt carries the change itself: pipeline-worker runs `git diff
+ * <baseRef>` in the worktree and embeds the patch, capped at
+ * MAX_INTENT_DIFF_CHARS. The agent therefore judges the *delta* — what the
+ * change did — rather than the post-change state of each file, which is what
+ * it would see if it could only Read them, and it needs no shell to get there
+ * (see READ_ONLY_TOOLS). Untracked/new files never appear in a diff, so `Read`
+ * stays available for those — and they are named in the prompt as files the
+ * agent must open (see filesMissingFromDiff).
+ *
+ * Reading the diff here is best-effort: a worktreePath that isn't a git repo,
+ * or a baseRef git can't resolve, degrades to a note plus the file list alone
+ * (the agent can still Read what it needs) rather than failing the run at a
+ * step whose whole job is to name things.
  *
  * `model` (config's `intentModel`, default "haiku" — see config/loader.ts)
  * lets a lighter model handle this step to keep its token cost down, since
@@ -132,13 +152,54 @@ export interface IntentCapture {
   usage?: AgentUsage;
 }
 
+/** The embedded patch, or '' when git can't produce one here (already noted). */
+async function readIntentDiff(worktreePath: string, baseRef: string): Promise<string> {
+  try {
+    const diffText = (await diffTextSinceRef(worktreePath, baseRef)).trim();
+    return truncateToBudget(diffText, MAX_INTENT_DIFF_CHARS);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    note(`could not read the diff for intent capture (${message}) — the agent will read the changed files instead`);
+    return '';
+  }
+}
+
+/**
+ * Which of the changed files the patch does not cover — untracked/new files,
+ * which git omits from a diff entirely. Named explicitly in the prompt because
+ * "new files do not appear in a diff, Read them if you need to" is not enough
+ * on its own: verified against the real CLI, an agent handed a patch plus that
+ * sentence summarized only the files it could see and left the new one out of
+ * its per-file breakdown.
+ */
+export function filesMissingFromDiff(files: string[], diffText: string): string[] {
+  return files.filter((file) => !diffText.includes(`b/${file}`) && !diffText.includes(`a/${file}`));
+}
+
+/** The diff block for the prompt, or the read-the-files instruction when there is no diff to show. */
+function describeChange(files: string[], diffText: string, baseRef: string): string {
+  if (diffText.length === 0) {
+    return `Read the ones you need (the change is already applied, on top of ${baseRef}) and determine the intent behind the change as a whole. `;
+  }
+  const missing = filesMissingFromDiff(files, diffText);
+  const readInstruction =
+    missing.length > 0
+      ? `\n\nThese changed files are new, so the patch above does not contain them — Read each one before answering: ${missing.join(', ')}.`
+      : '';
+  return (
+    `\n\nHere is that change as a patch (\`git diff ${baseRef}\`). Read any file whose diff below is marked truncated:\n` +
+    `--- begin diff ---\n${diffText}\n--- end diff ---${readInstruction}\n\n` +
+    'Determine the intent behind the change as a whole, covering every file listed above in your per-file breakdown. '
+  );
+}
+
 export async function captureIntent(agent: AgentAdapter, files: string[], worktreePath: string, model: string, baseRef = 'HEAD'): Promise<IntentCapture> {
+  const diffText = await readIntentDiff(worktreePath, baseRef);
   const prompt =
     'The following files changed in this git worktree (which is your current working directory):\n' +
     files.map((file) => `- ${file}`).join('\n') +
-    `\n\nUse your tools to inspect what changed: \`git diff ${baseRef} -- <file>\` (or \`git diff ${baseRef}\` for everything at ` +
-    "once) for a file that already existed, or Read it directly if it's a new file git diff won't show. " +
-    'Then determine the intent behind the change as a whole. ' +
+    describeChange(files, diffText, baseRef) +
+    'Skip files whose content is generated or vendored. ' +
     'Respond with a JSON object matching the given schema: why this change exists, a short summary of what changed, ' +
     `the kind of change (${CHANGE_TYPES.join('/')}), a short kebab-case branch slug describing the change ` +
     '(no prefix, path, or ticket id — those are added separately), a short single-line conventional-commit ' +
@@ -149,6 +210,7 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
   const result = await agent.invoke({
     prompt,
     cwd: worktreePath,
+    systemPrompt: INTENT_SYSTEM,
     jsonSchema: INTENT_SCHEMA,
     model,
     permissionMode: 'default',

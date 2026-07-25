@@ -12,11 +12,18 @@
 import type { DiffChunk } from './types.js';
 import type { ForgeName } from '../types.js';
 
+/**
+ * Passed as the turn's *system* prompt (see reviewDiff.ts), not repeated in
+ * every chunk's user prompt: with one turn per chunk, restating it each time
+ * spent context a small local model cannot spare, and the claude adapter can
+ * hand it to `--system-prompt` directly.
+ */
 export const REVIEW_SYSTEM =
   'You are an elite, pragmatic Staff Software Engineer and Security Auditor. Your task is to review the provided ' +
   'Git diff and generate high-utility, line-specific code review comments. Focus strictly on logical errors, ' +
   'security vulnerabilities, performance bottlenecks, and severe anti-patterns. Do not comment on style, ' +
-  'formatting, or missing documentation unless it directly causes a bug.';
+  'formatting, or missing documentation unless it directly causes a bug. You review the diff you are given and ' +
+  'do not read the full contents of the files it changes.';
 
 /**
  * GitHub renders a plain ```suggestion block as a one-click "commit
@@ -54,10 +61,13 @@ export const REVIEW_SCHEMA = {
  * in a left gutter (see chunkDiff.ts) and the agent is told to copy one of
  * those numbers verbatim — anything it invents anyway is dropped by
  * findings.ts before it reaches the forge.
+ *
+ * The reviewer's persona lives in REVIEW_SYSTEM, delivered as the turn's
+ * system prompt rather than prefixed here, so what follows is only this
+ * chunk's own instructions and data.
  */
 export function buildReviewPrompt(chunk: DiffChunk, fence: string): string {
   return (
-    `${REVIEW_SYSTEM}\n\n` +
     `Review the following Git diff for a code change.\n\n` +
     `File: ${chunk.path}\nLanguage: ${chunk.language}\n\n` +
     'CRITICAL INSTRUCTIONS:\n' +
@@ -67,7 +77,8 @@ export function buildReviewPrompt(chunk: DiffChunk, fence: string): string {
     '3. Explain the problem and its impact, then — when a concrete fix fits on the flagged line(s) — append a ' +
     `suggestion block:\n${fence}\n<corrected code>\n\`\`\`\n` +
     '4. Do not review generated or vendored content (lock files, build output, snapshots): return no findings for it.\n' +
-    '5. You may read the surrounding files with your tools when the chunk alone is not enough to be sure.\n\n' +
+    '5. Review the diff below and nothing else. Do not open the changed file to read its full contents — if the ' +
+    'diff alone is not enough to be sure a finding is real, drop that finding.\n\n' +
     '### Git Diff Data (gutter = line number in the new file):\n' +
     `${chunk.body}\n`
   );
