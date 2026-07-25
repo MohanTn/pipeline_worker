@@ -23,6 +23,9 @@
  *    -> `bash`) before being passed;
  *  - no `--permission-mode` flag -> pi in `-p` mode is non-interactive by
  *    default, so `opts.permissionMode` is ignored;
+ *  - no `--system-prompt` flag -> `opts.systemPrompt` is prepended to the
+ *    prompt text instead (see promptText.ts), so a turn is still scoped to
+ *    its one job;
  *  - the prompt is piped over stdin rather than passed as a CLI argument,
  *    since large prompts (e.g. full git diff) can exceed the OS's exec()
  *    argument size limit (E2BIG). Pi reads piped stdin and merges it into
@@ -39,6 +42,7 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { AGENT_INVOKE_TIMEOUT_MS, type AgentAdapter, type AgentInvokeOptions, type AgentInvokeResult } from './types.js';
 import { writePromptToStdin } from './stdinPrompt.js';
+import { composePrompt } from './promptText.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -86,12 +90,7 @@ export const piAdapter: AgentAdapter = {
     const sessionName = `pipeline-worker-${randomUUID()}`;
     args.push('--name', sessionName);
 
-    let prompt = opts.prompt;
-    if (opts.jsonSchema) {
-      prompt +=
-        '\n\nRespond with ONLY a single JSON object matching this JSON Schema — no prose, no code fences:\n' +
-        JSON.stringify(opts.jsonSchema);
-    }
+    const prompt = composePrompt(opts);
 
     const start = Date.now();
     const invocation = execFileAsync('pi', args, {

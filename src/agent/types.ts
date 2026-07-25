@@ -13,6 +13,14 @@ export const AGENT_INVOKE_TIMEOUT_MS = 900_000;
 export interface AgentInvokeOptions {
   /** The instruction given to the agent for this turn. */
   prompt: string;
+  /**
+   * Replaces the agent's default system prompt for this turn: one or two
+   * sentences stating the job and nothing else, so a turn carries no
+   * instructions it doesn't need (and, on a small local model, no context it
+   * can't afford). Adapters whose CLI has no such flag fold it into the
+   * prompt text instead (see promptText.ts).
+   */
+  systemPrompt?: string;
   /** Working directory the agent should operate in (the worktree). */
   cwd: string;
   /** Optional JSON schema the agent should conform its final answer to. */
@@ -23,8 +31,10 @@ export interface AgentInvokeOptions {
   permissionMode?: string;
   /**
    * Optional allowlist restricting which tools the agent may use this turn (e.g. `["Read", "Bash(git diff:*)"]`).
-   * For adapters that can't scope tool access per invocation (e.g. copilot, which always runs with full tool
-   * access), this is ignored — see that adapter's file comment for the implication.
+   * The claude adapter turns this into *both* `--tools` (which built-in tools exist at all for the turn) and
+   * `--allowedTools` (which of them run without a permission prompt), so a turn given `["Read"]` has no way to
+   * run a command even if its prompt asks for one. For adapters that can't scope tool access per invocation
+   * (e.g. copilot, which always runs with full tool access), this is ignored — see that adapter's file comment.
    */
   allowedTools?: string[];
   /** Optional model override (e.g. "haiku"), for adapters that support per-invocation model selection. */

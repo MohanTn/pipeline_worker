@@ -49,3 +49,9 @@ test('agentDescription reflects a configured intentModel override', () => {
 test('agentDescription is plain for copilot, which has no per-invocation model selection', () => {
   assert.equal(agentDescription(baseConfig({ agent: 'copilot' })), 'copilot');
 });
+
+test('agentDescription names the configured agent, not a hardcoded fallback — little-coder used to print as "copilot"', () => {
+  const line = agentDescription(baseConfig({ agent: 'little-coder', intentModel: 'llamacpp/qwen3-30b' }));
+  assert.match(line, /^little-coder/);
+  assert.match(line, /llamacpp\/qwen3-30b/);
+});

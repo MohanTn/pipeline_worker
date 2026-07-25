@@ -4,7 +4,7 @@
 // nothing); only the severity enum surfaces here, because it is configurable.
 import type { ReviewSeverity } from './review/types.js';
 
-export type AgentName = 'claude' | 'copilot' | 'pi';
+export type AgentName = 'claude' | 'copilot' | 'pi' | 'little-coder';
 export type ForgeName = 'gitlab' | 'github';
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
 
@@ -34,6 +34,33 @@ export interface PipelineWorkerConfig {
   pollIntervalSeconds: number;
   /** Model passed to the agent for the intent-capture step (see captureIntent.ts). Ignored by adapters with no per-invocation model selection (e.g. copilot). */
   intentModel: string;
+  /**
+   * Run every agent turn as lean as the CLI allows: for `claude`, `--bare`
+   * (no hooks, no plugins, no CLAUDE.md auto-discovery, no attribution) plus
+   * an explicit per-step `--system-prompt` and `--tools` gate, so each turn
+   * carries only what its job needs. On by default.
+   *
+   * Turn it off if your `claude` sign-in is a subscription (OAuth) rather
+   * than an API key: `--bare` reads credentials *only* from
+   * ANTHROPIC_API_KEY (or an apiKeyHelper via --settings) and never touches
+   * OAuth or the keychain, so every turn would fail to authenticate.
+   * Adapters with no equivalent flag (copilot, pi, little-coder) still get
+   * the per-step system prompt and tool allowlist.
+   */
+  bareAgentMode: boolean;
+  /** little-coder ("pi tuned for small local models") specifics — only read when agent is "little-coder". */
+  littleCoder: {
+    /** Binary name or absolute path to invoke. */
+    binary: string;
+    /**
+     * Hard cap on the characters of one prompt handed to the model, so a
+     * 5-25GB local model with a small context window is never overrun: a
+     * longer prompt is truncated middle-out with a visible marker. 0 disables
+     * the cap. Lower `reviewChunkChars` alongside it — that setting decides
+     * how much diff one review turn carries.
+     */
+    maxPromptChars: number;
+  };
   /** Feature branch naming template. Supports {type}, {ticket}, {name} placeholders; e.g. "{type}/{ticket}/{name}". */
   branchPattern: string;
   /** Once cleanup fires (see cleanupEarly for when), reset repoRoot to HEAD — the captured changes now live safely on the branch. */

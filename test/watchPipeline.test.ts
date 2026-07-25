@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pollForNextAction, hasCiConfig, runCiFixAttempt, tryResolveConflicts } from '../src/workflow/watchPipeline.js';
 import type { ForgeClient } from '../src/forge/types.js';
-import type { AgentAdapter } from '../src/agent/types.js';
+import type { AgentAdapter, AgentInvokeOptions } from '../src/agent/types.js';
 import type { PipelineWorkerConfig, Pipeline, RunState } from '../src/types.js';
 
 const execFileAsync = promisify(execFile);
@@ -444,9 +444,11 @@ test('tryResolveConflicts: real conflict resolved by the agent, verified locally
     rmSync(otherClone, { recursive: true, force: true });
 
     let calls = 0;
+    const invokeOptions: AgentInvokeOptions[] = [];
     const agent: AgentAdapter = {
       invoke: async (opts) => {
         calls += 1;
+        invokeOptions.push(opts);
         // Resolve the conflict markers and make the local check pass in the same turn.
         writeFileSync(join(opts.cwd, 'file.txt'), 'line1-resolved\n');
         writeFileSync(join(opts.cwd, 'FIXED'), 'x');
@@ -463,6 +465,10 @@ test('tryResolveConflicts: real conflict resolved by the agent, verified locally
     assert.equal(calls, 1);
     assert.equal(state.conflictAttempt, 1);
     assert.equal(readFileSync(join(worktreePath, 'file.txt'), 'utf-8'), 'line1-resolved\n');
+    // A conflict turn is a text edit: files in, files out, no shell. Staging
+    // and committing stay with finalizeMergeResolution.
+    assert.deepEqual(invokeOptions[0].allowedTools, ['Read', 'Write', 'Edit']);
+    assert.match(invokeOptions[0].systemPrompt ?? '', /only read and write files/);
     assert.equal(await commitCountOn(originDir, 'conflict/real'), 4); // init + feature edit + main edit + merge-resolution commit
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });

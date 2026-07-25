@@ -20,7 +20,7 @@ import { detectGithubRepo } from '../git/remote.js';
 import type { AgentName, ForgeName, MergeMethod, PipelineWorkerConfig } from '../types.js';
 import type { ReviewSeverity } from '../review/types.js';
 
-const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot', 'pi'];
+const AGENT_NAMES: readonly AgentName[] = ['claude', 'copilot', 'pi', 'little-coder'];
 const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
 const MERGE_METHODS: readonly MergeMethod[] = ['merge', 'squash', 'rebase'];
 const REVIEW_SEVERITIES: readonly ReviewSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR'];
@@ -50,6 +50,13 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   cleanupOnSuccess: true,
   cleanupEarly: false,
   intentModel: 'haiku',
+  bareAgentMode: true,
+  littleCoder: {
+    binary: 'little-coder',
+    // Comfortably inside a 8k-token context once the model's own system
+    // prompt and answer are accounted for; raise it for a bigger local model.
+    maxPromptChars: 12_000,
+  },
   runLintAndTest: true,
   updateChangelog: false,
   // Default-on: a run is meant to go all the way to a merged, locally-synced
@@ -102,6 +109,12 @@ function pickName<T extends string>(value: unknown, allowed: readonly T[], fallb
 function positiveNumber(value: unknown, fallback: number): number {
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : fallback;
+}
+
+/** Like positiveNumber, but 0 is accepted — used where 0 means "unlimited". */
+function nonNegativeNumber(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num >= 0 ? num : fallback;
 }
 
 const TRUE_VALUES = new Set(['true', '1', 'yes', 'y', 'on']);
@@ -188,6 +201,25 @@ function warnIfSquashRacesAutoMerge(autoMergeOnGreen: boolean, squashOnMerge: bo
   }
 }
 
+/**
+ * `--bare` makes claude read its Anthropic credentials *only* from
+ * ANTHROPIC_API_KEY (or an apiKeyHelper supplied via --settings): OAuth and the
+ * keychain are never consulted. Verified against the installed CLI — the same
+ * turn that succeeds without `--bare` comes back
+ * `"terminal_reason":"api_error"` with it when no key is exported. That is a
+ * silent-looking failure on every agent turn of a run, so it is called out at
+ * load time, before any work starts.
+ */
+function warnIfBareModeHasNoApiKey(agent: AgentName, bareAgentMode: boolean): void {
+  if (agent === 'claude' && bareAgentMode && !process.env.ANTHROPIC_API_KEY) {
+    console.error(
+      'Warning: bareAgentMode is on and ANTHROPIC_API_KEY is not set. `claude --bare` never reads OAuth or keychain ' +
+        'credentials, so agent turns will fail with an API error unless your claude settings supply an apiKeyHelper. ' +
+        `Export ANTHROPIC_API_KEY, or set "bareAgentMode": false in ${configFilePath()}.`,
+    );
+  }
+}
+
 /** Warns once when no toolchain was auto-detected and the settings file names no build/lint/test command — checks will otherwise silently be skipped. */
 // fallow-ignore-next-line complexity
 function warnIfToolchainUndetected(repoRoot: string, settings: Record<string, unknown>, detected: ReturnType<typeof detectChecks>): void {
@@ -223,6 +255,15 @@ function buildGitlabSection(repoRoot: string, gitlab: Record<string, unknown>, r
   };
 }
 
+function buildLittleCoderSection(littleCoder: Record<string, unknown>): PipelineWorkerConfig['littleCoder'] {
+  return {
+    binary: str(littleCoder.binary) || DEFAULT_CONFIG.littleCoder.binary,
+    // 0 is a meaningful value here ("no cap"), so it can't go through
+    // positiveNumber — only a negative or unparseable value falls back.
+    maxPromptChars: nonNegativeNumber(littleCoder.maxPromptChars, DEFAULT_CONFIG.littleCoder.maxPromptChars),
+  };
+}
+
 function buildGithubSection(repoRoot: string, github: Record<string, unknown>): PipelineWorkerConfig['github'] {
   return {
     repo: str(github.repo) || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
@@ -241,12 +282,15 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
   warnIfToolchainUndetected(repoRoot, settings, detected);
 
   const repoBase = str(gitlab.repoBase) || undefined;
+  const agent = pickName<AgentName>(settings.agent, AGENT_NAMES, DEFAULT_CONFIG.agent);
+  const bareAgentMode = boolean('bareAgentMode', settings.bareAgentMode, DEFAULT_CONFIG.bareAgentMode);
+  warnIfBareModeHasNoApiKey(agent, bareAgentMode);
   const autoMergeOnGreen = boolean('autoMergeOnGreen', settings.autoMergeOnGreen, DEFAULT_CONFIG.autoMergeOnGreen);
   const squashOnMerge = boolean('squashOnMerge', settings.squashOnMerge, DEFAULT_CONFIG.squashOnMerge);
   warnIfSquashRacesAutoMerge(autoMergeOnGreen, squashOnMerge);
 
   return {
-    agent: pickName<AgentName>(settings.agent, AGENT_NAMES, DEFAULT_CONFIG.agent),
+    agent,
     forge: pickName<ForgeName>(settings.forge, FORGE_NAMES, DEFAULT_CONFIG.forge),
     gitlab: buildGitlabSection(repoRoot, gitlab, repoBase),
     github: buildGithubSection(repoRoot, github),
@@ -259,6 +303,8 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     cleanupOnSuccess: boolean('cleanupOnSuccess', settings.cleanupOnSuccess, DEFAULT_CONFIG.cleanupOnSuccess),
     cleanupEarly: boolean('cleanupEarly', settings.cleanupEarly, DEFAULT_CONFIG.cleanupEarly),
     intentModel: str(settings.intentModel) || DEFAULT_CONFIG.intentModel,
+    bareAgentMode,
+    littleCoder: buildLittleCoderSection(section(settings, 'littleCoder')),
     runLintAndTest: boolean('runLintAndTest', settings.runLintAndTest, DEFAULT_CONFIG.runLintAndTest),
     updateChangelog: boolean('updateChangelog', settings.updateChangelog, DEFAULT_CONFIG.updateChangelog),
     autoMergeOnGreen,
