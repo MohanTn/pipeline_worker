@@ -46,10 +46,14 @@ The first run writes `~/.config/pipeline-worker/config.json` with every setting 
 }
 ```
 
+Or let the setup guide fill that file in for you — run `pipeline-worker` in any repo and pick **Setup guide**:
+
 ```sh
 cd your-repo
+pipeline-worker          # interactive TUI: run, sessions, settings, setup guide
+
 # hack, hack, hack — leave the changes uncommitted, then:
-pipeline-worker
+pipeline-worker run      # straight to the workflow, no menus
 ```
 
 ## Configuration
@@ -128,7 +132,9 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 
 | Command | What it does |
 | --- | --- |
-| `pipeline-worker [run] [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
+| `pipeline-worker` | On a terminal, opens the TUI; with any argument or when redirected, behaves as `run` |
+| `pipeline-worker tui` | Full-screen dashboard: runs, sessions, settings editor, setup guide |
+| `pipeline-worker run [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
 | `pipeline-worker serve` | Start the forge MCP server over stdio (used by the agent during fix runs) |
 | `pipeline-worker resume --branch <name> [--target <branch>]` | Resume a crashed run, or adopt a branch it has no record of |
 | `pipeline-worker review --branch <name>` | Review that branch's open MR/PR and post line-anchored comments |
@@ -137,6 +143,32 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 | `pipeline-worker update` | Install the latest release from npm |
 
 `run` self-updates from npm first (best-effort; takes effect next run). Every agent turn reports its duration and an `agent session: <id>` — replay it with `claude --resume <id>`, `pi --session <id>`, or `copilot --resume <id>`.
+
+### Interactive TUI
+
+`pipeline-worker` with no arguments on a terminal (or `pipeline-worker tui` anywhere) opens a full-screen dashboard:
+
+```
+┌ pipeline-worker · settings ──────────────────────────────────────────────────┐
+│ ── Agent & forge ─────────────────────────────────────────────────────────── │
+│ ❯  agent                   claude                                       file │
+│    forge                   gitlab                                       file │
+│    bareAgentMode           on                                        default │
+│ ── GitHub ────────────────────────────────────────────────────────────────── │
+│    repo                    you/your-repo                                auto │
+│                                                                              │
+│ ── agent ─────────────────────────────────────────────────────────────────── │
+│ Which coding-agent CLI runs the intent capture, CI fixes, conflict           │
+│ resolution, and reviews. Choices: claude / copilot / pi / little-coder.      │
+└ ↑↓ move · ⏎ edit/toggle · d default · ? help · q back ───────────────────────┘
+```
+
+- **Run workflow** — start a run, optionally with a ticket or target branch.
+- **Sessions** — browse this repo's runs and drill into one's timeline; `r` resumes it, `v` reviews its MR/PR.
+- **Settings** — every key with the value in force, where it came from (`file` you set it, `auto` detected from the repo, `default` built in), and `?` for what it does. Edits save immediately; `d` clears a key back to auto-detection.
+- **Setup guide** — the questions that decide whether pipeline-worker can run at all (forge, credentials, agent), each explaining why it is being asked. Nothing is written until you confirm.
+
+Starting a run, a resume, or a review hands the terminal to the usual live step dashboard and returns to the TUI afterwards, so run output lands in your scrollback exactly as it does from the plain CLI. Everything remains scriptable: any argument, or a redirected stdin/stdout, skips the TUI entirely.
 
 ### Following up on a PR/MR under review
 
