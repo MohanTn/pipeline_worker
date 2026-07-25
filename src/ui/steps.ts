@@ -222,8 +222,14 @@ export function noteRisk(risk: RiskLevel, reason: string): void {
  * figures on the dashboard.
  */
 export function noteSession(result: AgentInvokeResult, worktreePath: string): void {
-  if (result.usage?.totalTokens !== undefined && lastStepId !== undefined) {
-    ensureActive().tree.addTokens(lastStepId, result.usage.totalTokens);
+  const usage = result.usage;
+  if (usage?.totalTokens !== undefined && lastStepId !== undefined) {
+    ensureActive().tree.addTokens(lastStepId, usage.totalTokens, {
+      inputTokens: usage.inputTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      outputTokens: usage.outputTokens,
+    });
   }
   if (!result.sessionId) return;
   const duration = result.durationMs !== undefined ? ` — ${(result.durationMs / 1000).toFixed(1)}s` : '';

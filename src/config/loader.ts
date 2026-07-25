@@ -71,9 +71,12 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   reviewModel: '',
   reviewMinSeverity: 'MAJOR',
   reviewMaxComments: 10,
-  // ~24k chars is a comfortably-reviewable slice for any current model while
-  // still keeping a typical MR/PR down to one or two agent turns.
-  reviewChunkChars: 24_000,
+  // ~200k chars (~50k tokens) of diff in one turn: enough that a normal MR/PR
+  // is reviewed in a single agent session rather than one session per file,
+  // each of which would re-pay the agent CLI's own system prompt and tool
+  // definitions. Only a genuinely huge diff splits across turns.
+  reviewChunkChars: 200_000,
+  reviewFilesPerTurn: 0,
   // Default-on: the whole point of the run is that the change now lives on
   // that branch, so leaving the caller standing on it is what makes the next
   // edit a follow-up commit instead of a second, unrelated MR/PR.
@@ -316,6 +319,8 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     reviewMinSeverity: pickSeverity(settings.reviewMinSeverity, DEFAULT_CONFIG.reviewMinSeverity),
     reviewMaxComments: positiveNumber(settings.reviewMaxComments, DEFAULT_CONFIG.reviewMaxComments),
     reviewChunkChars: positiveNumber(settings.reviewChunkChars, DEFAULT_CONFIG.reviewChunkChars),
+    // 0 is meaningful here ("decide from the agent"), so it cannot go through positiveNumber.
+    reviewFilesPerTurn: nonNegativeNumber(settings.reviewFilesPerTurn, DEFAULT_CONFIG.reviewFilesPerTurn),
     switchToFeatureBranch: boolean('switchToFeatureBranch', settings.switchToFeatureBranch, DEFAULT_CONFIG.switchToFeatureBranch),
     plainOutput: boolean('plainOutput', settings.plainOutput, DEFAULT_CONFIG.plainOutput),
   };

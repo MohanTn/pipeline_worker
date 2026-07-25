@@ -25,7 +25,7 @@
 
 import { styleText } from 'node:util';
 import { truncateToWidth } from './steps.js';
-import { formatTokens } from './format.js';
+import { formatTokens, formatUsageInline, usageFooter } from './format.js';
 import { formatElapsed, formatAttempt, type Renderer } from './renderer.js';
 import type { RunStatus, RunTree, StepNode, TreeEvent, TreeRow } from './runTree.js';
 
@@ -223,12 +223,14 @@ export class TreeRenderer implements Renderer {
     }
   }
 
-  /** Right-hand figures: 'attempt 2/5 · 4.4k tok · 3.2s' — whichever are known. */
+  /** Right-hand figures: 'attempt 2/5 · in 98.5k (92k cached) · out 3.2k · 3.2s' — whichever are known, with the plain total standing in when no split was reported. */
   private figures(node: StepNode): string {
     const parts: string[] = [];
     const attempt = formatAttempt(node);
     if (attempt) parts.push(attempt);
-    if (node.tokens !== undefined) parts.push(formatTokens(node.tokens));
+    const split = node.usage ? formatUsageInline(node.usage) : '';
+    if (split) parts.push(split);
+    else if (node.tokens !== undefined) parts.push(formatTokens(node.tokens));
     if (node.durationMs !== undefined) parts.push(formatElapsed(node.durationMs));
     else if (node.status === 'running' && node.startedAt !== undefined) parts.push(formatElapsed(Date.now() - node.startedAt));
     return parts.join(' · ');
@@ -255,10 +257,12 @@ export class TreeRenderer implements Renderer {
     // zones (glyph, rest) — escape codes are zero-width, so wrapping math
     // must run on the plain string.
     const body = `${node.label.padEnd(labelWidth)}  ${node.detail}`;
-    const room = width - prefix.length - 2; // glyph + space
-    const figuresPart = figures ? `  ${figures}` : '';
-    const bodyRoom = Math.max(0, room - figuresPart.length);
-    const text = `${truncateToWidth(body, bodyRoom)}${figuresPart}`;
+    const room = Math.max(0, width - prefix.length - 2); // glyph + space
+    // Figures are truncated to the row's own room first, so a narrow terminal
+    // can't overflow via the right-hand column; the body gets what's left.
+    const figuresPart = figures && room > 0 ? truncateToWidth(`  ${figures}`, room) : '';
+    const bodyRoom = room - figuresPart.length;
+    const text = `${bodyRoom > 0 ? truncateToWidth(body, bodyRoom) : ''}${figuresPart}`;
     const dimRow = node.status === 'skipped' || node.status === 'pending';
     return `${prefix}${styleText(color, glyph)} ${dimRow ? styleText('dim', text) : text}`;
   }
@@ -289,6 +293,11 @@ export class TreeRenderer implements Renderer {
     this.eraseRegion();
     this.out.write(`${lines.join('\n')}\n`);
     if (detail) this.out.write(styleText('dim', `  ${truncateToWidth(detail, this.columns())}`) + '\n');
+    // The per-turn token table lands in scrollback beneath the settled tree,
+    // where it has the room the width-capped step rows don't.
+    const footer = usageFooter(tree.usageRows(), tree.totalTokens());
+    if (footer.length > 0) this.out.write('\n');
+    for (const line of footer) this.out.write(styleText('dim', truncateToWidth(line, this.columns())) + '\n');
     this.stopped = true;
     this.renderedLines = 0;
     this.out.write(SHOW_CURSOR);

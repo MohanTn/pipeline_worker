@@ -174,3 +174,45 @@ export function chunkDiff(patch: string, maxChars: number): DiffChunk[] {
 
   return chunks.filter((chunk) => chunk.commentableLines.length > 0);
 }
+
+/**
+ * Packs per-file chunks into turns (step 2): one agent turn per group, so a
+ * whole MR can be reviewed in a single session instead of one session per file.
+ *
+ * chunkDiff cuts on file boundaries and never combines files, which made the
+ * char budget a *ceiling* for splitting a big file rather than a *target* for
+ * filling a turn — a 40-file MR of small edits cost 40 sessions, each re-paying
+ * the agent CLI's own system prompt and tool definitions. This fills a turn up
+ * to `maxChars` (and `maxFiles`, 0 for no limit), which for a cloud model means
+ * the whole diff arrives in one session and for a small local model means a
+ * few files at a time.
+ *
+ * A single chunk that already exceeds maxChars still gets its own turn rather
+ * than being dropped: chunkDiff has already split it as far as it can, and a
+ * turn slightly over budget beats no review of that code at all.
+ */
+export function groupChunks(chunks: DiffChunk[], maxChars: number, maxFiles: number): DiffChunk[][] {
+  const fileLimit = maxFiles > 0 ? maxFiles : Number.POSITIVE_INFINITY;
+  const turns: DiffChunk[][] = [];
+  let current: DiffChunk[] = [];
+  let size = 0;
+  let files = new Set<string>();
+
+  for (const chunk of chunks) {
+    const cost = chunk.body.length;
+    const addsFile = !files.has(chunk.path);
+    const full = size + cost > maxChars || (addsFile && files.size >= fileLimit);
+    if (current.length > 0 && full) {
+      turns.push(current);
+      current = [];
+      size = 0;
+      files = new Set<string>();
+    }
+    current.push(chunk);
+    size += cost;
+    files.add(chunk.path);
+  }
+  if (current.length > 0) turns.push(current);
+
+  return turns;
+}

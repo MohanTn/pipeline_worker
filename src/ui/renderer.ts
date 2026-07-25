@@ -15,7 +15,7 @@
  */
 
 import { styleText } from 'node:util';
-import { formatTokens, boxHeader, boxBottom, boxTop } from './format.js';
+import { formatTokens, formatUsageInline, usageFooter } from './format.js';
 import type { RunStatus, RunTree, StepNode, TreeEvent } from './runTree.js';
 
 export interface Renderer {
@@ -30,11 +30,17 @@ export function formatElapsed(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-/** The parenthesized tail of a finished step: '(3.2s · 1.9k tok)', or '' when neither figure is known. */
+/**
+ * The parenthesized tail of a finished step: '(3.2s · in 98.5k (92k cached) ·
+ * out 3.2k)', falling back to the plain total ('3.2s · 1.9k tok') when the
+ * adapter reported no breakdown, and '' when no figure at all is known.
+ */
 export function formatStepFigures(node: StepNode): string {
   const parts: string[] = [];
   if (node.durationMs !== undefined) parts.push(formatElapsed(node.durationMs));
-  if (node.tokens !== undefined) parts.push(formatTokens(node.tokens));
+  const split = node.usage ? formatUsageInline(node.usage) : '';
+  if (split) parts.push(split);
+  else if (node.tokens !== undefined) parts.push(formatTokens(node.tokens));
   return parts.length > 0 ? ` (${parts.join(' · ')})` : '';
 }
 
@@ -99,5 +105,8 @@ export class LineRenderer implements Renderer {
     this.out('');
     this.out(styleText('bold', `${FINAL_LINE[status]}${tokensPart}`));
     if (detail) this.out(styleText('dim', `  ${detail}`));
+    const footer = usageFooter(tree.usageRows(), total);
+    if (footer.length > 0) this.out('');
+    for (const line of footer) this.out(styleText('dim', line));
   }
 }

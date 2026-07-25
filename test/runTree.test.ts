@@ -82,6 +82,45 @@ test('addTokens ignores non-positive and non-finite amounts — absence means un
   assert.equal(tree.totalTokens(), 0);
 });
 
+test('addTokens sums the input/cache/output split field by field across a step\'s turns', () => {
+  const tree = makeTree();
+  tree.addTokens('capture', 1900, { inputTokens: 1500, cacheReadTokens: 1100, cacheWriteTokens: 300, outputTokens: 400 });
+  tree.addTokens('capture', 700, { inputTokens: 500, cacheReadTokens: 400, outputTokens: 200 });
+
+  assert.equal(tree.get('capture')?.tokens, 2600);
+  assert.deepEqual(tree.get('capture')?.usage, { inputTokens: 2000, cacheReadTokens: 1500, cacheWriteTokens: 300, outputTokens: 600 });
+});
+
+test('addTokens leaves usage absent when the adapter reported only a total', () => {
+  const tree = makeTree();
+  tree.addTokens('capture', 1900);
+  assert.equal(tree.get('capture')?.tokens, 1900);
+  assert.equal(tree.get('capture')?.usage, undefined);
+});
+
+test('addTokens keeps an unreported split field unknown rather than folding it in as zero', () => {
+  const tree = makeTree();
+  tree.addTokens('capture', 250, { outputTokens: 250 });
+  assert.deepEqual(tree.get('capture')?.usage, { inputTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined, outputTokens: 250 });
+
+  // A later turn that reports nothing at all must not blank out what is known.
+  tree.addTokens('capture', 100, {});
+  assert.equal(tree.get('capture')?.usage?.outputTokens, 250);
+});
+
+test('usageRows lists only the steps that reported a split, in display order', () => {
+  const tree = makeTree();
+  tree.add('ci-watch', { id: 'ci-watch/fix-1', label: 'fix 1', detail: '' });
+  tree.addTokens('ci-watch/fix-1', 700, { inputTokens: 500, outputTokens: 200 });
+  tree.addTokens('capture', 1900, { inputTokens: 1500, outputTokens: 400 });
+  tree.addTokens('merge', 300);
+
+  assert.deepEqual(
+    tree.usageRows().map((row) => row.label),
+    ['capture', 'fix 1'],
+  );
+});
+
 test('flatten returns depth-first rows with last-sibling flags for branch glyphs', () => {
   const tree = makeTree();
   tree.add('ci-watch', { id: 'ci-watch/wait-1', label: 'wait', detail: '' });

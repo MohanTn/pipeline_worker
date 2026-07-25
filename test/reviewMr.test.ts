@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { maybeReviewMergeRequest, postFindings, scopeChunks } from '../src/workflow/reviewMr.js';
+import { maybeReviewMergeRequest, postFindings, reviewTurnLimits, scopeChunks } from '../src/workflow/reviewMr.js';
 import type { AgentAdapter, AgentInvokeOptions } from '../src/agent/types.js';
 import type { ForgeClient, InlineComment } from '../src/forge/types.js';
 import type { DiffChunk } from '../src/review/types.js';
@@ -38,7 +38,9 @@ function reviewConfig(overrides: Partial<PipelineWorkerConfig> = {}): PipelineWo
     reviewModel: '',
     reviewMinSeverity: 'MAJOR',
     reviewMaxComments: 10,
-    reviewChunkChars: 24_000,
+    reviewChunkChars: 200_000,
+    reviewFilesPerTurn: 0,
+    littleCoder: { binary: 'little-coder', maxPromptChars: 12_000 },
     ...overrides,
   };
 }
@@ -61,6 +63,13 @@ async function makeReviewableBranch(): Promise<{ worktreePath: string; originDir
   await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
   await execFileAsync('git', ['commit', '-q', '-m', 'feat: add app'], { cwd: worktreePath });
   return { worktreePath, originDir };
+}
+
+/** Adds `count` files on the feature branch, so grouping has something to group. */
+async function addFiles(worktreePath: string, count: number): Promise<void> {
+  for (let i = 0; i < count; i++) writeFileSync(join(worktreePath, `mod${i}.ts`), `export const v${i} = ${i};\n`);
+  await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+  await execFileAsync('git', ['commit', '-q', '-m', 'feat: more files'], { cwd: worktreePath });
 }
 
 function agentReturning(text: string, calls: AgentInvokeOptions[] = []): AgentAdapter {
@@ -154,12 +163,79 @@ test('passes the review model through only when one is configured, with reading 
     // every chunk's prompt — and the chunk is told not to read the file back.
     assert.match(calls[0].systemPrompt ?? '', /Staff Software Engineer/);
     assert.doesNotMatch(calls[0].prompt, /Staff Software Engineer/);
-    assert.match(calls[0].prompt, /Do not open the changed file/);
+    assert.match(calls[0].prompt, /Do not open the changed files/);
     assert.match(calls[0].prompt, /File: app\.ts/);
 
     calls.length = 0;
     await maybeReviewMergeRequest(forgeStub(), reviewConfig({ reviewModel: 'sonnet' }), agentReturning('[]', calls), worktreePath, 'main', 7);
     assert.equal(calls[0].model, 'sonnet');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a cloud agent reviews every file of a multi-file diff in ONE session, each as its own labeled section', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const calls: AgentInvokeOptions[] = [];
+  try {
+    await addFiles(worktreePath, 5);
+    await maybeReviewMergeRequest(forgeStub(), reviewConfig(), agentReturning('[]', calls), worktreePath, 'main', 7);
+
+    assert.equal(calls.length, 1, `expected one agent turn for the whole diff, got ${calls.length}`);
+    for (const path of ['app.ts', 'mod0.ts', 'mod4.ts']) {
+      assert.match(calls[0].prompt, new RegExp(`--- File: ${path.replace('.', '\\.')}`), `${path} missing from the single turn`);
+    }
+    assert.match(calls[0].prompt, /Files in this diff, all of which you must review:/);
+    assert.match(calls[0].prompt, /"file" to the path in the "--- File:" header/);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('little-coder gets the same diff as several small turns instead', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const calls: AgentInvokeOptions[] = [];
+  try {
+    await addFiles(worktreePath, 5);
+    const config = reviewConfig({ agent: 'little-coder' });
+    await maybeReviewMergeRequest(forgeStub(), config, agentReturning('[]', calls), worktreePath, 'main', 7);
+
+    // 6 files at 3 per turn.
+    assert.equal(calls.length, 2, `expected the diff sliced into 2 turns, got ${calls.length}`);
+    for (const call of calls) assert.ok(call.prompt.length <= reviewTurnLimits(config).maxChars + 2_000, 'a local turn must stay near its prompt cap');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a finding is anchored to the right file when one turn carried several', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const comments: Array<{ mrIid: number; comment: InlineComment }> = [];
+  try {
+    await addFiles(worktreePath, 2);
+    const forge = forgeStub();
+    forge.createInlineComment = async (mrIid, comment) => {
+      comments.push({ mrIid, comment });
+      return { id: comments.length };
+    };
+    const payload = JSON.stringify({
+      findings: [
+        { file: 'mod1.ts', line: 1, severity: 'CRITICAL', comment: '### Bad\n\nno' },
+        { file: 'app.ts', line: 2, severity: 'MAJOR', comment: '### Also bad\n\nno' },
+        // A line that exists in mod1.ts but not in app.ts must not be salvaged onto the wrong file.
+        { file: 'app.ts', line: 99, severity: 'CRITICAL', comment: '### Hallucinated\n\nno' },
+      ],
+    });
+    const posted = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(payload), worktreePath, 'main', 7);
+
+    assert.equal(posted, 2);
+    assert.deepEqual(
+      comments.map((entry) => `${entry.comment.path}:${entry.comment.line}`).sort(),
+      ['app.ts:2', 'mod1.ts:1'],
+    );
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -205,6 +281,40 @@ test('an unreachable target branch (no such ref) is reduced to a note, not a fai
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
   }
+});
+
+test('reviewTurnLimits gives a cloud agent the whole diff in one turn', () => {
+  const limits = reviewTurnLimits(reviewConfig());
+  assert.equal(limits.maxFiles, 0, '0 = no file cap, so the whole diff groups into one turn');
+  assert.equal(limits.maxChars, 200_000);
+});
+
+test('reviewTurnLimits ignores the littleCoder section entirely for a cloud agent', () => {
+  const limits = reviewTurnLimits(reviewConfig({ littleCoder: { binary: 'little-coder', maxPromptChars: 500 } }));
+  assert.equal(limits.maxChars, 200_000);
+  assert.equal(limits.maxFiles, 0);
+});
+
+test('reviewTurnLimits slices for little-coder, clamped under its prompt cap so the adapter never trims mid-diff', () => {
+  const limits = reviewTurnLimits(reviewConfig({ agent: 'little-coder' }));
+  assert.equal(limits.maxFiles, 3);
+  assert.equal(limits.maxChars, 12_000 - 1_500, 'the prompt overhead is held back from the diff budget');
+});
+
+test('reviewTurnLimits keeps a local turn reviewable even when maxPromptChars is tiny', () => {
+  const limits = reviewTurnLimits(reviewConfig({ agent: 'little-coder', littleCoder: { binary: 'little-coder', maxPromptChars: 1_000 } }));
+  assert.equal(limits.maxChars, 2_000);
+});
+
+test('reviewTurnLimits lets an uncapped little-coder fall back to the configured char budget', () => {
+  const limits = reviewTurnLimits(reviewConfig({ agent: 'little-coder', reviewChunkChars: 9_000, littleCoder: { binary: 'little-coder', maxPromptChars: 0 } }));
+  assert.equal(limits.maxChars, 9_000);
+  assert.equal(limits.maxFiles, 3);
+});
+
+test('an explicit reviewFilesPerTurn wins for both agents', () => {
+  assert.equal(reviewTurnLimits(reviewConfig({ reviewFilesPerTurn: 5 })).maxFiles, 5);
+  assert.equal(reviewTurnLimits(reviewConfig({ agent: 'little-coder', reviewFilesPerTurn: 1 })).maxFiles, 1);
 });
 
 test('scopeChunks narrows a follow-up run to the files that run touched', () => {

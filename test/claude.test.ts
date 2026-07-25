@@ -295,6 +295,26 @@ test('claudeAdapter extracts token usage from the CLI envelope, folding cache to
   assert.equal(result.usage?.numTurns, 3);
 });
 
+test('claudeAdapter also keeps the cache shares of inputTokens as their own fields', { skip: process.platform === 'win32' }, async () => {
+  const result = await invokeWithEnvelope(
+    JSON.stringify({
+      result: 'ok',
+      usage: { input_tokens: 100, output_tokens: 400, cache_creation_input_tokens: 300, cache_read_input_tokens: 1100 },
+    }),
+  );
+  assert.equal(result.usage?.cacheReadTokens, 1100);
+  assert.equal(result.usage?.cacheWriteTokens, 300);
+  // The parts are a breakdown of inputTokens, never an addition to it.
+  assert.equal(result.usage?.inputTokens, 1500);
+});
+
+test('claudeAdapter leaves the cache fields undefined when the envelope reports no caching', { skip: process.platform === 'win32' }, async () => {
+  const result = await invokeWithEnvelope(JSON.stringify({ result: 'ok', usage: { input_tokens: 100, output_tokens: 400 } }));
+  assert.equal(result.usage?.cacheReadTokens, undefined);
+  assert.equal(result.usage?.cacheWriteTokens, undefined);
+  assert.equal(result.usage?.inputTokens, 100);
+});
+
 test('claudeAdapter leaves usage undefined when the envelope has none', { skip: process.platform === 'win32' }, async () => {
   const result = await invokeWithEnvelope(JSON.stringify({ result: 'ok', session_id: 's-1', duration_ms: 5 }));
   assert.equal(result.text, 'ok');

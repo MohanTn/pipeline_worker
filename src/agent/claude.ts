@@ -197,7 +197,10 @@ function asCount(value: unknown): number | undefined {
 /**
  * Extracts best-effort token telemetry from the CLI's envelope. Cache
  * creation/read tokens are folded into inputTokens — they are prompt-side
- * spend either way, and one figure is what the per-step display needs. Any
+ * spend either way — and also kept as their own fields, so the UI can show
+ * where a turn's prompt tokens actually went (ui/format.ts's
+ * formatUsageInline/usageFooter) instead of only a total that counts a reused
+ * prompt at full weight on every internal turn. Any
  * malformed or missing field degrades to undefined, never a throw: usage is
  * decoration, and a CLI version that reshapes this part of the envelope must
  * not break the run.
@@ -213,7 +216,7 @@ function parseUsage(parsed: ClaudeEnvelope): AgentUsage | undefined {
   const costUsd = asCount(parsed.total_cost_usd);
   const numTurns = asCount(parsed.num_turns);
   if (totalTokens === undefined && costUsd === undefined && numTurns === undefined) return undefined;
-  return { inputTokens, outputTokens, totalTokens, costUsd, numTurns };
+  return { inputTokens, cacheReadTokens: cacheRead, cacheWriteTokens: cacheCreation, outputTokens, totalTokens, costUsd, numTurns };
 }
 
 function parseClaudeResult(stdout: string, start: number): AgentInvokeResult {

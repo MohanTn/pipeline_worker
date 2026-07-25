@@ -126,6 +126,26 @@ test('no emitted line exceeds the terminal width, even with a long detail string
   );
 });
 
+test('a very narrow terminal truncates the right-hand figures instead of overflowing', () => {
+  withRig(
+    ({ out, tree }) => {
+      tree.start('capture', { detail: 'staged + unstaged diff' });
+      tree.update('capture', { attempt: 2, maxAttempts: 5 });
+      tree.addTokens('capture', 4400);
+      tree.finish('capture', 'done');
+      for (const write of out.writes) {
+        for (const line of write.split('\n')) {
+          // eslint-disable-next-line no-control-regex
+          const visible = line.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+          assert.ok(visible.length <= 20, `line exceeded width 20: "${visible}" (${visible.length})`);
+        }
+      }
+    },
+    SKELETON,
+    20,
+  );
+});
+
 test('an undefined columns (piped stdout with no known width) falls back to assuming 80', () => {
   const out = new FakeStream();
   out.columns = undefined;
@@ -239,6 +259,34 @@ test('the header token total updates as soon as a step gains tokens', () => {
     tree.addTokens('capture', 1900);
     assert.match(out.text(), /1\.9k tok/);
   });
+});
+
+test('a step row shows its input/cache/output split while the run total stays in the header', () => {
+  withRig(({ out, tree }) => {
+    tree.addTokens('capture', 101_700, { inputTokens: 98_500, cacheReadTokens: 92_000, cacheWriteTokens: 4000, outputTokens: 3200 });
+    const text = out.text();
+    assert.match(text, /in 98\.5k \(92k cached\) · out 3\.2k/);
+    assert.match(text, /running · 101\.7k tok/);
+  });
+});
+
+test('stop writes the per-turn token table into scrollback beneath the settled tree', () => {
+  const rig = makeRig();
+  rig.tree.addTokens('capture', 101_700, { inputTokens: 98_500, cacheReadTokens: 92_000, cacheWriteTokens: 4000, outputTokens: 3200 });
+  rig.out.writes = [];
+  rig.renderer.stop('done', 'MR #12 merged', rig.tree);
+  const text = rig.out.text();
+  assert.match(text, /token usage/);
+  assert.match(text, /capture {2}in 2\.5k · cache-read 92k · cache-write 4k · out 3\.2k/);
+  assert.match(text, /total {4}101\.7k tok/);
+});
+
+test('stop writes no token table when no step reported a split', () => {
+  const rig = makeRig();
+  rig.tree.addTokens('capture', 4400);
+  rig.out.writes = [];
+  rig.renderer.stop('done', undefined, rig.tree);
+  assert.ok(!rig.out.text().includes('token usage'));
 });
 
 function makeRows(specs: Array<{ id: string; depth: number; status: 'done' | 'running' | 'pending' }>): TreeRow[] {

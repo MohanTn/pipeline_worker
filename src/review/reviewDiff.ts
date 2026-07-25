@@ -1,8 +1,11 @@
 /**
- * One agent turn per chunk, sequentially: a large MR/PR is reviewed piece by
- * piece so no single turn ever exceeds the model's context, and a chunk whose
- * answer is unusable costs only that chunk (parseFindings returns [] and the
- * loop continues) instead of the whole review.
+ * One agent turn per *group* of chunks, sequentially (see chunkDiff.ts's
+ * groupChunks for how a diff becomes groups): a cloud model gets the whole
+ * MR/PR in one turn, while a diff too large for one context — or a small local
+ * model — is reviewed piece by piece. A turn whose answer is unusable costs
+ * only that turn's files (parseFindings returns [] and the loop continues)
+ * instead of the whole review, which is the reason the loop survives at all
+ * once grouping made a single turn the common case.
  *
  * The turn is read-only by construction — the same tool stance as
  * captureIntent.ts — and works from the diff in its prompt rather than from
@@ -47,6 +50,8 @@ function addUsage(total: AgentUsage | undefined, next: AgentUsage | undefined): 
   const sum = (a?: number, b?: number) => (a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0));
   return {
     inputTokens: sum(total.inputTokens, next.inputTokens),
+    cacheReadTokens: sum(total.cacheReadTokens, next.cacheReadTokens),
+    cacheWriteTokens: sum(total.cacheWriteTokens, next.cacheWriteTokens),
     outputTokens: sum(total.outputTokens, next.outputTokens),
     totalTokens: sum(total.totalTokens, next.totalTokens),
     costUsd: sum(total.costUsd, next.costUsd),
@@ -54,14 +59,15 @@ function addUsage(total: AgentUsage | undefined, next: AgentUsage | undefined): 
   };
 }
 
-export async function reviewDiff(agent: AgentAdapter, chunks: DiffChunk[], worktreePath: string, opts: ReviewOptions): Promise<ReviewResult> {
+/** `turns` is the grouped diff: one entry per agent turn, each carrying one or more of chunkDiff's per-file chunks. */
+export async function reviewDiff(agent: AgentAdapter, turns: DiffChunk[][], worktreePath: string, opts: ReviewOptions): Promise<ReviewResult> {
   const fence = suggestionFence(opts.forge);
   const collected: ReviewFinding[] = [];
   let usage: AgentUsage | undefined;
 
-  for (const chunk of chunks) {
+  for (const turn of turns) {
     const result = await agent.invoke({
-      prompt: buildReviewPrompt(chunk, fence),
+      prompt: buildReviewPrompt(turn, fence),
       systemPrompt: REVIEW_SYSTEM,
       cwd: worktreePath,
       jsonSchema: REVIEW_SCHEMA,
@@ -74,5 +80,8 @@ export async function reviewDiff(agent: AgentAdapter, chunks: DiffChunk[], workt
     collected.push(...parseFindings(result.text));
   }
 
-  return { findings: gatekeep(collected, chunks, opts.minSeverity, opts.maxComments), usage };
+  // gatekeep needs every commentable line in the whole diff, not one turn's —
+  // it is the authority on where a comment may land, regardless of which turn
+  // produced the finding.
+  return { findings: gatekeep(collected, turns.flat(), opts.minSeverity, opts.maxComments), usage };
 }
