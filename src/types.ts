@@ -15,10 +15,16 @@ export interface PipelineWorkerConfig {
     host: string;
     projectId: number | string;
     repoBase?: string; // optional local directory that mirrors the GitLab host root, for auto-detecting projectId
+    /** API token passed to `glab` as GITLAB_TOKEN. Never logged. */
+    token: string;
   };
   github: {
     /** "owner/name" slug of the repository. */
     repo: string;
+    /** API token sent as the Bearer credential. Never logged. */
+    token: string;
+    /** REST API base URL; override for GitHub Enterprise. */
+    apiUrl: string;
   };
   /** Check commands; defaults are auto-detected per toolchain, '' skips the stage. */
   build: string;
@@ -70,6 +76,16 @@ export interface PipelineWorkerConfig {
   reviewMaxComments: number;
   /** Char budget per diff chunk sent to the agent (one agent turn per chunk). */
   reviewChunkChars: number;
+  /**
+   * When the run settles green, check the feature branch out in your own repo
+   * instead of leaving you on the target branch — so the next round of edits
+   * (and the next `pipeline-worker run`) lands on the same MR/PR as a
+   * follow-up commit rather than needing a fresh branch. Best-effort: skipped
+   * with a note when the working tree still has changes to carry across.
+   */
+  switchToFeatureBranch: boolean;
+  /** Force the append-only narration even on a real terminal, instead of the live redrawing step tree. */
+  plainOutput: boolean;
 }
 
 export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';

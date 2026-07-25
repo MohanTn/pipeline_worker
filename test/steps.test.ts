@@ -58,17 +58,14 @@ test('truncateToWidth handles a width of 1 and non-positive widths without throw
   assert.equal(truncateToWidth('hello', -5), 'hello');
 });
 
-test('selectRendererMode picks the append-only LineRenderer off a non-TTY stream regardless of the plain-output env', () => {
-  assert.equal(selectRendererMode(false, undefined), 'line');
-  assert.equal(selectRendererMode(false, 'false'), 'line');
+test('selectRendererMode picks the append-only LineRenderer off a non-TTY stream regardless of the plainOutput setting', () => {
+  assert.equal(selectRendererMode(false, false), 'line');
+  assert.equal(selectRendererMode(false, true), 'line');
 });
 
-test('selectRendererMode picks the live TreeRenderer on a TTY unless PIPELINE_WORKER_PLAIN_OUTPUT opts out', () => {
-  assert.equal(selectRendererMode(true, undefined), 'tree');
-  assert.equal(selectRendererMode(true, 'false'), 'tree');
-  assert.equal(selectRendererMode(true, 'true'), 'line');
-  assert.equal(selectRendererMode(true, '1'), 'line');
-  assert.equal(selectRendererMode(true, 'TRUE'), 'line');
+test('selectRendererMode picks the live TreeRenderer on a TTY unless the plainOutput setting opts out', () => {
+  assert.equal(selectRendererMode(true, false), 'tree');
+  assert.equal(selectRendererMode(true, true), 'line');
 });
 
 test('runStep on an id absent from the skeleton still runs its task to completion instead of throwing', async () => {

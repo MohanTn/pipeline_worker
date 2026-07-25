@@ -1,6 +1,6 @@
 # agent-hooks
 
-Auto-triggers `pipeline-worker run` in the background as soon as an agent turn ends leaving uncommitted changes in a repo — no manual `pipeline-worker` invocation needed after each feature. Both integrations share the same logic in `claude/hooks/on-stop.mjs`, which no-ops silently unless there are uncommitted changes and no run already in progress (see `PIPELINE_WORKER_CLEANUP_EARLY` in the main README for freeing the repo up for the *next* feature before this one's CI finishes).
+Auto-triggers `pipeline-worker run` in the background as soon as an agent turn ends leaving uncommitted changes in a repo — no manual `pipeline-worker` invocation needed after each feature. Both integrations share the same logic in `claude/hooks/on-stop.mjs`, which no-ops silently unless there are uncommitted changes and no run already in progress (see `cleanupEarly` in the main README for freeing the repo up for the *next* feature before this one's CI finishes).
 
 ## Claude Code
 

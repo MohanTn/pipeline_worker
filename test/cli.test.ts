@@ -15,7 +15,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import http, { type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,6 +79,18 @@ class McpProbe {
   stop(): void {
     this.child.kill();
   }
+}
+
+/**
+ * Writes a settings file into a throwaway XDG_CONFIG_HOME. The spawned CLI
+ * reads no environment variables of its own, so this file — pointed at by the
+ * subprocess's XDG_CONFIG_HOME — is the only way to configure it.
+ */
+function writeSettings(settings: Record<string, unknown>): { configHome: string; cleanup: () => void } {
+  const configHome = mkdtempSync(join(tmpdir(), 'pipeline-worker-confighome-'));
+  mkdirSync(join(configHome, 'pipeline-worker'), { recursive: true });
+  writeFileSync(join(configHome, 'pipeline-worker', 'config.json'), JSON.stringify(settings), 'utf-8');
+  return { configHome, cleanup: () => rmSync(configHome, { recursive: true, force: true }) };
 }
 
 /**
@@ -163,12 +175,8 @@ function startGitlabStub(): Promise<{ server: Server; port: number }> {
 }
 
 test('pipeline-worker serve lists all six GitLab MCP tools', async () => {
-  const probe = new McpProbe({
-    ...process.env,
-    PIPELINE_WORKER_GITLAB_HOST: 'http://127.0.0.1:1',
-    PIPELINE_WORKER_GITLAB_PROJECT_ID: '1',
-    PIPELINE_WORKER_GITLAB_TOKEN: 'test-token',
-  });
+  const settings = writeSettings({ forge: 'gitlab', gitlab: { host: 'http://127.0.0.1:1', projectId: 1, token: 'test-token' } });
+  const probe = new McpProbe({ ...process.env, XDG_CONFIG_HOME: settings.configHome });
   try {
     await probe.initialize();
     const response = await probe.request(1, 'tools/list', {});
@@ -184,19 +192,18 @@ test('pipeline-worker serve lists all six GitLab MCP tools', async () => {
     ]);
   } finally {
     probe.stop();
+    settings.cleanup();
   }
 });
 
 test('pipeline-worker serve returns a TOON-encoded envelope for get_pipeline_status', async () => {
   const { server, port } = await startGitlabStub();
   const { binDir, cleanup } = writeFakeGlab();
+  const settings = writeSettings({ forge: 'gitlab', gitlab: { host: `http://127.0.0.1:${port}`, projectId: 1, token: 'test-token' } });
   const probe = new McpProbe({
     ...process.env,
     PATH: `${binDir}:${process.env.PATH}`,
-    PIPELINE_WORKER_FORGE: 'gitlab',
-    PIPELINE_WORKER_GITLAB_HOST: `http://127.0.0.1:${port}`,
-    PIPELINE_WORKER_GITLAB_PROJECT_ID: '1',
-    PIPELINE_WORKER_GITLAB_TOKEN: 'test-token',
+    XDG_CONFIG_HOME: settings.configHome,
   });
   try {
     await probe.initialize();
@@ -213,6 +220,7 @@ test('pipeline-worker serve returns a TOON-encoded envelope for get_pipeline_sta
     probe.stop();
     server.close();
     cleanup();
+    settings.cleanup();
   }
 });
 
