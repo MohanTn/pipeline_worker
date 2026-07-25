@@ -126,6 +126,26 @@ test('no emitted line exceeds the terminal width, even with a long detail string
   );
 });
 
+test('a very narrow terminal truncates the right-hand figures instead of overflowing', () => {
+  withRig(
+    ({ out, tree }) => {
+      tree.start('capture', { detail: 'staged + unstaged diff' });
+      tree.update('capture', { attempt: 2, maxAttempts: 5 });
+      tree.addTokens('capture', 4400);
+      tree.finish('capture', 'done');
+      for (const write of out.writes) {
+        for (const line of write.split('\n')) {
+          // eslint-disable-next-line no-control-regex
+          const visible = line.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
+          assert.ok(visible.length <= 20, `line exceeded width 20: "${visible}" (${visible.length})`);
+        }
+      }
+    },
+    SKELETON,
+    20,
+  );
+});
+
 test('an undefined columns (piped stdout with no known width) falls back to assuming 80', () => {
   const out = new FakeStream();
   out.columns = undefined;

@@ -257,10 +257,12 @@ export class TreeRenderer implements Renderer {
     // zones (glyph, rest) — escape codes are zero-width, so wrapping math
     // must run on the plain string.
     const body = `${node.label.padEnd(labelWidth)}  ${node.detail}`;
-    const room = width - prefix.length - 2; // glyph + space
-    const figuresPart = figures ? `  ${figures}` : '';
-    const bodyRoom = Math.max(0, room - figuresPart.length);
-    const text = `${truncateToWidth(body, bodyRoom)}${figuresPart}`;
+    const room = Math.max(0, width - prefix.length - 2); // glyph + space
+    // Figures are truncated to the row's own room first, so a narrow terminal
+    // can't overflow via the right-hand column; the body gets what's left.
+    const figuresPart = figures && room > 0 ? truncateToWidth(`  ${figures}`, room) : '';
+    const bodyRoom = room - figuresPart.length;
+    const text = `${bodyRoom > 0 ? truncateToWidth(body, bodyRoom) : ''}${figuresPart}`;
     const dimRow = node.status === 'skipped' || node.status === 'pending';
     return `${prefix}${styleText(color, glyph)} ${dimRow ? styleText('dim', text) : text}`;
   }
