@@ -81,6 +81,16 @@ export async function currentBranch(cwd: string): Promise<string> {
 }
 
 /**
+ * Checks out a branch that already exists locally. Used at the end of a run
+ * to leave repoRoot standing on the feature branch it just built (see
+ * orchestrate.ts's maybeSwitchToFeatureBranch) — the run's own worktree must
+ * be gone first, since git refuses to check one branch out in two worktrees.
+ */
+export async function checkoutBranch(cwd: string, branch: string): Promise<void> {
+  await execFileAsync('git', ['checkout', branch], { cwd });
+}
+
+/**
  * The commit where HEAD diverged from `ref`. Used by the `resume` branch-
  * adoption path (adoptBranch.ts) to pin captureIntent's diff instructions to
  * a single fixed commit — `git diff <mergeBaseSha> -- <file>` — so the agent

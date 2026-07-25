@@ -1,16 +1,19 @@
 /**
- * Environment-variable config resolver. Resolution order per value:
- * environment variable -> .env file at repo root (never overrides real env) ->
- * built-in default (for build/lint/test: commands auto-detected from the
- * repo's toolchain, see detectChecks.ts; for github.repo: the repo's own
- * `origin` remote, see git/remote.ts). Never throws — an unset or invalid
- * value falls back to the default (with a warning where relevant), mirroring
- * mcp-sonar-analysis's registry.ts read/never-throw contract.
+ * Config resolver. Resolution order per value: the settings file
+ * (~/.config/pipeline-worker/config.json, see file.ts) -> built-in default
+ * (for build/lint/test: commands auto-detected from the repo's toolchain, see
+ * detectChecks.ts; for github.repo: the repo's own `origin` remote, see
+ * git/remote.ts; for gitlab.projectId: derived from gitlab.repoBase).
+ *
+ * The settings file is the only source — pipeline-worker reads no
+ * PIPELINE_WORKER_* environment variables and no per-repo config file, so one
+ * file describes every repo you run in and the per-repo values keep coming
+ * from auto-detection. Never throws: an unset or invalid value falls back to
+ * the default (with a warning where relevant), mirroring mcp-sonar-analysis's
+ * registry.ts read/never-throw contract.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { parseEnv } from 'node:util';
+import { configFilePath, readRawConfig, writeDefaultConfig } from './file.js';
 import { detectChecks } from './detectChecks.js';
 import { deriveProjectPath } from '../git/resolveProjectPath.js';
 import { detectGithubRepo } from '../git/remote.js';
@@ -22,16 +25,24 @@ const FORGE_NAMES: readonly ForgeName[] = ['gitlab', 'github'];
 const MERGE_METHODS: readonly MergeMethod[] = ['merge', 'squash', 'rebase'];
 const REVIEW_SEVERITIES: readonly ReviewSeverity[] = ['CRITICAL', 'MAJOR', 'MINOR'];
 
-// build/lint/test defaults come from detectChecks(repoRoot) at load time.
+/**
+ * Also the template written to config.json on first run, so the file the user
+ * opens lists every key with its default — build/lint/test are left out on
+ * purpose: they come from detectChecks(repoRoot) unless the file names them.
+ */
 const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   agent: 'claude',
   forge: 'gitlab',
   gitlab: {
     host: '',
     projectId: 0,
+    repoBase: '',
+    token: '',
   },
   github: {
     repo: '',
+    token: '',
+    apiUrl: 'https://api.github.com',
   },
   maxFixAttempts: 5,
   pollIntervalSeconds: 15,
@@ -43,7 +54,7 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   updateChangelog: false,
   // Default-on: a run is meant to go all the way to a merged, locally-synced
   // result unattended (see maybeSyncTargetBranch) — merging remains
-  // best-effort and never fails the run, and PIPELINE_WORKER_AUTO_MERGE_ON_GREEN=false
+  // best-effort and never fails the run, and "autoMergeOnGreen": false
   // restores the old opt-in behavior for anyone who wants to merge by hand.
   autoMergeOnGreen: true,
   mergeMethod: 'squash',
@@ -56,22 +67,31 @@ const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   // ~24k chars is a comfortably-reviewable slice for any current model while
   // still keeping a typical MR/PR down to one or two agent turns.
   reviewChunkChars: 24_000,
+  // Default-on: the whole point of the run is that the change now lives on
+  // that branch, so leaving the caller standing on it is what makes the next
+  // edit a follow-up commit instead of a second, unrelated MR/PR.
+  switchToFeatureBranch: true,
+  plainOutput: false,
 };
 
-/** Loads <repoRoot>/.env into process.env; already-set variables always win. */
-// fallow-ignore-next-line complexity
-function loadDotEnv(repoRoot: string): void {
-  const envPath = join(repoRoot, '.env');
-  if (!existsSync(envPath)) return;
-  try {
-    const parsed = parseEnv(readFileSync(envPath, 'utf-8'));
-    for (const [key, value] of Object.entries(parsed)) {
-      if (!(key in process.env)) process.env[key] = value;
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Warning: failed to read ${envPath}: ${message}. Ignoring it.`);
-  }
+/** The settings file's contents, creating it with the defaults on first run. */
+function readSettings(): Record<string, unknown> {
+  const path = configFilePath();
+  const raw = readRawConfig(path);
+  if (raw) return raw;
+  writeDefaultConfig(DEFAULT_CONFIG, path);
+  return {};
+}
+
+/** A nested settings object ("gitlab", "github"), or an empty one when absent or malformed. */
+function section(settings: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = settings[key];
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+/** A configured string, or undefined when the key is absent (or holds a non-string). */
+function str(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 function pickName<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -88,12 +108,13 @@ const TRUE_VALUES = new Set(['true', '1', 'yes', 'y', 'on']);
 const FALSE_VALUES = new Set(['false', '0', 'no', 'n', 'off']);
 
 /**
- * Parses a boolean env var: the usual spellings (true/false, 1/0, yes/no,
- * on/off), case-insensitive and whitespace-tolerant. An unset or empty value
- * falls back silently; anything else falls back *with a warning* — a typo'd
- * or shell-quoted value used to silently resolve to the default, which for
- * gating flags like PIPELINE_WORKER_RUN_LINT_AND_TEST meant the stage the
- * user asked to skip ran anyway with no hint why.
+ * Parses a boolean setting: a real JSON boolean, or the usual string
+ * spellings (true/false, 1/0, yes/no, on/off), case-insensitive and
+ * whitespace-tolerant — hand-edited files carry quoted values often enough to
+ * be worth accepting. An absent or empty value falls back silently; anything
+ * else falls back *with a warning* — a typo'd value used to silently resolve
+ * to the default, which for gating flags like runLintAndTest meant the stage
+ * the user asked to skip ran anyway with no hint why.
  */
 // fallow-ignore-next-line complexity
 function boolean(name: string, value: unknown, fallback: boolean): boolean {
@@ -103,8 +124,10 @@ function boolean(name: string, value: unknown, fallback: boolean): boolean {
     if (normalized === '') return fallback;
     if (TRUE_VALUES.has(normalized)) return true;
     if (FALSE_VALUES.has(normalized)) return false;
+  }
+  if (value !== undefined && value !== null) {
     console.error(
-      `Warning: ${name}=${JSON.stringify(value)} is not a boolean — using ${fallback}. ` +
+      `Warning: ${name}=${JSON.stringify(value)} in ${configFilePath()} is not a boolean — using ${fallback}. ` +
         'Accepted values: true/false, 1/0, yes/no, on/off.',
     );
   }
@@ -112,34 +135,36 @@ function boolean(name: string, value: unknown, fallback: boolean): boolean {
 }
 
 /**
- * Unlike `||`-based resolution, an env var explicitly set to `''` (e.g.
- * `PIPELINE_WORKER_BUILD=`) is honored as "skip this stage" rather than
- * falling through to the detected default — only a genuinely unset var falls
- * back.
+ * Unlike `||`-based resolution, a key explicitly set to `""` (e.g.
+ * `"build": ""`) is honored as "skip this stage" rather than falling through
+ * to the detected default — only an absent key falls back.
  */
 function stringOr(value: string | undefined, fallback: string): string {
   return value !== undefined ? value : fallback;
 }
 
 /** GitLab project ids are either numeric or a 'group/subgroup/project' path; numeric strings are coerced, everything else is kept as-is. */
-function resolveProjectId(value: string | undefined, fallback: number | string): number | string {
-  if (!value) return fallback;
-  const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? num : value;
+// fallow-ignore-next-line complexity
+function resolveProjectId(value: unknown, fallback: number | string): number | string {
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : fallback;
+  const configured = str(value);
+  if (!configured) return fallback;
+  const num = Number(configured);
+  return Number.isFinite(num) && num > 0 ? num : configured;
 }
 
 /**
  * Like pickName, but warns on an unrecognized value the way boolean() does —
- * a typo'd PIPELINE_WORKER_REVIEW_MIN_SEVERITY would otherwise silently widen
- * (or narrow) what gets posted with no hint why. Case-insensitive: `major` is
- * the spelling most people reach for.
+ * a typo'd reviewMinSeverity would otherwise silently widen (or narrow) what
+ * gets posted with no hint why. Case-insensitive: `major` is the spelling
+ * most people reach for.
  */
-function pickSeverity(value: string | undefined, fallback: ReviewSeverity): ReviewSeverity {
-  const normalized = (value ?? '').trim().toUpperCase();
+function pickSeverity(value: unknown, fallback: ReviewSeverity): ReviewSeverity {
+  const normalized = (str(value) ?? '').trim().toUpperCase();
   if (normalized === '') return fallback;
   if (REVIEW_SEVERITIES.includes(normalized as ReviewSeverity)) return normalized as ReviewSeverity;
   console.error(
-    `Warning: PIPELINE_WORKER_REVIEW_MIN_SEVERITY=${JSON.stringify(value)} is not a severity — using ${fallback}. ` +
+    `Warning: reviewMinSeverity=${JSON.stringify(value)} in ${configFilePath()} is not a severity — using ${fallback}. ` +
       `Accepted values: ${REVIEW_SEVERITIES.join('/')}.`,
   );
   return fallback;
@@ -156,32 +181,27 @@ function pickSeverity(value: string | undefined, fallback: ReviewSeverity): Revi
 function warnIfSquashRacesAutoMerge(autoMergeOnGreen: boolean, squashOnMerge: boolean): void {
   if (autoMergeOnGreen && squashOnMerge) {
     console.error(
-      'Warning: PIPELINE_WORKER_SQUASH_ON_MERGE is enabled alongside PIPELINE_WORKER_AUTO_MERGE_ON_GREEN — ' +
+      'Warning: squashOnMerge is enabled alongside autoMergeOnGreen — ' +
         'the forge may merge (and delete) the branch before the squash push runs. This is best-effort and will ' +
         'not fail the run, but the squash may silently no-op.',
     );
   }
 }
 
-/** Warns once when no toolchain was auto-detected and none of the build/lint/test env overrides are set — checks will otherwise silently be skipped. */
+/** Warns once when no toolchain was auto-detected and the settings file names no build/lint/test command — checks will otherwise silently be skipped. */
 // fallow-ignore-next-line complexity
-function warnIfToolchainUndetected(repoRoot: string, detected: ReturnType<typeof detectChecks>): void {
-  if (
-    detected.language === 'unknown' &&
-    process.env.PIPELINE_WORKER_BUILD === undefined &&
-    process.env.PIPELINE_WORKER_LINT === undefined &&
-    process.env.PIPELINE_WORKER_TEST === undefined
-  ) {
+function warnIfToolchainUndetected(repoRoot: string, settings: Record<string, unknown>, detected: ReturnType<typeof detectChecks>): void {
+  if (detected.language === 'unknown' && str(settings.build) === undefined && str(settings.lint) === undefined && str(settings.test) === undefined) {
     console.error(
       `Warning: could not detect the toolchain of ${repoRoot}; build/lint/test will be skipped. ` +
-        'Set PIPELINE_WORKER_BUILD / PIPELINE_WORKER_LINT / PIPELINE_WORKER_TEST to configure them explicitly.',
+        `Set "build" / "lint" / "test" in ${configFilePath()} to configure them explicitly.`,
     );
   }
 }
 
-/** Auto-detects a string path from repoBase when no project id is configured yet; the env var override (numeric or string path) always wins. */
+/** Auto-detects a string path from repoBase when the settings file configures no project id; the configured value (numeric or string path) always wins. */
 // fallow-ignore-next-line complexity
-function resolveGitlabProjectId(repoRoot: string, repoBase: string | undefined): number | string {
+function resolveGitlabProjectId(repoRoot: string, gitlab: Record<string, unknown>, repoBase: string | undefined): number | string {
   let resolvedProjectId: number | string = DEFAULT_CONFIG.gitlab.projectId;
   if (!resolvedProjectId && repoBase) {
     try {
@@ -191,58 +211,66 @@ function resolveGitlabProjectId(repoRoot: string, repoBase: string | undefined):
       console.error(`Warning: ${message}`);
     }
   }
-  return resolveProjectId(process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID, resolvedProjectId);
+  return resolveProjectId(gitlab.projectId, resolvedProjectId);
 }
 
-function buildGitlabSection(repoRoot: string, repoBase: string | undefined): PipelineWorkerConfig['gitlab'] {
+function buildGitlabSection(repoRoot: string, gitlab: Record<string, unknown>, repoBase: string | undefined): PipelineWorkerConfig['gitlab'] {
   return {
-    host: process.env.PIPELINE_WORKER_GITLAB_HOST || DEFAULT_CONFIG.gitlab.host,
-    projectId: resolveGitlabProjectId(repoRoot, repoBase),
+    host: str(gitlab.host) || DEFAULT_CONFIG.gitlab.host,
+    projectId: resolveGitlabProjectId(repoRoot, gitlab, repoBase),
     repoBase,
+    token: str(gitlab.token) || DEFAULT_CONFIG.gitlab.token,
   };
 }
 
-function buildGithubSection(repoRoot: string): PipelineWorkerConfig['github'] {
+function buildGithubSection(repoRoot: string, github: Record<string, unknown>): PipelineWorkerConfig['github'] {
   return {
-    repo: process.env.PIPELINE_WORKER_GITHUB_REPO || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
+    repo: str(github.repo) || detectGithubRepo(repoRoot) || DEFAULT_CONFIG.github.repo,
+    token: str(github.token) || DEFAULT_CONFIG.github.token,
+    apiUrl: str(github.apiUrl) || DEFAULT_CONFIG.github.apiUrl,
   };
 }
 
+// fallow-ignore-next-line complexity
 export function loadConfig(repoRoot: string): PipelineWorkerConfig {
-  loadDotEnv(repoRoot);
+  const settings = readSettings();
+  const gitlab = section(settings, 'gitlab');
+  const github = section(settings, 'github');
 
   const detected = detectChecks(repoRoot);
-  warnIfToolchainUndetected(repoRoot, detected);
+  warnIfToolchainUndetected(repoRoot, settings, detected);
 
-  const repoBase = process.env.PIPELINE_WORKER_GITLAB_REPO_BASE;
-  const autoMergeOnGreen = boolean('PIPELINE_WORKER_AUTO_MERGE_ON_GREEN', process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN, DEFAULT_CONFIG.autoMergeOnGreen);
-  const squashOnMerge = boolean('PIPELINE_WORKER_SQUASH_ON_MERGE', process.env.PIPELINE_WORKER_SQUASH_ON_MERGE, DEFAULT_CONFIG.squashOnMerge);
+  const repoBase = str(gitlab.repoBase) || undefined;
+  const autoMergeOnGreen = boolean('autoMergeOnGreen', settings.autoMergeOnGreen, DEFAULT_CONFIG.autoMergeOnGreen);
+  const squashOnMerge = boolean('squashOnMerge', settings.squashOnMerge, DEFAULT_CONFIG.squashOnMerge);
   warnIfSquashRacesAutoMerge(autoMergeOnGreen, squashOnMerge);
 
   return {
-    agent: pickName<AgentName>(process.env.PIPELINE_WORKER_AGENT, AGENT_NAMES, DEFAULT_CONFIG.agent),
-    forge: pickName<ForgeName>(process.env.PIPELINE_WORKER_FORGE, FORGE_NAMES, DEFAULT_CONFIG.forge),
-    gitlab: buildGitlabSection(repoRoot, repoBase),
-    github: buildGithubSection(repoRoot),
-    build: stringOr(process.env.PIPELINE_WORKER_BUILD, detected.build),
-    lint: stringOr(process.env.PIPELINE_WORKER_LINT, detected.lint),
-    test: stringOr(process.env.PIPELINE_WORKER_TEST, detected.test),
-    maxFixAttempts: positiveNumber(process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS, DEFAULT_CONFIG.maxFixAttempts),
-    pollIntervalSeconds: positiveNumber(process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS, DEFAULT_CONFIG.pollIntervalSeconds),
-    branchPattern: process.env.PIPELINE_WORKER_BRANCH_PATTERN || DEFAULT_CONFIG.branchPattern,
-    cleanupOnSuccess: boolean('PIPELINE_WORKER_CLEANUP', process.env.PIPELINE_WORKER_CLEANUP, DEFAULT_CONFIG.cleanupOnSuccess),
-    cleanupEarly: boolean('PIPELINE_WORKER_CLEANUP_EARLY', process.env.PIPELINE_WORKER_CLEANUP_EARLY, DEFAULT_CONFIG.cleanupEarly),
-    intentModel: process.env.PIPELINE_WORKER_INTENT_MODEL || DEFAULT_CONFIG.intentModel,
-    runLintAndTest: boolean('PIPELINE_WORKER_RUN_LINT_AND_TEST', process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST, DEFAULT_CONFIG.runLintAndTest),
-    updateChangelog: boolean('PIPELINE_WORKER_UPDATE_CHANGELOG', process.env.PIPELINE_WORKER_UPDATE_CHANGELOG, DEFAULT_CONFIG.updateChangelog),
+    agent: pickName<AgentName>(settings.agent, AGENT_NAMES, DEFAULT_CONFIG.agent),
+    forge: pickName<ForgeName>(settings.forge, FORGE_NAMES, DEFAULT_CONFIG.forge),
+    gitlab: buildGitlabSection(repoRoot, gitlab, repoBase),
+    github: buildGithubSection(repoRoot, github),
+    build: stringOr(str(settings.build), detected.build),
+    lint: stringOr(str(settings.lint), detected.lint),
+    test: stringOr(str(settings.test), detected.test),
+    maxFixAttempts: positiveNumber(settings.maxFixAttempts, DEFAULT_CONFIG.maxFixAttempts),
+    pollIntervalSeconds: positiveNumber(settings.pollIntervalSeconds, DEFAULT_CONFIG.pollIntervalSeconds),
+    branchPattern: str(settings.branchPattern) || DEFAULT_CONFIG.branchPattern,
+    cleanupOnSuccess: boolean('cleanupOnSuccess', settings.cleanupOnSuccess, DEFAULT_CONFIG.cleanupOnSuccess),
+    cleanupEarly: boolean('cleanupEarly', settings.cleanupEarly, DEFAULT_CONFIG.cleanupEarly),
+    intentModel: str(settings.intentModel) || DEFAULT_CONFIG.intentModel,
+    runLintAndTest: boolean('runLintAndTest', settings.runLintAndTest, DEFAULT_CONFIG.runLintAndTest),
+    updateChangelog: boolean('updateChangelog', settings.updateChangelog, DEFAULT_CONFIG.updateChangelog),
     autoMergeOnGreen,
-    mergeMethod: pickName<MergeMethod>(process.env.PIPELINE_WORKER_MERGE_METHOD, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
+    mergeMethod: pickName<MergeMethod>(settings.mergeMethod, MERGE_METHODS, DEFAULT_CONFIG.mergeMethod),
     squashOnMerge,
-    completionSound: boolean('PIPELINE_WORKER_COMPLETION_SOUND', process.env.PIPELINE_WORKER_COMPLETION_SOUND, DEFAULT_CONFIG.completionSound),
-    review: boolean('PIPELINE_WORKER_REVIEW', process.env.PIPELINE_WORKER_REVIEW, DEFAULT_CONFIG.review),
-    reviewModel: process.env.PIPELINE_WORKER_REVIEW_MODEL || DEFAULT_CONFIG.reviewModel,
-    reviewMinSeverity: pickSeverity(process.env.PIPELINE_WORKER_REVIEW_MIN_SEVERITY, DEFAULT_CONFIG.reviewMinSeverity),
-    reviewMaxComments: positiveNumber(process.env.PIPELINE_WORKER_REVIEW_MAX_COMMENTS, DEFAULT_CONFIG.reviewMaxComments),
-    reviewChunkChars: positiveNumber(process.env.PIPELINE_WORKER_REVIEW_CHUNK_CHARS, DEFAULT_CONFIG.reviewChunkChars),
+    completionSound: boolean('completionSound', settings.completionSound, DEFAULT_CONFIG.completionSound),
+    review: boolean('review', settings.review, DEFAULT_CONFIG.review),
+    reviewModel: str(settings.reviewModel) || DEFAULT_CONFIG.reviewModel,
+    reviewMinSeverity: pickSeverity(settings.reviewMinSeverity, DEFAULT_CONFIG.reviewMinSeverity),
+    reviewMaxComments: positiveNumber(settings.reviewMaxComments, DEFAULT_CONFIG.reviewMaxComments),
+    reviewChunkChars: positiveNumber(settings.reviewChunkChars, DEFAULT_CONFIG.reviewChunkChars),
+    switchToFeatureBranch: boolean('switchToFeatureBranch', settings.switchToFeatureBranch, DEFAULT_CONFIG.switchToFeatureBranch),
+    plainOutput: boolean('plainOutput', settings.plainOutput, DEFAULT_CONFIG.plainOutput),
   };
 }

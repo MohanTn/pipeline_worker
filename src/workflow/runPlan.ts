@@ -30,6 +30,7 @@ export function freshRunSkeleton(targetBranch: string, agentName: string): StepS
     { id: 'ci-watch', label: 'ci-watch', detail: 'watch CI · fix failures · resolve conflicts' },
     { id: 'cleanup', label: 'cleanup', detail: 'reset your repo to HEAD' },
     { id: 'merge', label: 'merge', detail: `auto-merge + sync local ${targetBranch}` },
+    { id: 'switch', label: 'switch', detail: 'check the feature branch out in your repo' },
   ];
 }
 

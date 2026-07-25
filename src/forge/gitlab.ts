@@ -2,8 +2,8 @@
  * GitLab ForgeClient. Talks to GitLab by invoking the `glab` CLI (`glab api
  * ...`): auth is passed via a GITLAB_TOKEN in the child process's env and the
  * target instance via `--hostname`, so glab resolves the request itself. The
- * token is deliberately sourced only from an environment variable and never
- * logged. Used both by the workflow orchestrator and the MCP tool handlers,
+ * token comes from the settings file's `gitlab.token` (see config/file.ts) and
+ * is never logged. Used both by the workflow orchestrator and the MCP tool handlers,
  * so there is exactly one place that knows how to talk to GitLab.
  */
 
@@ -12,6 +12,7 @@ import { promisify } from 'node:util';
 import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
 import type { CreateMrArgs, ForgeClient, InlineComment } from './types.js';
 import { firstOrUndefined, isRetryableStatus } from './shared.js';
+import { configFilePath } from '../config/file.js';
 import { writePromptToStdin } from '../agent/stdinPrompt.js';
 
 const execFileAsync = promisify(execFile);
@@ -32,15 +33,14 @@ function bareHostname(host: string): string {
 }
 
 function resolveGitlabAuth(config: PipelineWorkerConfig): GlabAuth {
-  // config.gitlab.host/projectId are already env/.env-resolved by
-  // config/loader.ts; the token is read directly from the environment here.
-  const host = config.gitlab.host;
-  const projectId = config.gitlab.projectId;
-  const token = process.env.PIPELINE_WORKER_GITLAB_TOKEN;
+  // All three are already resolved by config/loader.ts from
+  // ~/.config/pipeline-worker/config.json (projectId may have been derived
+  // from gitlab.repoBase there).
+  const { host, projectId, token } = config.gitlab;
 
-  if (!host) throw new Error('GitLab host is not configured (set PIPELINE_WORKER_GITLAB_HOST).');
-  if (!projectId) throw new Error('GitLab projectId is not configured (set PIPELINE_WORKER_GITLAB_PROJECT_ID, or PIPELINE_WORKER_GITLAB_REPO_BASE for auto-detection).');
-  if (!token) throw new Error('PIPELINE_WORKER_GITLAB_TOKEN environment variable is not set.');
+  if (!host) throw new Error(`GitLab host is not configured (set "gitlab": { "host": "..." } in ${configFilePath()}).`);
+  if (!projectId) throw new Error(`GitLab projectId is not configured (set "gitlab": { "projectId": ... }, or "repoBase" for auto-detection, in ${configFilePath()}).`);
+  if (!token) throw new Error(`GitLab token is not configured (set "gitlab": { "token": "..." } in ${configFilePath()}).`);
 
   return { hostname: bareHostname(host), projectId, token };
 }
@@ -70,7 +70,7 @@ function createGlabExecutor(token: string): GlabExecutor {
     } catch (rawErr) {
       const err = rawErr as ExecErrorShape;
       if (err.code === 'ENOENT') {
-        throw new Error('glab CLI not found on PATH (required for PIPELINE_WORKER_FORGE=gitlab).');
+        throw new Error('glab CLI not found on PATH (required for "forge": "gitlab").');
       }
       throw new Error((err.stderr && err.stderr.trim()) || err.message || String(rawErr));
     }

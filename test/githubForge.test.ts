@@ -54,12 +54,15 @@ function startPrStub(mergeableState: string | undefined): Promise<{ server: Serv
   });
 }
 
+/** Base URL the forge should talk to — pointed at the local stub by withGithubApi. */
+let stubApiUrl = 'https://api.github.com';
+
 function githubConfig(): PipelineWorkerConfig {
   return {
     agent: 'claude',
     forge: 'github',
     gitlab: { host: '', projectId: 1 },
-    github: { repo: 'acme/widgets' },
+    github: { repo: 'acme/widgets', token: 'test-token', apiUrl: stubApiUrl },
     build: '',
     lint: '',
     test: '',
@@ -71,26 +74,21 @@ function githubConfig(): PipelineWorkerConfig {
   };
 }
 
-/** Sets the two env vars resolveGithubAuth reads, restoring their prior values afterward — process.env is shared across every test file in this run. */
-async function withGithubEnv(apiUrl: string, fn: () => Promise<void>): Promise<void> {
-  const savedApiUrl = process.env.PIPELINE_WORKER_GITHUB_API_URL;
-  const savedToken = process.env.PIPELINE_WORKER_GITHUB_TOKEN;
-  process.env.PIPELINE_WORKER_GITHUB_API_URL = apiUrl;
-  process.env.PIPELINE_WORKER_GITHUB_TOKEN = 'test-token';
+/** Points every githubConfig() built inside fn at the local stub server (config.github.apiUrl — the forge reads no environment variables). */
+async function withGithubApi(apiUrl: string, fn: () => Promise<void>): Promise<void> {
+  const saved = stubApiUrl;
+  stubApiUrl = apiUrl;
   try {
     await fn();
   } finally {
-    if (savedApiUrl === undefined) delete process.env.PIPELINE_WORKER_GITHUB_API_URL;
-    else process.env.PIPELINE_WORKER_GITHUB_API_URL = savedApiUrl;
-    if (savedToken === undefined) delete process.env.PIPELINE_WORKER_GITHUB_TOKEN;
-    else process.env.PIPELINE_WORKER_GITHUB_TOKEN = savedToken;
+    stubApiUrl = saved;
   }
 }
 
 test('hasMergeConflicts is true for GitHub "dirty" (confirmed conflict)', async () => {
   const { server, port } = await startPrStub('dirty');
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       assert.equal(await forge.hasMergeConflicts(1), true);
     });
@@ -124,7 +122,7 @@ test('isMrMerged is true only when GitHub reports merged: true, even though stat
   ] as const) {
     const { server, port } = await startMergedStub(merged);
     try {
-      await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      await withGithubApi(`http://127.0.0.1:${port}`, async () => {
         const forge = createGithubForge(githubConfig());
         assert.equal(await forge.isMrMerged(1), expected, `merged: ${String(merged)}`);
       });
@@ -149,7 +147,7 @@ test('updateMrDescription PATCHes /pulls/{iid} with the new body', async () => {
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       await forge.updateMrDescription(42, 'new description');
     });
@@ -172,7 +170,7 @@ test('getMrDescription reads the PR body, and reads an absent body as an empty s
     const address = server.address();
     const port = typeof address === 'object' && address ? address.port : 0;
     try {
-      await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      await withGithubApi(`http://127.0.0.1:${port}`, async () => {
         const forge = createGithubForge(githubConfig());
         const result = await forge.getMrDescription(42);
         assert.equal(result.text, expected);
@@ -199,7 +197,7 @@ test('createGithubForge transparently retries a transient 500 via forgeFetch', a
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       assert.equal(await forge.hasMergeConflicts(1), false);
     });
@@ -240,7 +238,7 @@ function startAutoMergeStub(nodeId: string, graphqlHandler: (body: unknown) => {
 test('enableAutoMerge fetches the PR node_id then sends the enablePullRequestAutoMerge GraphQL mutation', async () => {
   const { server, port, requests } = await startAutoMergeStub('PR_kwabc123', () => ({ status: 200, body: { data: { enablePullRequestAutoMerge: { clientMutationId: null } } } }));
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       await forge.enableAutoMerge(42, 'squash');
     });
@@ -262,7 +260,7 @@ test('enableAutoMerge throws when the GraphQL response reports errors', async ()
     body: { errors: [{ message: 'Pull request Auto merge is not allowed for this repository' }] },
   }));
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       await assert.rejects(() => forge.enableAutoMerge(42, 'merge'), /Auto merge is not allowed/);
     });
@@ -297,7 +295,7 @@ function startInlineCommentStub(headSha: string): Promise<{ server: Server; port
 test('createInlineComment resolves the PR head sha, then POSTs a RIGHT-side comment on that path and line', async () => {
   const { server, port, requests } = await startInlineCommentStub('abc123head');
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       const comment = await forge.createInlineComment(7, { path: 'src/app.ts', line: 42, body: 'Hard-coded secret.' });
       assert.deepEqual(comment, { id: 555 });
@@ -329,7 +327,7 @@ test('getCiConfigPath always resolves undefined with no HTTP request — GitHub 
   const address = server.address();
   const port = typeof address === 'object' && address ? address.port : 0;
   try {
-    await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
       const forge = createGithubForge(githubConfig());
       assert.equal(await forge.getCiConfigPath(), undefined);
     });
@@ -343,7 +341,7 @@ for (const state of ['clean', 'unstable', 'blocked', 'behind', 'draft', 'unknown
   test(`hasMergeConflicts is false for GitHub mergeable_state ${JSON.stringify(state)} (not a real conflict)`, async () => {
     const { server, port } = await startPrStub(state);
     try {
-      await withGithubEnv(`http://127.0.0.1:${port}`, async () => {
+      await withGithubApi(`http://127.0.0.1:${port}`, async () => {
         const forge = createGithubForge(githubConfig());
         assert.equal(await forge.hasMergeConflicts(1), false);
       });

@@ -7,7 +7,7 @@ import { selectAgent } from '../agent/index.js';
 import { captureDiff, resetRepo } from '../git/diff.js';
 import { buildBranchName } from '../git/branchName.js';
 import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, renameBranch, generateTempBranchName } from '../git/worktree.js';
-import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers, forcePushWithLease } from '../git/commit.js';
+import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers, forcePushWithLease, hasChanges, checkoutBranch } from '../git/commit.js';
 import { detectDefaultBranch, remoteBranchExists } from '../git/remote.js';
 import { squashCommitsSinceMergeBase } from '../git/squash.js';
 import { captureIntent } from './captureIntent.js';
@@ -20,7 +20,7 @@ import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
-import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, note, noteRisk, reportAgentInvocation } from '../ui/steps.js';
+import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, note, noteRisk, reportAgentInvocation, setPlainOutput } from '../ui/steps.js';
 import { setCompletionSound } from '../ui/notify.js';
 import { freshRunSkeleton } from './runPlan.js';
 import { printWelcome } from '../ui/welcome.js';
@@ -423,6 +423,48 @@ async function maybeSquashCommits(config: PipelineWorkerConfig, worktreePath: st
   }
 }
 
+/**
+ * Stage 15 (opt-out via config.switchToFeatureBranch): leave repoRoot standing
+ * on the branch this run built, instead of on the target branch it started
+ * from. That is what makes the next round of edits a follow-up: `pipeline-worker
+ * run` from this branch commits onto the same MR/PR (see findFollowUpMr)
+ * rather than opening a second one, so no manual `git checkout` — or, worse, a
+ * hunt for the deleted worktree's path — is needed between rounds.
+ *
+ * The run's worktree holds the branch until it is removed, and git refuses one
+ * branch in two worktrees, so `cleanup` (idempotent — the outer finally calls
+ * it again harmlessly) runs first. Best-effort throughout: a repo that still
+ * has uncommitted changes is left alone rather than dragging them onto the
+ * branch, and a failed checkout is a note, not a failed run.
+ *
+ * Exported for unit testing.
+ */
+export async function maybeSwitchToFeatureBranch(
+  config: PipelineWorkerConfig,
+  repoRoot: string,
+  branch: string,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  if (!config.switchToFeatureBranch) {
+    skipStep('switch', 'config.switchToFeatureBranch is disabled');
+    return;
+  }
+  try {
+    if (await hasChanges(repoRoot)) {
+      skipStep('switch', `${repoRoot} still has uncommitted changes — not carrying them onto ${branch}`);
+      return;
+    }
+    await runStep('switch', `check out ${branch}, so your next change becomes a follow-up commit on this MR/PR`, async () => {
+      await cleanup();
+      await checkoutBranch(repoRoot, branch);
+    });
+    note(`you are on ${branch} now — edit, then run pipeline-worker again to add a follow-up commit to the same MR/PR`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    noteRisk('low', `could not check out ${branch} in your repo (${message}) — switch by hand with: git checkout ${branch}`);
+  }
+}
+
 /** After watchPipeline settles: report the final outcome, run stage 13's cleanup if it hasn't already run early, then stage 14's local target-branch sync. */
 // fallow-ignore-next-line complexity
 async function finalizeRun(
@@ -437,6 +479,7 @@ async function finalizeRun(
   targetBranch: string,
   intent: CapturedIntent,
   isFollowUp: boolean,
+  cleanup: () => Promise<void>,
 ): Promise<void> {
   if (finalPhase === 'done') {
     if (isFollowUp) {
@@ -471,6 +514,10 @@ async function finalizeRun(
     // clean by now, so the fast-forward can't collide with leftover local edits.
     await maybeSyncTargetBranch(forge, config, repoRoot, targetBranch, mr.iid);
 
+    // Last, so the branch swap can't disturb any stage that reads repoRoot's
+    // working tree (cleanup's reset, the target-branch fast-forward).
+    await maybeSwitchToFeatureBranch(config, repoRoot, state.branch, cleanup);
+
     const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
     endRun('done', detail);
   } else if (finalPhase === 'escalated') {
@@ -483,6 +530,7 @@ async function finalizeRun(
 export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions = {}): Promise<void> {
   const config = loadConfig(repoRoot);
   setCompletionSound(config.completionSound);
+  setPlainOutput(config.plainOutput);
   if (config.forge === 'gitlab' && !options.ticket) {
     throw new Error('forge is gitlab, which requires a ticket id — pass one with --ticket <id>.');
   }
@@ -589,7 +637,7 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       // boundary so TS uses the declared RunPhase return type instead of the
       // 'mr' literal it narrowed state.phase to just before the call.
       const finalPhase = readPhase(state);
-      await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent, followUpMr !== undefined);
+      await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent, followUpMr !== undefined, cleanup);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');

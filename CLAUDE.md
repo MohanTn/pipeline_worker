@@ -15,9 +15,9 @@ Consequences:
 ## Code conventions
 
 - TypeScript ESM (`"type": "module"`), Node >= 20.12. Imports use `.js` extensions.
-- Configuration is env-vars only (`PIPELINE_WORKER_*`), parsed once in `src/config/loader.ts`. No config files, no CLI flags for settings.
+- Configuration is one JSON file only — `~/.config/pipeline-worker/config.json` (`$XDG_CONFIG_HOME` honored), read by `src/config/file.ts` and parsed once in `src/config/loader.ts`, which creates it with the defaults on first run. No environment variables (`PIPELINE_WORKER_*` are gone, and `.env` is no longer read), no per-repo config file, no CLI flags for settings. Per-repo values (`github.repo`, `gitlab.projectId`, `build`/`lint`/`test`) stay auto-detected from the repo unless the file names them. Tests point `XDG_CONFIG_HOME` at a temp dir instead of setting env vars.
 - Runtime dependencies are deliberately minimal (commander + MCP SDK + toon). Do not add a dependency for something ~150 lines of hand-rolled code covers.
-- The GitLab forge (`src/forge/gitlab.ts`) integrates with GitLab through the `glab` CLI (`glab api ...`): it authenticates non-interactively by passing `GITLAB_TOKEN` and `--hostname` to the child process, using the same `PIPELINE_WORKER_GITLAB_*` config as before. The GitHub forge (`src/forge/github.ts`) instead calls GitHub's REST/GraphQL API directly via `fetch`. `glab` must be installed and on `PATH` wherever `PIPELINE_WORKER_FORGE=gitlab` runs.
+- The GitLab forge (`src/forge/gitlab.ts`) integrates with GitLab through the `glab` CLI (`glab api ...`): it authenticates non-interactively by passing `GITLAB_TOKEN` and `--hostname` to the child process, reading `gitlab.host`/`gitlab.token` from the settings file. The GitHub forge (`src/forge/github.ts`) instead calls GitHub's REST/GraphQL API directly via `fetch`. `glab` must be installed and on `PATH` wherever `"forge": "gitlab"` runs.
 - Errors are plain `Error` with labeled messages, not typed error classes. Best-effort vs fatal is decided by where the try/catch sits.
 
 ## Never-throw contracts

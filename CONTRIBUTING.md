@@ -26,7 +26,7 @@ Node.js >= 20.12 is required.
 ## Design ground rules
 
 - The caller's working tree is sacred: all workflow steps run in a disposable worktree.
-- All configuration, including tokens, comes from environment variables only — never logged. There is no config file.
+- All configuration, including tokens, comes from `~/.config/pipeline-worker/config.json` only (`$XDG_CONFIG_HOME` honored) — never logged. No environment variables, no per-repo config file.
 - Agent CLI flags must be verified against the installed CLI or official docs before use; don't guess (see `src/agent/*.ts`).
 - Every retry loop must be bounded (`maxFixAttempts`, the polling window). Never retry indefinitely.
 - Agent tokens are a budget: don't add agent invocations where a plain API call will do.

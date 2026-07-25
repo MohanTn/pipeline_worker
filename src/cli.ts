@@ -19,7 +19,7 @@ import { adoptBranch, resolveResumeMode } from './workflow/adoptBranch.js';
 import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
 import { maybeReviewMergeRequest } from './workflow/reviewMr.js';
 import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './workflow/runPlan.js';
-import { beginRun, endRun, runStep, seedRunTokens } from './ui/steps.js';
+import { beginRun, endRun, runStep, seedRunTokens, setPlainOutput } from './ui/steps.js';
 import { setCompletionSound } from './ui/notify.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
 import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
@@ -143,6 +143,7 @@ program
       const repoRoot = await findRepoRoot(process.cwd());
       const config = loadConfig(repoRoot);
       setCompletionSound(config.completionSound);
+      setPlainOutput(config.plainOutput);
       const forge = createForge(config);
       const agent = selectAgent(config);
 
@@ -190,6 +191,7 @@ program
       const repoRoot = await findRepoRoot(process.cwd());
       const config = loadConfig(repoRoot);
       setCompletionSound(config.completionSound);
+      setPlainOutput(config.plainOutput);
       const forge = createForge(config);
       const agent = selectAgent(config);
 

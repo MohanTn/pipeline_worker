@@ -1,37 +1,36 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runWorkflow } from '../src/workflow/orchestrate.js';
 
 /**
- * Mirrors config.test.ts's env isolation: a real .env for this repo (loaded
- * whenever pipeline-worker runs on itself) would otherwise leak into these
- * assertions on the default forge.
+ * Mirrors config.test.ts's isolation: runWorkflow calls loadConfig, which
+ * reads (and, on first run, creates) $XDG_CONFIG_HOME/pipeline-worker/config.json
+ * — point that at a throwaway directory so the real ~/.config never decides
+ * what these assertions see.
  */
-const ENV_PREFIX = 'PIPELINE_WORKER_';
-let savedEnv: Record<string, string | undefined> = {};
+let configHome: string;
+let savedConfigHome: string | undefined;
 
 beforeEach(() => {
-  savedEnv = {};
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith(ENV_PREFIX)) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
-    }
-  }
+  savedConfigHome = process.env.XDG_CONFIG_HOME;
+  configHome = mkdtempSync(join(tmpdir(), 'pipeline-worker-confighome-'));
+  process.env.XDG_CONFIG_HOME = configHome;
 });
 
-// fallow-ignore-next-line complexity
 afterEach(() => {
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith(ENV_PREFIX)) delete process.env[key];
-  }
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value !== undefined) process.env[key] = value;
-  }
+  if (savedConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedConfigHome;
+  rmSync(configHome, { recursive: true, force: true });
 });
+
+/** Writes the settings file loadConfig will read for this test. */
+function writeSettings(settings: Record<string, unknown>): void {
+  mkdirSync(join(configHome, 'pipeline-worker'), { recursive: true });
+  writeFileSync(join(configHome, 'pipeline-worker', 'config.json'), JSON.stringify(settings), 'utf-8');
+}
 
 function withTempDir(fn: (dir: string) => Promise<void>): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-runworkflow-test-'));
@@ -45,7 +44,7 @@ test('runWorkflow rejects immediately when forge is gitlab (the default) and no 
 
 test('runWorkflow does not raise the ticket error when forge is github', () =>
   withTempDir(async (dir) => {
-    process.env.PIPELINE_WORKER_FORGE = 'github';
+    writeSettings({ forge: 'github' });
     // dir isn't a git repo, so runWorkflow still fails past the guard — on
     // capturing the diff — confirming the ticket check was skipped rather
     // than passed by other means.

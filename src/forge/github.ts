@@ -2,13 +2,14 @@
  * GitHub REST ForgeClient. Maps GitHub concepts onto the forge-neutral
  * shapes: pull request -> MergeRequest (iid = PR number), the set of Actions
  * workflow runs for the PR's head SHA -> one aggregated Pipeline, workflow
- * jobs -> PipelineJob. The token is deliberately sourced only from an
- * environment variable and never logged.
+ * jobs -> PipelineJob. The token comes from the settings file's
+ * `github.token` (see config/file.ts) and is never logged.
  */
 
 import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
 import type { CreateMrArgs, ForgeClient, InlineComment } from './types.js';
 import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
+import { configFilePath } from '../config/file.js';
 
 interface GithubAuth {
   apiUrl: string;
@@ -19,16 +20,15 @@ interface GithubAuth {
 
 // fallow-ignore-next-line complexity
 function resolveGithubAuth(config: PipelineWorkerConfig): GithubAuth {
-  // config.github.repo is already env/.env-resolved by config/loader.ts; the
-  // token and the API URL override are read directly from the environment here.
-  const apiUrl = process.env.PIPELINE_WORKER_GITHUB_API_URL || 'https://api.github.com';
-  const repo = config.github.repo;
-  const token = process.env.PIPELINE_WORKER_GITHUB_TOKEN || process.env.GITHUB_TOKEN;
+  // Everything here is already resolved by config/loader.ts from
+  // ~/.config/pipeline-worker/config.json (repo also falls back to the
+  // repo's own origin remote).
+  const { apiUrl, repo, token } = config.github;
 
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) {
-    throw new Error('GitHub repo is not configured (set PIPELINE_WORKER_GITHUB_REPO to "owner/name").');
+    throw new Error(`GitHub repo is not configured (set "github": { "repo": "owner/name" } in ${configFilePath()}).`);
   }
-  if (!token) throw new Error('PIPELINE_WORKER_GITHUB_TOKEN (or GITHUB_TOKEN) environment variable is not set.');
+  if (!token) throw new Error(`GitHub token is not configured (set "github": { "token": "..." } in ${configFilePath()}).`);
 
   return { apiUrl: apiUrl.replace(/\/$/, ''), repo, token };
 }

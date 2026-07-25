@@ -2,41 +2,54 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config/loader.js';
+import { configFilePath } from '../src/config/file.js';
 
 const execFileAsync = promisify(execFile);
 
 /**
- * These tests assert on loadConfig's default/env-only resolution, which only
- * holds with a clean environment. A real .env (e.g. this repo's own, loaded
- * whenever pipeline-worker runs on itself) sets these for the whole process,
- * so isolate each test from whatever the ambient environment holds.
+ * loadConfig reads exactly one file — $XDG_CONFIG_HOME/pipeline-worker/config.json
+ * — so every test points XDG_CONFIG_HOME at a throwaway directory. Without
+ * that, these assertions would run against (and, on first run, write into)
+ * the real ~/.config of whoever runs the suite.
  */
-const ENV_PREFIX = 'PIPELINE_WORKER_';
-let savedEnv: Record<string, string | undefined> = {};
+let configHome: string;
+let savedConfigHome: string | undefined;
 
 beforeEach(() => {
-  savedEnv = {};
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith(ENV_PREFIX)) {
-      savedEnv[key] = process.env[key];
-      delete process.env[key];
-    }
-  }
+  savedConfigHome = process.env.XDG_CONFIG_HOME;
+  configHome = mkdtempSync(join(tmpdir(), 'pipeline-worker-confighome-'));
+  process.env.XDG_CONFIG_HOME = configHome;
 });
 
-// fallow-ignore-next-line complexity
 afterEach(() => {
-  for (const key of Object.keys(process.env)) {
-    if (key.startsWith(ENV_PREFIX)) delete process.env[key];
-  }
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value !== undefined) process.env[key] = value;
-  }
+  if (savedConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = savedConfigHome;
+  rmSync(configHome, { recursive: true, force: true });
 });
+
+/** Writes the settings file the loader will read for this test. */
+function writeSettings(settings: Record<string, unknown>): void {
+  const path = configFilePath();
+  mkdirSync(join(path, '..'), { recursive: true });
+  writeFileSync(path, JSON.stringify(settings), 'utf-8');
+}
+
+/** Captures console.error output (the loader's warning channel) while fn runs. */
+function captureWarnings(fn: () => void): string[] {
+  const warnings: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+  try {
+    fn();
+  } finally {
+    console.error = originalError;
+  }
+  return warnings;
+}
 
 function withTempDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-config-test-'));
@@ -59,12 +72,42 @@ async function withTempGitRepo(remoteUrl: string, fn: (dir: string) => void | Pr
   }
 }
 
-test('loadConfig returns defaults in an empty repo', () => {
+test('loadConfig returns defaults in an empty repo with no settings file', () => {
   withTempDir((dir) => {
     const config = loadConfig(dir);
     assert.equal(config.agent, 'claude');
     assert.equal(config.maxFixAttempts, 5);
     assert.equal(config.build, ''); // no toolchain marker in an empty dir: checks are skipped
+  });
+});
+
+test('the first run creates config.json seeded with every default, so there is a file to edit', () => {
+  withTempDir((dir) => {
+    assert.equal(existsSync(configFilePath()), false);
+    captureWarnings(() => loadConfig(dir));
+
+    assert.equal(existsSync(configFilePath()), true);
+    const written = JSON.parse(readFileSync(configFilePath(), 'utf-8')) as Record<string, unknown>;
+    assert.equal(written.agent, 'claude');
+    assert.equal(written.forge, 'gitlab');
+    assert.deepEqual(written.gitlab, { host: '', projectId: 0, repoBase: '', token: '' });
+    assert.equal(written.switchToFeatureBranch, true);
+    // build/lint/test stay out: they are auto-detected per repo, and one
+    // global file serves every repo.
+    assert.equal('build' in written, false);
+  });
+});
+
+test('the created file announces itself, and a second run reads it instead of recreating it', () => {
+  withTempDir((dir) => {
+    const warnings = captureWarnings(() => loadConfig(dir));
+    assert.ok(
+      warnings.some((line) => line.includes('created') && line.includes(configFilePath())),
+      `expected the created path to be announced, got: ${warnings.join(' | ')}`,
+    );
+
+    writeSettings({ agent: 'pi' });
+    assert.equal(loadConfig(dir).agent, 'pi');
   });
 });
 
@@ -78,12 +121,10 @@ test('loadConfig defaults build/lint/test from detected npm scripts', () => {
   });
 });
 
-test('PIPELINE_WORKER_BUILD/LINT/TEST override detected defaults', () => {
+test('build/lint/test in the settings file override the detected defaults', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x', lint: 'y', test: 'z' } }));
-    process.env.PIPELINE_WORKER_BUILD = 'make all';
-    process.env.PIPELINE_WORKER_LINT = 'make lint';
-    process.env.PIPELINE_WORKER_TEST = 'make test';
+    writeSettings({ build: 'make all', lint: 'make lint', test: 'make test' });
     const config = loadConfig(dir);
     assert.equal(config.build, 'make all');
     assert.equal(config.lint, 'make lint');
@@ -91,20 +132,42 @@ test('PIPELINE_WORKER_BUILD/LINT/TEST override detected defaults', () => {
   });
 });
 
-test('PIPELINE_WORKER_BUILD set to an empty string explicitly skips the stage, even with a detected default', () => {
+test('"build": "" explicitly skips the stage, even with a detected default', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ scripts: { build: 'x' } }));
-    process.env.PIPELINE_WORKER_BUILD = '';
-    const config = loadConfig(dir);
-    assert.equal(config.build, '');
+    writeSettings({ build: '' });
+    assert.equal(loadConfig(dir).build, '');
   });
 });
 
-test('loadConfig falls back to defaults (and never throws) on missing repo info', () => {
+test('loadConfig falls back to defaults (and never throws) on a malformed settings file', () => {
   withTempDir((dir) => {
-    const config = loadConfig(dir);
-    assert.equal(config.agent, 'claude');
-    assert.equal(config.maxFixAttempts, 5);
+    const path = configFilePath();
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, '{ not json at all', 'utf-8');
+
+    let config;
+    const warnings = captureWarnings(() => {
+      config = loadConfig(dir);
+    });
+    assert.equal(config!.agent, 'claude');
+    assert.equal(config!.maxFixAttempts, 5);
+    assert.ok(warnings.some((line) => line.includes(path)), `expected a warning naming the file, got: ${warnings.join(' | ')}`);
+  });
+});
+
+test('a settings file holding a JSON array (not an object) degrades to defaults with a warning', () => {
+  withTempDir((dir) => {
+    const path = configFilePath();
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, '[]', 'utf-8');
+
+    let config;
+    const warnings = captureWarnings(() => {
+      config = loadConfig(dir);
+    });
+    assert.equal(config!.agent, 'claude');
+    assert.ok(warnings.some((line) => line.includes('not a JSON object')));
   });
 });
 
@@ -125,113 +188,107 @@ test('loadConfig defaults branchPattern to pipeline-worker/{name} and cleanupOnS
   });
 });
 
-test('env vars set branchPattern and cleanupOnSuccess', () => {
+test('the settings file sets branchPattern and cleanupOnSuccess', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_BRANCH_PATTERN = '{type}/{name}';
-    process.env.PIPELINE_WORKER_CLEANUP = 'false';
+    writeSettings({ branchPattern: '{type}/{name}', cleanupOnSuccess: false });
     const config = loadConfig(dir);
     assert.equal(config.branchPattern, '{type}/{name}');
     assert.equal(config.cleanupOnSuccess, false);
   });
 });
 
-test('loadConfig defaults cleanupEarly to false', () => {
+test('loadConfig defaults cleanupEarly to false and switchToFeatureBranch to true', () => {
   withTempDir((dir) => {
-    assert.equal(loadConfig(dir).cleanupEarly, false);
+    const config = loadConfig(dir);
+    assert.equal(config.cleanupEarly, false);
+    assert.equal(config.switchToFeatureBranch, true);
   });
 });
 
-test('env var PIPELINE_WORKER_CLEANUP_EARLY sets cleanupEarly', () => {
+test('the settings file can turn switchToFeatureBranch off', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_CLEANUP_EARLY = 'true';
+    writeSettings({ switchToFeatureBranch: false });
+    assert.equal(loadConfig(dir).switchToFeatureBranch, false);
+  });
+});
+
+test('"cleanupEarly": true sets cleanupEarly', () => {
+  withTempDir((dir) => {
+    writeSettings({ cleanupEarly: true });
     assert.equal(loadConfig(dir).cleanupEarly, true);
   });
 });
 
-test('loadConfig defaults intentModel to haiku', () => {
-  withTempDir((dir) => {
-    assert.equal(loadConfig(dir).intentModel, 'haiku');
-  });
-});
-
-test('loadConfig defaults runLintAndTest to true', () => {
+test('loadConfig defaults intentModel to haiku, runLintAndTest to true, plainOutput to false', () => {
   withTempDir((dir) => {
     const config = loadConfig(dir);
+    assert.equal(config.intentModel, 'haiku');
     assert.equal(config.runLintAndTest, true);
+    assert.equal(config.plainOutput, false);
   });
 });
 
-test('PIPELINE_WORKER_RUN_LINT_AND_TEST overrides the default', () => {
+test('"runLintAndTest": false overrides the default', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = 'false';
+    writeSettings({ runLintAndTest: false });
     assert.equal(loadConfig(dir).runLintAndTest, false);
   });
 });
 
-test('PIPELINE_WORKER_RUN_LINT_AND_TEST accepts the usual boolean spellings, cased and padded', () => {
+test('boolean settings accept the usual string spellings, cased and padded — hand-edited files quote things', () => {
   withTempDir((dir) => {
     for (const value of ['false', 'FALSE', ' false ', '0', 'no', 'off']) {
-      process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = value;
+      writeSettings({ runLintAndTest: value });
       assert.equal(loadConfig(dir).runLintAndTest, false, `expected ${JSON.stringify(value)} to disable lint/test`);
     }
     for (const value of ['true', 'TRUE', '1', 'yes', 'on']) {
-      process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = value;
+      writeSettings({ runLintAndTest: value });
       assert.equal(loadConfig(dir).runLintAndTest, true, `expected ${JSON.stringify(value)} to enable lint/test`);
     }
   });
 });
 
-test('an unparseable boolean env var falls back to the default and warns instead of failing silently', () => {
+test('an unparseable boolean setting falls back to the default and warns instead of failing silently', () => {
   withTempDir((dir) => {
-    const warnings: string[] = [];
-    const originalError = console.error;
-    console.error = (message: unknown) => warnings.push(String(message));
-    try {
-      process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = 'flase';
-      assert.equal(loadConfig(dir).runLintAndTest, true);
-    } finally {
-      console.error = originalError;
-    }
+    writeSettings({ runLintAndTest: 'flase' });
+    let config;
+    const warnings = captureWarnings(() => {
+      config = loadConfig(dir);
+    });
+    assert.equal(config!.runLintAndTest, true);
     assert.ok(
-      warnings.some((w) => w.includes('PIPELINE_WORKER_RUN_LINT_AND_TEST') && w.includes('not a boolean')),
-      `expected a warning naming the variable, got: ${warnings.join(' | ')}`,
+      warnings.some((w) => w.includes('runLintAndTest') && w.includes('not a boolean')),
+      `expected a warning naming the setting, got: ${warnings.join(' | ')}`,
     );
   });
 });
 
-test('an empty boolean env var falls back to the default without warning', () => {
+test('an empty-string boolean setting falls back to the default without warning', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_RUN_LINT_AND_TEST = '';
-    assert.equal(loadConfig(dir).runLintAndTest, true);
+    writeSettings({ runLintAndTest: '' });
+    const warnings = captureWarnings(() => {
+      assert.equal(loadConfig(dir).runLintAndTest, true);
+    });
+    assert.ok(!warnings.some((w) => w.includes('runLintAndTest')));
   });
 });
 
-test('loadConfig defaults updateChangelog to false', () => {
+test('loadConfig defaults updateChangelog to false, and the file overrides it', () => {
   withTempDir((dir) => {
     assert.equal(loadConfig(dir).updateChangelog, false);
-  });
-});
-
-test('PIPELINE_WORKER_UPDATE_CHANGELOG overrides the default', () => {
-  withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_UPDATE_CHANGELOG = 'true';
+    writeSettings({ updateChangelog: true });
     assert.equal(loadConfig(dir).updateChangelog, true);
   });
 });
 
-test('PIPELINE_WORKER_INTENT_MODEL overrides the default', () => {
+test('intentModel and maxFixAttempts come from the file, and an invalid number falls back', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_INTENT_MODEL = 'sonnet';
-    assert.equal(loadConfig(dir).intentModel, 'sonnet');
-  });
-});
+    writeSettings({ intentModel: 'sonnet', maxFixAttempts: 2 });
+    const config = loadConfig(dir);
+    assert.equal(config.intentModel, 'sonnet');
+    assert.equal(config.maxFixAttempts, 2);
 
-test('PIPELINE_WORKER_MAX_FIX_ATTEMPTS overrides the default, and an invalid value falls back to it', () => {
-  withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS = '2';
-    assert.equal(loadConfig(dir).maxFixAttempts, 2);
-
-    process.env.PIPELINE_WORKER_MAX_FIX_ATTEMPTS = 'not-a-number';
+    writeSettings({ maxFixAttempts: 'not-a-number' });
     assert.equal(loadConfig(dir).maxFixAttempts, 5);
   });
 });
@@ -242,9 +299,9 @@ test('loadConfig defaults autoMergeOnGreen to true — a run is meant to reach a
   });
 });
 
-test('PIPELINE_WORKER_AUTO_MERGE_ON_GREEN=false restores the opt-in (manual-merge) behavior', () => {
+test('"autoMergeOnGreen": false restores the opt-in (manual-merge) behavior', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN = 'false';
+    writeSettings({ autoMergeOnGreen: false });
     assert.equal(loadConfig(dir).autoMergeOnGreen, false);
   });
 });
@@ -257,76 +314,65 @@ test('loadConfig defaults squashOnMerge to false', () => {
 
 test('loadConfig warns when squashOnMerge is enabled alongside the default-on autoMergeOnGreen', () => {
   withTempDir((dir) => {
-    const originalError = console.error;
-    const warnings: string[] = [];
-    console.error = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
-    try {
-      process.env.PIPELINE_WORKER_SQUASH_ON_MERGE = 'true';
-      loadConfig(dir);
-    } finally {
-      console.error = originalError;
-    }
-    assert.ok(warnings.some((w) => w.includes('SQUASH_ON_MERGE') && w.includes('AUTO_MERGE_ON_GREEN')));
+    writeSettings({ squashOnMerge: true });
+    const warnings = captureWarnings(() => loadConfig(dir));
+    assert.ok(warnings.some((w) => w.includes('squashOnMerge') && w.includes('autoMergeOnGreen')));
   });
 });
 
 test('loadConfig does not warn when squashOnMerge is enabled with auto-merge explicitly turned off', () => {
   withTempDir((dir) => {
-    const originalError = console.error;
-    const warnings: string[] = [];
-    console.error = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
-    try {
-      process.env.PIPELINE_WORKER_SQUASH_ON_MERGE = 'true';
-      process.env.PIPELINE_WORKER_AUTO_MERGE_ON_GREEN = 'false';
-      loadConfig(dir);
-    } finally {
-      console.error = originalError;
-    }
-    assert.ok(!warnings.some((w) => w.includes('SQUASH_ON_MERGE')));
+    writeSettings({ squashOnMerge: true, autoMergeOnGreen: false });
+    const warnings = captureWarnings(() => loadConfig(dir));
+    assert.ok(!warnings.some((w) => w.includes('squashOnMerge')));
   });
 });
 
-test('env vars set forge, github.repo, and pollIntervalSeconds', () => {
+test('the settings file sets forge, github.repo/token/apiUrl, and pollIntervalSeconds', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_FORGE = 'github';
-    process.env.PIPELINE_WORKER_GITHUB_REPO = 'acme/widgets';
-    process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '60';
+    writeSettings({
+      forge: 'github',
+      github: { repo: 'acme/widgets', token: 'ghp-x', apiUrl: 'https://github.acme.com/api/v3' },
+      pollIntervalSeconds: 60,
+    });
     const config = loadConfig(dir);
     assert.equal(config.forge, 'github');
     assert.equal(config.github.repo, 'acme/widgets');
+    assert.equal(config.github.token, 'ghp-x');
+    assert.equal(config.github.apiUrl, 'https://github.acme.com/api/v3');
     assert.equal(config.pollIntervalSeconds, 60);
   });
 });
 
-test('env vars set github.repo and gitlab.host/projectId', () => {
+test('github.apiUrl defaults to the public API when the file omits it', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
-    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://env.example.com';
-    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = '99';
-    const config = loadConfig(dir);
-    assert.equal(config.github.repo, 'env-owner/env-repo');
-    assert.equal(config.gitlab.host, 'https://env.example.com');
-    assert.equal(config.gitlab.projectId, 99);
+    assert.equal(loadConfig(dir).github.apiUrl, 'https://api.github.com');
+    assert.equal(loadConfig(dir).github.token, '');
   });
 });
 
-test('env vars set agent, forge, and poll interval', () => {
+test('the settings file sets gitlab.host/projectId/token', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_AGENT = 'copilot';
-    process.env.PIPELINE_WORKER_FORGE = 'github';
-    process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '60';
+    writeSettings({ gitlab: { host: 'https://gl.example.com', projectId: 99, token: 'glpat-x' } });
+    const config = loadConfig(dir);
+    assert.equal(config.gitlab.host, 'https://gl.example.com');
+    assert.equal(config.gitlab.projectId, 99);
+    assert.equal(config.gitlab.token, 'glpat-x');
+  });
+});
+
+test('the settings file sets agent and forge', () => {
+  withTempDir((dir) => {
+    writeSettings({ agent: 'copilot', forge: 'github' });
     const config = loadConfig(dir);
     assert.equal(config.agent, 'copilot');
     assert.equal(config.forge, 'github');
-    assert.equal(config.pollIntervalSeconds, 60);
   });
 });
 
 test('invalid agent/forge/poll values fall back to defaults instead of throwing', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_AGENT = 'gpt';
-    process.env.PIPELINE_WORKER_FORGE = 'bitbucket';
-    process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '-3';
+    writeSettings({ agent: 'gpt', forge: 'bitbucket', pollIntervalSeconds: -3 });
     const config = loadConfig(dir);
     assert.equal(config.agent, 'claude');
     assert.equal(config.forge, 'gitlab');
@@ -334,60 +380,52 @@ test('invalid agent/forge/poll values fall back to defaults instead of throwing'
   });
 });
 
-test('.env at repo root supplies defaults but never overrides real env', () => {
+test('a malformed nested section is ignored rather than throwing', () => {
   withTempDir((dir) => {
-    writeFileSync(join(dir, '.env'), 'PIPELINE_WORKER_FORGE=github\nPIPELINE_WORKER_POLL_INTERVAL_SECONDS=60\n');
-    process.env.PIPELINE_WORKER_POLL_INTERVAL_SECONDS = '30'; // real env wins over .env
+    writeSettings({ gitlab: 'https://gl.example.com' });
     const config = loadConfig(dir);
-    assert.equal(config.forge, 'github'); // came from .env
-    assert.equal(config.pollIntervalSeconds, 30);
+    assert.equal(config.gitlab.host, '');
+    assert.equal(config.gitlab.token, '');
   });
 });
 
-test('loadConfig accepts a non-numeric (namespace path) projectId from the env var', () => {
+test('loadConfig accepts a non-numeric (namespace path) projectId', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://gitlab.example.com';
-    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = 'my-group/my-project';
-    const config = loadConfig(dir);
-    assert.equal(config.gitlab.projectId, 'my-group/my-project');
+    writeSettings({ gitlab: { host: 'https://gitlab.example.com', projectId: 'my-group/my-project' } });
+    assert.equal(loadConfig(dir).gitlab.projectId, 'my-group/my-project');
   });
 });
 
-test('loadConfig auto-detects project path via PIPELINE_WORKER_GITLAB_REPO_BASE', () => {
+test('loadConfig auto-detects the project path from gitlab.repoBase', () => {
   withTempDir((dir) => {
     // Simulate: repoBase = dir, repoRoot = dir/Media/RetailMediaPortal
     const repoRoot = join(dir, 'Media', 'RetailMediaPortal');
-    process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
+    writeSettings({ gitlab: { repoBase: dir } });
     const config = loadConfig(repoRoot);
     assert.equal(config.gitlab.projectId, 'media/retail-media-portal');
     assert.equal(config.gitlab.repoBase, dir);
   });
 });
 
-test('loadConfig: explicit PIPELINE_WORKER_GITLAB_PROJECT_ID takes precedence over repoBase auto-detection', () => {
+test('loadConfig: an explicit gitlab.projectId takes precedence over repoBase auto-detection', () => {
   withTempDir((dir) => {
     const repoRoot = join(dir, 'Media', 'SomeProject');
     mkdirSync(repoRoot, { recursive: true });
-    process.env.PIPELINE_WORKER_GITLAB_HOST = 'https://gitlab.example.com';
-    process.env.PIPELINE_WORKER_GITLAB_PROJECT_ID = '42';
-    process.env.PIPELINE_WORKER_GITLAB_REPO_BASE = dir;
-    const config = loadConfig(repoRoot);
-    assert.equal(config.gitlab.projectId, 42);
+    writeSettings({ gitlab: { host: 'https://gitlab.example.com', projectId: 42, repoBase: dir } });
+    assert.equal(loadConfig(repoRoot).gitlab.projectId, 42);
   });
 });
 
-test('loadConfig auto-detects github.repo from the origin remote when unset elsewhere', async () => {
-  await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
-    const config = loadConfig(dir);
-    assert.equal(config.github.repo, 'acme/widgets');
+test('loadConfig auto-detects github.repo from the origin remote when the file omits it', async () => {
+  await withTempGitRepo('https://github.com/acme/widgets.git', (dir) => {
+    assert.equal(loadConfig(dir).github.repo, 'acme/widgets');
   });
 });
 
-test('loadConfig: PIPELINE_WORKER_GITHUB_REPO takes precedence over origin-remote auto-detection', async () => {
-  await withTempGitRepo('https://github.com/acme/widgets.git', async (dir) => {
-    process.env.PIPELINE_WORKER_GITHUB_REPO = 'env-owner/env-repo';
-    const config = loadConfig(dir);
-    assert.equal(config.github.repo, 'env-owner/env-repo');
+test('loadConfig: github.repo in the file takes precedence over origin-remote auto-detection', async () => {
+  await withTempGitRepo('https://github.com/acme/widgets.git', (dir) => {
+    writeSettings({ github: { repo: 'file-owner/file-repo' } });
+    assert.equal(loadConfig(dir).github.repo, 'file-owner/file-repo');
   });
 });
 
@@ -402,13 +440,15 @@ test('review config defaults to off, MAJOR-only, 10 comments', () => {
   });
 });
 
-test('PIPELINE_WORKER_REVIEW* overrides are honored, severity case-insensitively', () => {
+test('review* settings are honored, severity case-insensitively', () => {
   withTempDir((dir) => {
-    process.env.PIPELINE_WORKER_REVIEW = 'yes';
-    process.env.PIPELINE_WORKER_REVIEW_MODEL = 'sonnet';
-    process.env.PIPELINE_WORKER_REVIEW_MIN_SEVERITY = 'critical';
-    process.env.PIPELINE_WORKER_REVIEW_MAX_COMMENTS = '3';
-    process.env.PIPELINE_WORKER_REVIEW_CHUNK_CHARS = '8000';
+    writeSettings({
+      review: true,
+      reviewModel: 'sonnet',
+      reviewMinSeverity: 'critical',
+      reviewMaxComments: 3,
+      reviewChunkChars: 8000,
+    });
     const config = loadConfig(dir);
     assert.equal(config.review, true);
     assert.equal(config.reviewModel, 'sonnet');
@@ -418,20 +458,39 @@ test('PIPELINE_WORKER_REVIEW* overrides are honored, severity case-insensitively
   });
 });
 
-test('an unrecognized PIPELINE_WORKER_REVIEW_MIN_SEVERITY falls back to MAJOR with a warning, never silently', () => {
+test('an unrecognized reviewMinSeverity falls back to MAJOR with a warning, never silently', () => {
   withTempDir((dir) => {
-    const warnings: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => warnings.push(args.join(' '));
-    try {
-      process.env.PIPELINE_WORKER_REVIEW_MIN_SEVERITY = 'nitpick';
-      assert.equal(loadConfig(dir).reviewMinSeverity, 'MAJOR');
-    } finally {
-      console.error = originalError;
-    }
+    writeSettings({ reviewMinSeverity: 'nitpick' });
+    let config;
+    const warnings = captureWarnings(() => {
+      config = loadConfig(dir);
+    });
+    assert.equal(config!.reviewMinSeverity, 'MAJOR');
     assert.ok(
-      warnings.some((line) => line.includes('PIPELINE_WORKER_REVIEW_MIN_SEVERITY')),
-      `expected a warning naming the variable, got: ${JSON.stringify(warnings)}`,
+      warnings.some((line) => line.includes('reviewMinSeverity')),
+      `expected a warning naming the setting, got: ${JSON.stringify(warnings)}`,
     );
+  });
+});
+
+test('PIPELINE_WORKER_* environment variables no longer configure anything', () => {
+  withTempDir((dir) => {
+    process.env.PIPELINE_WORKER_AGENT = 'copilot';
+    process.env.PIPELINE_WORKER_FORGE = 'github';
+    try {
+      const config = loadConfig(dir);
+      assert.equal(config.agent, 'claude');
+      assert.equal(config.forge, 'gitlab');
+    } finally {
+      delete process.env.PIPELINE_WORKER_AGENT;
+      delete process.env.PIPELINE_WORKER_FORGE;
+    }
+  });
+});
+
+test('a repo-root .env file is no longer read', () => {
+  withTempDir((dir) => {
+    writeFileSync(join(dir, '.env'), 'PIPELINE_WORKER_FORGE=github\n');
+    assert.equal(loadConfig(dir).forge, 'gitlab');
   });
 });
