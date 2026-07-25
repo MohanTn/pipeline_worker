@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chunkDiff, detectLanguage } from '../src/review/chunkDiff.js';
+import { chunkDiff, detectLanguage, groupChunks } from '../src/review/chunkDiff.js';
 
 /**
  * Three files in one patch: a TypeScript file with two hunks (the case that
@@ -111,4 +111,65 @@ test('splits one oversized file into several chunks without losing a single adde
     assert.ok(chunk.body.length <= 400, `chunk of ${chunk.body.length} chars exceeds the budget`);
     assert.match(chunk.body, /@@ -0,0 \+1,200 @@/);
   }
+});
+
+/** n one-line files, each its own chunk out of chunkDiff — the shape a wide, shallow MR produces. */
+function manyFiles(count: number): string {
+  return (
+    Array.from({ length: count }, (_, i) =>
+      [`diff --git a/src/f${i}.ts b/src/f${i}.ts`, '--- /dev/null', `+++ b/src/f${i}.ts`, '@@ -0,0 +1,1 @@', `+const v${i} = ${i};`].join('\n'),
+    ).join('\n') + '\n'
+  );
+}
+
+test('groupChunks packs a wide diff into a single turn when the budget allows — one session per MR, not per file', () => {
+  const chunks = chunkDiff(manyFiles(40), 200_000);
+  assert.equal(chunks.length, 40, 'chunkDiff still cuts per file');
+
+  const turns = groupChunks(chunks, 200_000, 0);
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].length, 40);
+});
+
+test('groupChunks caps a turn by file count, for a local model that loses the thread before it runs out of context', () => {
+  const turns = groupChunks(chunkDiff(manyFiles(7), 200_000), 200_000, 3);
+  assert.deepEqual(
+    turns.map((turn) => turn.length),
+    [3, 3, 1],
+  );
+});
+
+test('groupChunks closes a turn once the char budget is reached, whatever the file limit allows', () => {
+  const chunks = chunkDiff(manyFiles(6), 200_000);
+  const perChunk = chunks[0].body.length;
+  const turns = groupChunks(chunks, perChunk * 2, 0);
+  assert.deepEqual(
+    turns.map((turn) => turn.length),
+    [2, 2, 2],
+  );
+});
+
+test('groupChunks keeps every chunk of a split file, giving an over-budget chunk its own turn rather than dropping it', () => {
+  const added = Array.from({ length: 200 }, (_, i) => `+line ${i + 1}`);
+  const patch = ['diff --git a/src/big.ts b/src/big.ts', '--- /dev/null', '+++ b/src/big.ts', '@@ -0,0 +1,200 @@', ...added, ''].join('\n');
+  const chunks = chunkDiff(patch, 400);
+
+  // A budget below one chunk's size must still place every chunk somewhere.
+  const turns = groupChunks(chunks, 10, 0);
+  assert.equal(turns.length, chunks.length);
+  assert.equal(turns.flat().length, chunks.length);
+});
+
+test('groupChunks counts distinct files, so the several chunks of one split file share a turn', () => {
+  const added = Array.from({ length: 60 }, (_, i) => `+line ${i + 1}`);
+  const patch = ['diff --git a/src/big.ts b/src/big.ts', '--- /dev/null', '+++ b/src/big.ts', '@@ -0,0 +1,60 @@', ...added, ''].join('\n');
+  const chunks = chunkDiff(patch, 300);
+  assert.ok(chunks.length > 1);
+
+  const turns = groupChunks(chunks, 200_000, 1);
+  assert.equal(turns.length, 1, 'one file is one file, however many chunks it took');
+});
+
+test('groupChunks on an empty diff spends no turn at all', () => {
+  assert.deepEqual(groupChunks([], 200_000, 0), []);
 });

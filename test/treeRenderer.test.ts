@@ -241,6 +241,34 @@ test('the header token total updates as soon as a step gains tokens', () => {
   });
 });
 
+test('a step row shows its input/cache/output split while the run total stays in the header', () => {
+  withRig(({ out, tree }) => {
+    tree.addTokens('capture', 101_700, { inputTokens: 98_500, cacheReadTokens: 92_000, cacheWriteTokens: 4000, outputTokens: 3200 });
+    const text = out.text();
+    assert.match(text, /in 98\.5k \(92k cached\) · out 3\.2k/);
+    assert.match(text, /running · 101\.7k tok/);
+  });
+});
+
+test('stop writes the per-turn token table into scrollback beneath the settled tree', () => {
+  const rig = makeRig();
+  rig.tree.addTokens('capture', 101_700, { inputTokens: 98_500, cacheReadTokens: 92_000, cacheWriteTokens: 4000, outputTokens: 3200 });
+  rig.out.writes = [];
+  rig.renderer.stop('done', 'MR #12 merged', rig.tree);
+  const text = rig.out.text();
+  assert.match(text, /token usage/);
+  assert.match(text, /capture {2}in 2\.5k · cache-read 92k · cache-write 4k · out 3\.2k/);
+  assert.match(text, /total {4}101\.7k tok/);
+});
+
+test('stop writes no token table when no step reported a split', () => {
+  const rig = makeRig();
+  rig.tree.addTokens('capture', 4400);
+  rig.out.writes = [];
+  rig.renderer.stop('done', undefined, rig.tree);
+  assert.ok(!rig.out.text().includes('token usage'));
+});
+
 function makeRows(specs: Array<{ id: string; depth: number; status: 'done' | 'running' | 'pending' }>): TreeRow[] {
   return specs.map((s, i) => ({
     node: { id: s.id, label: s.id, detail: '', status: s.status, children: [] },

@@ -40,6 +40,33 @@ test('a finished step with known tokens includes them alongside the duration', (
   assert.match(finishLine, /1\.9k tok/);
 });
 
+test('a finished step with a reported split shows input/cache/output instead of the bare total', () => {
+  const { lines, tree } = makeRig();
+  tree.start('capture');
+  tree.addTokens('capture', 101_700, { inputTokens: 98_500, cacheReadTokens: 92_000, cacheWriteTokens: 4000, outputTokens: 3200 });
+  tree.finish('capture', 'done');
+  const finishLine = lines.find((l) => l.includes('✓') && l.includes('capture'))!;
+  assert.match(finishLine, /in 98\.5k \(92k cached\) · out 3\.2k/);
+  assert.doesNotMatch(finishLine, /101\.7k tok/);
+});
+
+test('stop prints the per-turn token table beneath the run, splitting fresh input from cache reuse', () => {
+  const { lines, renderer, tree } = makeRig();
+  tree.addTokens('capture', 101_700, { inputTokens: 98_500, cacheReadTokens: 92_000, cacheWriteTokens: 4000, outputTokens: 3200 });
+  renderer.stop('done', undefined, tree);
+  const footer = lines.join('\n');
+  assert.match(footer, /token usage/);
+  assert.match(footer, /capture {2}in 2\.5k · cache-read 92k · cache-write 4k · out 3\.2k/);
+  assert.match(footer, /total {4}101\.7k tok/);
+});
+
+test('stop omits the token table when no step reported a split', () => {
+  const { lines, renderer, tree } = makeRig();
+  tree.addTokens('capture', 4400);
+  renderer.stop('done', undefined, tree);
+  assert.ok(!lines.some((l) => l.includes('token usage')));
+});
+
 test('a failed step prints the ✗ glyph', () => {
   const { lines, tree } = makeRig();
   tree.start('ci-watch');

@@ -51,6 +51,16 @@ export interface AgentInvokeOptions {
 export interface AgentUsage {
   /** Prompt-side tokens, with any cache-creation/cache-read tokens folded in. */
   inputTokens?: number;
+  /**
+   * The share of inputTokens the model read back from the prompt cache instead
+   * of processing fresh. Reported separately because it dominates a multi-turn
+   * agent loop — every internal turn re-sends the whole prompt and re-counts it
+   * — while billing at a fraction of fresh input, so a total alone makes a
+   * cheap turn look enormous.
+   */
+  cacheReadTokens?: number;
+  /** The share of inputTokens this turn wrote into the prompt cache. */
+  cacheWriteTokens?: number;
   outputTokens?: number;
   /** input + output when both are known, else whichever side is known. */
   totalTokens?: number;

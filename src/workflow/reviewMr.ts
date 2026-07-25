@@ -16,7 +16,7 @@
 
 import { mergeBase } from '../git/commit.js';
 import { diffTextSinceRef } from '../git/diff.js';
-import { chunkDiff } from '../review/chunkDiff.js';
+import { chunkDiff, groupChunks } from '../review/chunkDiff.js';
 import { normalizeSuggestionFence } from '../review/findings.js';
 import { reviewDiff } from '../review/reviewDiff.js';
 import { note, runStep, skipStep } from '../ui/steps.js';
@@ -36,6 +36,41 @@ export function scopeChunks(chunks: DiffChunk[], scopeFiles: string[] | undefine
   if (!scopeFiles) return chunks;
   const wanted = new Set(scopeFiles);
   return chunks.filter((chunk) => wanted.has(chunk.path));
+}
+
+/**
+ * Room the review prompt's instructions and per-file headers need on top of the
+ * diff itself (see review/prompt.ts). Held back from little-coder's budget so
+ * its adapter's middle-out trim never lands inside the patch, which would
+ * renumber lines and make every finding unpostable.
+ */
+const REVIEW_PROMPT_OVERHEAD_CHARS = 1_500;
+
+/** Files per turn for a small local model: enough neighbouring context to be useful, few enough to stay inside an 8-12k context. */
+const LOCAL_FILES_PER_TURN = 3;
+
+/** Never leave a local turn with less diff than this, however small maxPromptChars is set — below it a "review" is meaningless. */
+const MIN_LOCAL_TURN_CHARS = 2_000;
+
+/**
+ * How much diff one review turn carries, for this agent. A cloud model gets the
+ * whole MR/PR in one session (that is what the reviewChunkChars default is
+ * sized for), and `little-coder` — pi against a small local model — gets a few
+ * files at a time, clamped to its own prompt cap so the adapter never truncates
+ * a diff it is being asked to anchor comments in. Explicit settings win over
+ * both: only `reviewFilesPerTurn: 0` defers to the agent.
+ */
+export function reviewTurnLimits(config: PipelineWorkerConfig): { maxChars: number; maxFiles: number } {
+  // The cloud path deliberately reads nothing from the littleCoder section:
+  // one whole-diff turn is decided by reviewChunkChars alone.
+  if (config.agent !== 'little-coder') return { maxChars: config.reviewChunkChars, maxFiles: config.reviewFilesPerTurn };
+
+  const promptCap = config.littleCoder.maxPromptChars;
+  const localCap = promptCap > 0 ? Math.max(MIN_LOCAL_TURN_CHARS, promptCap - REVIEW_PROMPT_OVERHEAD_CHARS) : Number.POSITIVE_INFINITY;
+  return {
+    maxChars: Math.min(config.reviewChunkChars, localCap),
+    maxFiles: config.reviewFilesPerTurn > 0 ? config.reviewFilesPerTurn : LOCAL_FILES_PER_TURN,
+  };
 }
 
 /** Posts each surviving finding, individually: one rejected position must not cost the comments that would still land. */
@@ -77,15 +112,18 @@ export async function maybeReviewMergeRequest(
 
   try {
     return await runStep('review', `${config.agent} reviews the diff and comments on the lines it flags`, async () => {
+      const limits = reviewTurnLimits(config);
       const base = await mergeBase(worktreePath, `origin/${targetBranch}`);
-      const chunks = scopeChunks(chunkDiff(await diffTextSinceRef(worktreePath, base), config.reviewChunkChars), scopeFiles);
+      const chunks = scopeChunks(chunkDiff(await diffTextSinceRef(worktreePath, base), limits.maxChars), scopeFiles);
       if (chunks.length === 0) {
         note('nothing reviewable in this diff (no added lines a comment could anchor to)');
         return 0;
       }
 
-      note(`reviewing ${chunks.length} chunk(s) across ${new Set(chunks.map((chunk) => chunk.path)).size} file(s)`);
-      const { findings } = await reviewDiff(agent, chunks, worktreePath, {
+      const turns = groupChunks(chunks, limits.maxChars, limits.maxFiles);
+      const fileCount = new Set(chunks.map((chunk) => chunk.path)).size;
+      note(`reviewing ${fileCount} file(s) in ${turns.length} agent turn(s)`);
+      const { findings } = await reviewDiff(agent, turns, worktreePath, {
         model: config.reviewModel,
         minSeverity: config.reviewMinSeverity,
         maxComments: config.reviewMaxComments,

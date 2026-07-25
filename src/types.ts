@@ -101,8 +101,22 @@ export interface PipelineWorkerConfig {
   reviewMinSeverity: ReviewSeverity;
   /** Hard cap on how many comments one run may post. */
   reviewMaxComments: number;
-  /** Char budget per diff chunk sent to the agent (one agent turn per chunk). */
+  /**
+   * Char budget for one review turn. Small files are packed together up to
+   * this, and a single file larger than it is split across turns — so this is
+   * what decides how much diff one agent session carries. The default is sized
+   * for a cloud model reviewing a whole MR/PR in one session; `little-coder`
+   * clamps it to its own prompt cap (see reviewTurnLimits).
+   */
   reviewChunkChars: number;
+  /**
+   * How many files one review turn may cover. 0 (the default) means
+   * "decide from the agent": a cloud model takes the whole diff in one turn,
+   * `little-coder` takes a few files at a time, since a 5-25GB local model
+   * loses the thread long before it runs out of context. Set a number to pin it
+   * for either.
+   */
+  reviewFilesPerTurn: number;
   /**
    * When the run settles green, check the feature branch out in your own repo
    * instead of leaving you on the target branch — so the next round of edits

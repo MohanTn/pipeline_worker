@@ -494,7 +494,9 @@ test('review config defaults to off, MAJOR-only, 10 comments', () => {
     assert.equal(config.reviewModel, ''); // '' = the adapter's default (stronger) model
     assert.equal(config.reviewMinSeverity, 'MAJOR');
     assert.equal(config.reviewMaxComments, 10);
-    assert.equal(config.reviewChunkChars, 24_000);
+    assert.equal(config.reviewChunkChars, 200_000);
+    // 0 = "decide from the agent" (see reviewTurnLimits), so it must survive parsing rather than falling back.
+    assert.equal(config.reviewFilesPerTurn, 0);
   });
 });
 
@@ -506,6 +508,7 @@ test('review* settings are honored, severity case-insensitively', () => {
       reviewMinSeverity: 'critical',
       reviewMaxComments: 3,
       reviewChunkChars: 8000,
+      reviewFilesPerTurn: 4,
     });
     const config = loadConfig(dir);
     assert.equal(config.review, true);
@@ -513,6 +516,14 @@ test('review* settings are honored, severity case-insensitively', () => {
     assert.equal(config.reviewMinSeverity, 'CRITICAL');
     assert.equal(config.reviewMaxComments, 3);
     assert.equal(config.reviewChunkChars, 8000);
+    assert.equal(config.reviewFilesPerTurn, 4);
+  });
+});
+
+test('a negative reviewFilesPerTurn falls back to the default instead of disabling grouping', () => {
+  withTempDir((dir) => {
+    writeSettings({ reviewFilesPerTurn: -2 });
+    assert.equal(loadConfig(dir).reviewFilesPerTurn, 0);
   });
 });
 

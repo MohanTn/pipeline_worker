@@ -90,7 +90,7 @@ Each turn gets a one-sentence `--system-prompt` and a gated tool set. On `claude
 | --- | --- |
 | intent capture | `Read` — the diff is embedded in the prompt (capped at 20000 chars, trimmed middle-out) |
 | conflict resolution | `Read`, `Write`, `Edit` — staging and committing stay with pipeline-worker |
-| MR/PR review | `Read` — works from the diff in its prompt, bounded by `reviewChunkChars` |
+| MR/PR review | `Read` — works from the diff in its prompt, one turn per `reviewChunkChars` of diff |
 | CI fix / local check fix | unrestricted — fixing a red build means running the failing command |
 
 `copilot` has no per-invocation allowlist (`--allow-all-tools` is required unattended), so its turns get full tool access; the system prompt still applies.
@@ -104,7 +104,7 @@ Each turn gets a one-sentence `--system-prompt` and a gated tool set. On `claude
   "agent": "little-coder",
   "littleCoder": { "binary": "little-coder", "maxPromptChars": 12000 },
   "intentModel": "llamacpp/qwen3-30b",
-  "reviewChunkChars": 6000,
+  "reviewFilesPerTurn": 2,
   "review": false
 }
 ```
@@ -153,7 +153,7 @@ The commit is made in the run's own worktree, so `git pull` once it finishes. If
 
 With `"review": true`, the agent reviews the branch diff right after the MR/PR opens and comments **on the diff lines**:
 
-- **Chunking** — split per file, then further at `reviewChunkChars`; one agent turn per chunk, working from the diff only.
+- **One session per MR/PR** — the whole diff goes to the agent in a single turn, each file as its own labeled section, working from the diff only. A diff over `reviewChunkChars` (default 200000, ~50k tokens) splits into as few further turns as it takes. `little-coder` instead gets 3 files per turn, clamped under its `maxPromptChars`; set `reviewFilesPerTurn` to pin the group size for any agent.
 - **Line targeting** — findings may only anchor to an added (`+`) line; anything else the model returns is dropped before any API call.
 - **One-click fixes** — comments carry a ` ```suggestion ` block in the active forge's dialect.
 - **Gatekeeping** — only logic errors, security holes, performance problems, and severe anti-patterns; findings below `reviewMinSeverity` are dropped, duplicates collapsed, at most `reviewMaxComments` posted, most severe first.

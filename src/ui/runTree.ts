@@ -17,6 +17,22 @@ export type StepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped';
 /** The whole run's terminal status, shown in the header line. */
 export type RunStatus = 'running' | 'done' | 'failed' | 'escalated' | 'interrupted';
 
+/**
+ * How one step's prompt/completion spend breaks down, summed across every agent
+ * turn attributed to it. Mirrors the reported half of agent/types.ts's
+ * AgentUsage; every field is optional and absent means unknown, never zero (an
+ * adapter whose CLI reports no usage contributes none of them).
+ */
+export interface TokenSplit {
+  /** Prompt-side tokens, with cacheReadTokens/cacheWriteTokens folded in. */
+  inputTokens?: number;
+  /** The share of inputTokens served from the prompt cache rather than processed fresh. */
+  cacheReadTokens?: number;
+  /** The share of inputTokens written into the prompt cache. */
+  cacheWriteTokens?: number;
+  outputTokens?: number;
+}
+
 export interface StepNode {
   /** Unique within the tree; children conventionally use 'parent/child' ids. */
   id: string;
@@ -31,6 +47,8 @@ export interface StepNode {
   durationMs?: number;
   /** Best-effort agent tokens attributed to this step; absent means unknown, never zero. */
   tokens?: number;
+  /** The input/cache/output split behind `tokens`, summed over this step's turns; absent when the adapter reported only a total (or nothing). */
+  usage?: TokenSplit;
   /** Rendered as 'attempt N/M' when both are present. */
   attempt?: number;
   maxAttempts?: number;
@@ -66,6 +84,23 @@ export interface TreeRow {
   depth: number;
   /** isLast[d] — whether the chain through this row is the final sibling at depth d. Drives '├─' vs '└─' and '│' vs ' ' continuation. */
   isLast: boolean[];
+}
+
+/** Adds one reported figure onto a running one, leaving the field untouched when the incoming side is unknown or nonsense (absence must not read as zero). */
+function sumField(current: number | undefined, incoming: number | undefined): number | undefined {
+  if (incoming === undefined || !Number.isFinite(incoming) || incoming < 0) return current;
+  return (current ?? 0) + incoming;
+}
+
+/** Sums two splits field by field. Returns the current split unchanged when the incoming one reports nothing at all, so a usage-less turn never creates an all-zero breakdown. */
+function mergeSplit(current: TokenSplit | undefined, incoming: TokenSplit): TokenSplit | undefined {
+  const merged: TokenSplit = {
+    inputTokens: sumField(current?.inputTokens, incoming.inputTokens),
+    cacheReadTokens: sumField(current?.cacheReadTokens, incoming.cacheReadTokens),
+    cacheWriteTokens: sumField(current?.cacheWriteTokens, incoming.cacheWriteTokens),
+    outputTokens: sumField(current?.outputTokens, incoming.outputTokens),
+  };
+  return Object.values(merged).some((value) => value !== undefined) ? merged : current;
 }
 
 export class RunTree {
@@ -148,10 +183,12 @@ export class RunTree {
     return node;
   }
 
-  addTokens(id: string, tokens: number): void {
+  /** `split` is optional: an adapter that reports only a total (or a claude envelope missing the usage fields) still gets its spend counted, just without the breakdown. */
+  addTokens(id: string, tokens: number, split?: TokenSplit): void {
     if (!Number.isFinite(tokens) || tokens <= 0) return;
     const node = this.getOrAdd(id);
     node.tokens = (node.tokens ?? 0) + tokens;
+    if (split) node.usage = mergeSplit(node.usage, split);
     this.onChange({ kind: 'tokens', node });
   }
 
@@ -172,6 +209,11 @@ export class RunTree {
     let total = this.seededTokens;
     for (const node of this.index.values()) total += node.tokens ?? 0;
     return total;
+  }
+
+  /** Every step that reported a token split, in display order — the rows of the settled run's per-turn usage table. */
+  usageRows(): Array<{ label: string; usage: TokenSplit }> {
+    return this.flatten().flatMap((row) => (row.node.usage ? [{ label: row.node.label, usage: row.node.usage }] : []));
   }
 
   /** Depth-first rows for rendering, with last-sibling flags per ancestor level for branch glyphs. */

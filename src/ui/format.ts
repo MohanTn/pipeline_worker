@@ -1,6 +1,19 @@
 /** Shared human-readable formatting helpers for token/duration figures and output structure. */
 
 import { styleText } from 'node:util';
+import type { TokenSplit } from './runTree.js';
+
+/**
+ * A token count without the unit — for figures whose own label already says
+ * what they are (`in 98.5k`, `cache-read 92k`). Scales at 1000 with one decimal
+ * place, trailing `.0` trimmed, and renders an unusable number as `?`.
+ */
+export function formatCount(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens < 0) return '?';
+  if (tokens < 1000) return `${Math.round(tokens)}`;
+  const scaled = tokens < 1_000_000 ? { value: tokens / 1000, suffix: 'k' } : { value: tokens / 1_000_000, suffix: 'M' };
+  return `${scaled.value.toFixed(1).replace(/\.0$/, '')}${scaled.suffix}`;
+}
 
 /**
  * Renders a token count the way the run header and session views show it:
@@ -9,11 +22,69 @@ import { styleText } from 'node:util';
  * `2.0k tok`.
  */
 export function formatTokens(tokens: number): string {
-  if (!Number.isFinite(tokens) || tokens < 0) return '? tok';
-  if (tokens < 1000) return `${Math.round(tokens)} tok`;
-  const scaled = tokens < 1_000_000 ? { value: tokens / 1000, suffix: 'k' } : { value: tokens / 1_000_000, suffix: 'M' };
-  const text = scaled.value.toFixed(1).replace(/\.0$/, '');
-  return `${text}${scaled.suffix} tok`;
+  return `${formatCount(tokens)} tok`;
+}
+
+/**
+ * The prompt tokens a turn actually processed fresh: inputTokens minus the
+ * cache-read and cache-write shares folded into it. Undefined when the
+ * prompt side wasn't reported at all; clamped at 0 so a reshaped envelope whose
+ * parts exceed the total can't print a negative figure.
+ */
+export function freshInputTokens(usage: TokenSplit): number | undefined {
+  if (usage.inputTokens === undefined) return undefined;
+  return Math.max(0, usage.inputTokens - (usage.cacheReadTokens ?? 0) - (usage.cacheWriteTokens ?? 0));
+}
+
+/**
+ * The step-row form: `in 98.5k (92k cached) · out 3.2k`. Prompt-side tokens
+ * lead, with the cache-read share called out, because that share is what makes
+ * a modest turn look enormous — an agent loop re-sends its whole prompt on
+ * every internal turn and every re-send is counted again, at a fraction of
+ * fresh input's price. '' when the split reports neither side, which tells
+ * callers to fall back to the plain total.
+ */
+export function formatUsageInline(usage: TokenSplit): string {
+  const parts: string[] = [];
+  if (usage.inputTokens !== undefined) {
+    const cached = usage.cacheReadTokens;
+    const cachedPart = cached !== undefined && cached > 0 ? ` (${formatCount(cached)} cached)` : '';
+    parts.push(`in ${formatCount(usage.inputTokens)}${cachedPart}`);
+  }
+  if (usage.outputTokens !== undefined) parts.push(`out ${formatCount(usage.outputTokens)}`);
+  return parts.join(' · ');
+}
+
+const FOOTER_WIDTH = 60;
+const TOTAL_LABEL = 'total';
+
+/** One step's row in the footer table: every figure the CLI reports separately, zero/unknown parts omitted. */
+function usageRowFigures(usage: TokenSplit): string {
+  const parts: string[] = [];
+  const fresh = freshInputTokens(usage);
+  if (fresh !== undefined) parts.push(`in ${formatCount(fresh)}`);
+  if (usage.cacheReadTokens) parts.push(`cache-read ${formatCount(usage.cacheReadTokens)}`);
+  if (usage.cacheWriteTokens) parts.push(`cache-write ${formatCount(usage.cacheWriteTokens)}`);
+  if (usage.outputTokens !== undefined) parts.push(`out ${formatCount(usage.outputTokens)}`);
+  return parts.join(' · ');
+}
+
+/**
+ * The settled run's per-turn token table, unstyled (renderers dim it): one row
+ * per step that ran an agent turn, then the run total. It exists because the
+ * total on its own is misleading — cache reads are summed into it at full
+ * weight, so this splits out what was processed fresh, what was reused from
+ * cache, and what the model actually wrote. Empty when no step reported a
+ * split, since there is then nothing to break down.
+ */
+export function usageFooter(rows: Array<{ label: string; usage: TokenSplit }>, total: number): string[] {
+  if (rows.length === 0) return [];
+  const labelWidth = Math.max(TOTAL_LABEL.length, ...rows.map((row) => row.label.length));
+  const head = '── token usage ';
+  const lines = [head + '─'.repeat(Math.max(0, FOOTER_WIDTH - head.length))];
+  for (const row of rows) lines.push(`  ${row.label.padEnd(labelWidth)}  ${usageRowFigures(row.usage)}`);
+  lines.push(`  ${TOTAL_LABEL.padEnd(labelWidth)}  ${formatTokens(total)}`);
+  return lines;
 }
 
 const BOX_WIDTH = 100;

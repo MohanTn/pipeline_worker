@@ -56,30 +56,48 @@ export const REVIEW_SCHEMA = {
   required: ['findings'],
 } as const;
 
+/** Each chunk as its own labeled section, so a multi-file turn keeps every line number attributable to one path. */
+function renderSections(chunks: DiffChunk[]): string {
+  return chunks.map((chunk) => `--- File: ${chunk.path}\n--- Language: ${chunk.language}\n${chunk.body}`).join('\n\n');
+}
+
 /**
- * One prompt per chunk. The diff is rendered with its new-file line numbers
- * in a left gutter (see chunkDiff.ts) and the agent is told to copy one of
- * those numbers verbatim — anything it invents anyway is dropped by
- * findings.ts before it reaches the forge.
+ * One prompt per *turn*, which may carry several files (see chunkDiff.ts's
+ * groupChunks — a cloud model reviews the whole diff in one turn). The diff is
+ * rendered with its new-file line numbers in a left gutter and the agent is
+ * told to copy one of those numbers verbatim; anything it invents anyway is
+ * dropped by findings.ts before it reaches the forge.
+ *
+ * Each file is a labeled section rather than a single `File:` header, since the
+ * finding's `file` must name the section its line came from — a line number is
+ * only unique within one file, and a finding attributed to the wrong path is
+ * discarded by gatekeep after the agent already paid to produce it.
  *
  * The reviewer's persona lives in REVIEW_SYSTEM, delivered as the turn's
  * system prompt rather than prefixed here, so what follows is only this
- * chunk's own instructions and data.
+ * turn's own instructions and data.
  */
-export function buildReviewPrompt(chunk: DiffChunk, fence: string): string {
+export function buildReviewPrompt(chunks: DiffChunk[], fence: string): string {
+  const paths = [...new Set(chunks.map((chunk) => chunk.path))];
+  const fileList = paths.length > 1 ? `Files in this diff, all of which you must review:\n${paths.map((path) => `- ${path}`).join('\n')}\n\n` : '';
+  const anchor =
+    paths.length > 1
+      ? 'the path in the "--- File:" header of the section the line came from'
+      : `${paths[0] ?? 'the file under review'}`;
   return (
     `Review the following Git diff for a code change.\n\n` +
-    `File: ${chunk.path}\nLanguage: ${chunk.language}\n\n` +
+    fileList +
     'CRITICAL INSTRUCTIONS:\n' +
     '1. Only point out actionable, valid issues. If the code is good, return an empty findings list.\n' +
-    `2. Every finding must set "file" to ${chunk.path} and "line" to a number copied verbatim from the gutter of an ` +
-    'added (+) line below. Lines with a "-" gutter (removed lines) and unchanged context lines cannot be commented on.\n' +
+    `2. Every finding must set "file" to ${anchor} and "line" to a number copied verbatim from the gutter of an ` +
+    'added (+) line in that same section. Lines with a "-" gutter (removed lines) and unchanged context lines cannot ' +
+    'be commented on.\n' +
     '3. Explain the problem and its impact, then — when a concrete fix fits on the flagged line(s) — append a ' +
     `suggestion block:\n${fence}\n<corrected code>\n\`\`\`\n` +
     '4. Do not review generated or vendored content (lock files, build output, snapshots): return no findings for it.\n' +
-    '5. Review the diff below and nothing else. Do not open the changed file to read its full contents — if the ' +
+    '5. Review the diff below and nothing else. Do not open the changed files to read their full contents — if the ' +
     'diff alone is not enough to be sure a finding is real, drop that finding.\n\n' +
     '### Git Diff Data (gutter = line number in the new file):\n' +
-    `${chunk.body}\n`
+    `${renderSections(chunks)}\n`
   );
 }

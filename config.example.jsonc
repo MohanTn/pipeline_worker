@@ -53,7 +53,8 @@
   "reviewModel": "", // "" = the agent's own (stronger) default
   "reviewMinSeverity": "MAJOR", // "CRITICAL" | "MAJOR" | "MINOR"
   "reviewMaxComments": 10,
-  "reviewChunkChars": 24000, // diff budget per review turn; lower for small-context models
+  "reviewChunkChars": 200000, // diff budget per review turn — sized so a whole MR/PR is one session
+  "reviewFilesPerTurn": 0, // files per turn; 0 = decide from the agent (all for cloud, 3 for little-coder)
 
   // --- output --------------------------------------------------------------
   "completionSound": true,
