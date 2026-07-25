@@ -1,0 +1,61 @@
+// Every setting pipeline-worker supports, at its default value.
+// The real file is ~/.config/pipeline-worker/config.json ($XDG_CONFIG_HOME honored),
+// is plain JSON (no comments), and is created with these defaults on first run.
+// There are no environment variables and no per-repo config file.
+{
+  // --- agent + forge -------------------------------------------------------
+  "agent": "claude", // "claude" | "pi" | "copilot" | "little-coder"
+  "forge": "gitlab", // "gitlab" | "github"
+
+  "gitlab": {
+    "host": "https://gitlab.example.com",
+    "token": "glpat-xxxxx", // passed to `glab` as GITLAB_TOKEN, never logged
+    "repoBase": "/home/you/REPO", // local dir mirroring the GitLab namespace root
+    "projectId": "" // numeric id or "group/subgroup/project"; auto-detected from repoBase
+  },
+
+  "github": {
+    "token": "", // never logged
+    "repo": "", // "owner/name"; auto-detected from origin
+    "apiUrl": "https://api.github.com" // point at your GitHub Enterprise instance
+  },
+
+  // --- branch + local checks ----------------------------------------------
+  "branchPattern": "pipeline-worker/{name}", // placeholders: {type} {ticket} {name}
+  "build": "", // auto-detected from the toolchain; "" skips the stage
+  "lint": "",
+  "test": "",
+  "runLintAndTest": true, // false runs build only
+
+  // --- CI watch + fix loop -------------------------------------------------
+  "pollIntervalSeconds": 15, // use 60 for slow pipelines
+  "maxFixAttempts": 5, // CI-fix attempts before escalating with an MR/PR comment
+
+  // --- merge + local cleanup ----------------------------------------------
+  "autoMergeOnGreen": true, // merge when CI/approvals allow, then fast-forward your local target branch
+  "mergeMethod": "squash", // "merge" | "squash" | "rebase" (GitLab falls back to project default for rebase)
+  "squashOnMerge": false, // collapse the run's commits into one and force-push; only reliable with autoMergeOnGreen off
+  "cleanupOnSuccess": true, // reset repoRoot to HEAD once cleanup fires
+  "cleanupEarly": false, // cleanup as soon as the MR/PR opens, not after CI goes green
+  "switchToFeatureBranch": true, // leave you on the feature branch so the next change is a follow-up commit
+  "updateChangelog": false, // add a bullet under CHANGELOG.md's [Unreleased]
+
+  // --- models --------------------------------------------------------------
+  "intentModel": "haiku", // model for intent capture; copilot maps haiku/sonnet to its own names
+  "bareAgentMode": true, // claude: --bare. Turn OFF if you sign in to Claude Code with a subscription
+  "littleCoder": {
+    "binary": "little-coder",
+    "maxPromptChars": 12000 // prompts trimmed middle-out to fit a small local context; 0 disables
+  },
+
+  // --- AI review -----------------------------------------------------------
+  "review": false, // review the MR/PR diff and post line-anchored comments
+  "reviewModel": "", // "" = the agent's own (stronger) default
+  "reviewMinSeverity": "MAJOR", // "CRITICAL" | "MAJOR" | "MINOR"
+  "reviewMaxComments": 10,
+  "reviewChunkChars": 24000, // diff budget per review turn; lower for small-context models
+
+  // --- output --------------------------------------------------------------
+  "completionSound": true,
+  "plainOutput": false // force append-only narration instead of the live step tree
+}

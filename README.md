@@ -4,42 +4,23 @@
 [![npm](https://img.shields.io/npm/v/pipeline-worker)](https://www.npmjs.com/package/pipeline-worker)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Automate the last mile of your local changes: pipeline-worker takes the uncommitted diff in your repo and drives it — unattended — all the way to a merged, locally-synced result.
+Takes the uncommitted diff in your repo and drives it — unattended — to a merged, locally-synced result.
 
-1. Captures your staged + unstaged changes (your working tree is only read, not modified, up through this point).
-2. Replays them in a disposable git worktree.
-3. Asks a coding agent (Claude Code, [Pi](https://pi.dev), or GitHub Copilot CLI) to infer the intent: change type, branch slug, commit message, summary.
-4. Runs your `build` / `lint` / `test` commands, fail-fast.
-5. Commits, pushes, and opens a GitLab MR or GitHub PR — the branch name is composed from the configurable `branchPattern`, and the MR/PR targets origin's default branch (`main` or `master`, auto-detected), or whatever you pass to `--target`. **If the branch you are standing on already has an open MR/PR** (the reviewer-asked-for-a-change case), nothing new is opened: the commit lands on that same branch and a file-wise breakdown of this follow-up is *appended* to its description, leaving everything already written there intact.
-6. Polls the CI pipeline; on failure it hands the pipeline URL to the agent, which pulls the failed jobs and logs itself via whatever GitLab/GitHub MCP tooling is available (pipeline-worker's own forge MCP server, or an external one the agent already has configured), commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating to a human with an MR comment.
-7. Once the MR/PR is ready to merge (or, with `cleanupEarly`, as soon as the MR/PR is opened), resets your repo's current branch back to HEAD (see `cleanupOnSuccess` below) — your changes now live safely on the feature branch instead of sitting uncommitted locally too.
-8. By default (`autoMergeOnGreen`), waits for the forge to confirm the auto-merge actually landed, then (after a few seconds' grace for the ref to settle) fast-forwards your local target branch from origin — so your local main already contains the merged result when the run ends. Best-effort: if the merge is held up (e.g. by required approvals), you switched branches mid-run, or your local target branch diverged, it leaves everything untouched and tells you to `git pull` instead. Set `"autoMergeOnGreen": false` to go back to opening the MR/PR and merging it yourself.
-9. Finally, checks the feature branch out in your repo (`switchToFeatureBranch`, on by default), so the next change you make there becomes a **follow-up commit on the same MR/PR** instead of needing a new branch — see [Following up on a PR/MR under review](#following-up-on-a-prmr-under-review).
+1. Captures your staged + unstaged changes and replays them in a disposable git worktree (your working tree is only read).
+2. Asks a coding agent to infer intent: change type, branch slug, commit message, summary.
+3. Runs `build` / `lint` / `test`, fail-fast.
+4. Commits, pushes, opens a GitLab MR or GitHub PR against origin's default branch (or `--target`). If the current branch already has an open MR/PR, no second one is opened: the commit lands on it and a follow-up breakdown is appended to its description.
+5. Polls CI; on failure hands the pipeline to the agent, which pulls failed jobs and logs over MCP, commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating with an MR/PR comment.
+6. Resets your repo back to HEAD, waits for the auto-merge to land, fast-forwards your local target branch, then checks the feature branch out so your next change becomes a follow-up commit.
 
-While attached to a real terminal, the run renders as a live step tree — header line, then one row per step (capture, worktree, checks, ci-watch, merge, ...) with a status glyph, duration, and best-effort token count, updated in place. CI logs and piped output fall back to the previous append-only narration (or force it yourself with `"plainOutput": true`).
-
-Polling costs zero agent tokens; the agent is invoked only when a pipeline actually fails, and fetches whatever pipeline/job detail it needs through pipeline-worker's token-efficient [TOON](https://github.com/toon-format/toon)-encoded MCP server (or an external forge MCP server, if the agent has one available). GitHub polling is plain REST; GitLab polling shells out to the [`glab`](https://gitlab.com/gitlab-org/cli) CLI.
+Polling costs zero agent tokens; the agent runs only when a pipeline actually fails, fetching detail through a [TOON](https://github.com/toon-format/toon)-encoded MCP server. On a real terminal the run renders as a live step tree; piped output falls back to append-only narration (or set `plainOutput`).
 
 ## Requirements
 
 - Node.js >= 20.12 and git
-- One coding agent CLI on your PATH: [Claude Code](https://claude.com/claude-code) (`claude`), [Pi](https://pi.dev) (`pi`), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) (`copilot`)
-- A GitLab or GitHub token with API access to the repo
-- If `"forge": "gitlab"`: the [`glab`](https://gitlab.com/gitlab-org/cli) CLI on your PATH — pipeline-worker authenticates it non-interactively by passing `GITLAB_TOKEN` and `--hostname` when it calls `glab api`
-
-### Agents
-
-| CLI | `agent` | Setup | Per-invocation model selection |
-| --- | ----------------------- | ----- | ------------------------------ |
-| [Claude Code](https://claude.com/claude-code) | `claude` | `npm install -g @anthropic-ai/claude-code` | ✅ (`--model`) |
-| [Pi](https://pi.dev) | `pi` | `npm install -g @earendil-works/pi-coding-agent` | ✅ (`--model`) — any provider/model |
-| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) | `copilot` | Install via [GitHub's docs](https://docs.github.com/en/copilot/how-tos/copilot-cli) | ✅ (`--model`) — Copilot's own model names; the `haiku`/`sonnet` aliases are mapped automatically |
-| [little-coder](https://github.com/itayinbarr/little-coder) | `little-coder` | Follow its README (llama.cpp or Ollama serving a 5-25GB local model) | ✅ (`--model <provider/id>`, e.g. `llamacpp/qwen3-30b`) |
-
-little-coder is pi tuned for small local models, so pipeline-worker drives it with pi's flags (`-p`, `--model`, `--tools`, prompt over stdin) plus two settings of its own — see [Running on a local model](#running-on-a-local-model).
-
-Pi supports models from any provider — Anthropic, OpenAI, Google Gemini, DeepSeek, Groq, OpenRouter, etc.
-Configure your provider/api-key via pi's own setup (`/login`), env vars, or `--provider` in the adapter.
+- One agent CLI on PATH: `claude`, `pi`, `copilot`, or `little-coder`
+- A GitLab or GitHub token with API access
+- For `"forge": "gitlab"`: the [`glab`](https://gitlab.com/gitlab-org/cli) CLI (authenticated non-interactively via `GITLAB_TOKEN` + `--hostname`)
 
 ## Install
 
@@ -47,29 +28,23 @@ Configure your provider/api-key via pi's own setup (`/login`), env vars, or `--p
 npm install -g pipeline-worker
 ```
 
-This installs two equivalent commands, `pipeline-worker` and the shorter `pw` — use whichever you prefer (e.g. `pw run --ticket PROJ-123`).
+Installs two equivalent commands: `pipeline-worker` and `pw`.
 
 ## Quick start
 
-The first run writes `~/.config/pipeline-worker/config.json` with every
-setting at its default. Fill in the forge details once and every repo on the
-machine picks them up — no per-repo setup needed:
+The first run writes `~/.config/pipeline-worker/config.json` with every setting at its default. Fill in the forge details once and every repo on the machine picks them up:
 
-```jsonc
+```json
 {
-  "agent": "claude",                  // or "pi", or "copilot"
+  "agent": "claude",
   "forge": "gitlab",
   "gitlab": {
     "host": "https://gitlab.example.com",
     "token": "glpat-xxxxx",
-    "repoBase": "/home/you/REPO"      // local dir mirroring the GitLab namespace root — enables auto-detected projectId in any repo underneath it
+    "repoBase": "/home/you/REPO"
   }
 }
 ```
-
-(The file itself is plain JSON — the `//` comments above are just annotations for this README.)
-
-Then, in any repo:
 
 ```sh
 cd your-repo
@@ -79,190 +54,129 @@ pipeline-worker
 
 ## Configuration
 
-pipeline-worker reads exactly one file: `~/.config/pipeline-worker/config.json`
-(`$XDG_CONFIG_HOME/pipeline-worker/config.json` when that variable is set). It
-is created, populated with every default, on the first run. There are **no
-environment variables and no per-repo config file** — one file configures every
-repo, and the per-repo values (`github.repo`, `gitlab.projectId`,
-`build`/`lint`/`test`) are auto-detected from the repo itself unless the file
-names them.
+One file only: `~/.config/pipeline-worker/config.json` (`$XDG_CONFIG_HOME` honored). No environment variables, no per-repo file, no CLI flags for settings. Per-repo values (`github.repo`, `gitlab.projectId`, `build`/`lint`/`test`) are auto-detected unless the file names them.
 
-| Key                     | Default                      | Meaning                                                                       |
-| ----------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
-| `agent`                 | `claude`                     | `claude`, `pi`, or `copilot`                                                   |
-| `forge`                 | `gitlab`                     | `gitlab` or `github`                                                          |
-| `gitlab.host`           | —                            | e.g. `https://gitlab.example.com`                                             |
-| `gitlab.projectId`      | auto-detected from `repoBase` | numeric project id, or a `group/subgroup/project` path                       |
-| `gitlab.repoBase`       | —                            | local dir mirroring the GitLab namespace root, for auto-detecting `projectId` |
-| `gitlab.token`          | —                            | GitLab API token (passed to `glab` as `GITLAB_TOKEN`, never logged)           |
-| `github.repo`           | auto-detected from `origin`  | `owner/name` slug — only needed when `origin` isn't a GitHub remote           |
-| `github.token`          | —                            | GitHub token (never logged)                                                   |
-| `github.apiUrl`         | `https://api.github.com`     | REST API base URL — point it at your GitHub Enterprise instance               |
-| `pollIntervalSeconds`   | `15`                         | pipeline poll cadence; use `60` for slow pipelines                            |
-| `branchPattern`         | `pipeline-worker/{name}`     | feature branch naming template — see below                                    |
-| `cleanupOnSuccess`      | `true`                       | reset repoRoot to HEAD once cleanup fires (see `cleanupEarly` for when) (`false` to keep your local uncommitted changes as-is) |
-| `cleanupEarly`          | `false`                      | `true` resets repoRoot as soon as the MR/PR is opened (diff committed + pushed), instead of waiting for CI to go green — frees the repo (and the run lock) for a new `pipeline-worker run` while this run's CI-watch/fix loop keeps going in the background |
-| `switchToFeatureBranch` | `true`                       | when the run finishes green, check the feature branch out in your repo so your next change becomes a follow-up commit on the same MR/PR — see [Following up on a PR/MR under review](#following-up-on-a-prmr-under-review). Skipped (with a note) when the working tree still has uncommitted changes |
-| `intentModel`           | `haiku`                      | model used for the intent-capture step (branch/commit/summary). All three agents pass it via `--model`; for copilot, the `haiku`/`sonnet` aliases are translated to Copilot's own model names (`claude-haiku-4.5`/`claude-sonnet-4.5`), anything else is passed through verbatim |
-| `bareAgentMode`         | `true`                       | run every agent turn as lean as the CLI allows. For `claude` that means `--bare` (no hooks, no LSP, no plugin sync, no `CLAUDE.md` auto-discovery, no attribution) alongside the per-step `--system-prompt` and `--tools` gate every turn already gets. **Turn this off if you sign in to Claude Code with a subscription:** `--bare` reads credentials only from `ANTHROPIC_API_KEY` (or an `apiKeyHelper` via `--settings`), never from OAuth or the keychain, so turns would fail with an API error — pipeline-worker warns at startup when it sees that combination |
-| `littleCoder.binary`    | `little-coder`               | binary name or absolute path for the `little-coder` agent                     |
-| `littleCoder.maxPromptChars` | `12000`                 | hard cap on the characters of one prompt sent to little-coder; a longer prompt is trimmed middle-out with a visible marker so a small local context is never overrun. `0` disables the cap |
-| `build`                 | auto-detected from toolchain | build command override; set to an empty string to skip the stage              |
-| `lint`                  | auto-detected from toolchain | lint command override; set to an empty string to skip the stage               |
-| `test`                  | auto-detected from toolchain | test command override; set to an empty string to skip the stage               |
-| `maxFixAttempts`        | `5`                          | how many CI-fix attempts before escalating to a human — tracked independently from merge-conflict-resolution attempts, so a long-lived PR needing several rebases can't exhaust the budget meant for real bug-fixing |
-| `runLintAndTest`        | `true`                       | run the local lint and test stages (`false` to run only build — for repos where an earlier workflow, e.g. upstream CI, already verified lint/test) |
-| `updateChangelog`       | `false`                      | once checks pass, add a bullet (from the captured intent's summary) under `CHANGELOG.md`'s `[Unreleased]` section — `feature`/`bugfix`/`chore` map to the `Added`/`Fixed`/`Changed` categories — creating the file, [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)-style, if the repo has none — and include it in the same commit |
-| `autoMergeOnGreen`      | `true`                       | once the MR/PR opens, ask the forge to merge it automatically as soon as CI (and any required approvals) allow — best-effort; if the forge rejects it (auto-merge not enabled for the repo, pending approvals, ...) the run continues normally and you merge manually. Once the forge confirms the merge landed, the run also fast-forwards your local target branch from origin (waiting a few seconds for the ref to settle first), so your local main is already up to date when the run ends. Set to `false` to go back to opening the MR/PR and merging it yourself |
-| `mergeMethod`           | `squash`                     | `merge`, `squash`, or `rebase` — passed to auto-merge. GitLab has no per-request rebase option; `rebase` there falls back to the project's own default merge method |
-| `squashOnMerge`         | `false`                      | once CI is green, collapse every commit this run made on the branch into one (titled from the captured intent) and force-push — keeps history clean regardless of the repo's merge-strategy setting. Off by default: rewrites published history (force-push), a materially different risk from everything else this tool does. Only reliable with auto-merge off — the forge may already have merged (and deleted) the branch before this step runs |
-| `review`                | `false`                      | once the MR/PR is open, have the agent review its diff and post line-anchored comments on the lines it flags — see [AI code review](#ai-code-review). Best-effort: it never fails the run |
-| `reviewModel`           | adapter default              | model for the review turns. Unset means the agent's own default (deliberately stronger than `intentModel` — finding real bugs is not the cheap-model job) |
-| `reviewMinSeverity`     | `MAJOR`                      | `CRITICAL`, `MAJOR`, or `MINOR` — findings below this are never posted. The anti-alert-fatigue gate: at the default, style nitpicks never reach the MR/PR |
-| `reviewMaxComments`     | `10`                         | hard cap on comments posted per run, most severe first                        |
-| `reviewChunkChars`      | `24000`                      | char budget per diff chunk (one agent turn per chunk) — lower it for a smaller-context model |
-| `completionSound`       | `true`                       | play a soft system sound when the run settles — best-effort, silently skipped when no audio player is available |
-| `plainOutput`           | `false`                      | force the append-only, non-redrawing narration even on a real terminal (the same output CI/piped runs always get) — useful when pasting output into a bug report or feeding it to another tool |
+**See [`config.example.jsonc`](config.example.jsonc) for every supported field, its default, and what it does.**
 
-Booleans are real JSON booleans; the string spellings `"true"`/`"false"`,
-`"1"`/`"0"`, `"yes"`/`"no"`, `"on"`/`"off"` are accepted too (case-insensitive,
-surrounding whitespace ignored). Any other value is ignored with a warning
-naming the key, and the default applies. A malformed or unreadable file warns
-and falls back to defaults wholesale — it never blocks a run.
+Booleans may also be written as `"true"`/`"false"`, `"1"`/`"0"`, `"yes"`/`"no"`, `"on"`/`"off"`. An unrecognized value warns and falls back to the default; a malformed file warns and falls back wholesale — it never blocks a run.
+
+### Agents
+
+| CLI | `agent` | Install |
+| --- | --- | --- |
+| [Claude Code](https://claude.com/claude-code) | `claude` | `npm install -g @anthropic-ai/claude-code` |
+| [Pi](https://pi.dev) | `pi` | `npm install -g @earendil-works/pi-coding-agent` |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli) | `copilot` | see GitHub's docs |
+| [little-coder](https://github.com/itayinbarr/little-coder) | `little-coder` | see its README (llama.cpp/Ollama) |
+
+All four take a per-invocation `--model`. Pi accepts any provider/model (configure via `/login` or env vars); Copilot's `haiku`/`sonnet` aliases are mapped to its own names automatically.
 
 ### Branch naming
 
-`branchPattern` controls the feature branch name, built from three placeholders:
-
-| Placeholder | Filled by                                                          |
-| ----------- | ------------------------------------------------------------------- |
-| `{type}`    | `feature`, `bugfix`, or `chore` — inferred from the diff by the agent |
-| `{ticket}`  | the `--ticket <id>` flag passed to `pipeline-worker run`             |
-| `{name}`    | a short kebab-case slug describing the change — inferred by the agent |
-
-For example, a team using GitLab issue-linked branches would set:
-
-```json
-{ "branchPattern": "{type}/{ticket}/{name}" }
-```
+`branchPattern` is built from `{type}` (`feature`/`bugfix`/`chore`, inferred), `{ticket}` (from `--ticket`), and `{name}` (an inferred kebab-case slug):
 
 ```sh
-pipeline-worker run --ticket PROJ-123
-# -> bugfix/PROJ-123/fix-login-redirect
+# with "branchPattern": "{type}/{ticket}/{name}"
+pipeline-worker run --ticket PROJ-123   # -> bugfix/PROJ-123/fix-login-redirect
 ```
 
-A pattern that includes `{ticket}` requires `--ticket` to be passed; the run fails fast at the naming step otherwise.
+A pattern containing `{ticket}` fails fast if `--ticket` is missing.
 
 ### What each agent turn is allowed to do
 
-Every turn runs with a one- or two-sentence `--system-prompt` stating only its job, and with its tool set gated to what that job needs. On `claude` the gate is real: `--tools` decides which built-in tools exist for the turn at all, so a turn cannot reach for a tool by asking permission (verified — a Read-only turn told to run `echo` answers "BLOCKED", with no permission prompt and no denial to record).
+Each turn gets a one-sentence `--system-prompt` and a gated tool set. On `claude` the gate is real: `--tools` decides which built-ins exist at all, so a turn cannot ask permission for one it lacks.
 
-| Turn | Tools | Why |
-| ---- | ----- | --- |
-| intent capture | `Read` | The prompt already carries the change as a patch — pipeline-worker runs `git diff` itself (capped at 20000 chars, trimmed middle-out) so the agent judges the delta without needing a shell. `Read` covers the new/untracked files a diff cannot show |
-| conflict resolution (diff-apply and CI-watch merge) | `Read`, `Write`, `Edit` | Resolving conflict markers is a text edit. Staging and committing stay with pipeline-worker, so the turn needs no shell at all |
-| MR/PR review | `Read` | Works from the diff in its prompt — the prompt tells it not to read the changed file back in full, so one review turn's context is bounded by `reviewChunkChars`, not by how big the touched files are. `Read` remains available for a *different* file (a caller, a type) it cannot infer from the chunk |
-| CI fix / local check fix | unrestricted | Fixing a red build legitimately means running the failing command, and pulling job logs through the forge MCP server |
+| Turn | Tools |
+| --- | --- |
+| intent capture | `Read` — the diff is embedded in the prompt (capped at 20000 chars, trimmed middle-out) |
+| conflict resolution | `Read`, `Write`, `Edit` — staging and committing stay with pipeline-worker |
+| MR/PR review | `Read` — works from the diff in its prompt, bounded by `reviewChunkChars` |
+| CI fix / local check fix | unrestricted — fixing a red build means running the failing command |
 
-`copilot` has no per-invocation tool allowlist (`--allow-all-tools` is required for unattended runs), so under that agent these turns get full tool access; the system prompt still applies. `pi` and `little-coder` map the allowlist onto their own `--tools` flag.
+`copilot` has no per-invocation allowlist (`--allow-all-tools` is required unattended), so its turns get full tool access; the system prompt still applies.
 
 ### Running on a local model
 
-`"agent": "little-coder"` drives [little-coder](https://github.com/itayinbarr/little-coder) — pi plus extensions, tuned for 5-25GB local models on llama.cpp/Ollama. Point it at a served model and keep the prompts small:
+`"agent": "little-coder"` drives pi tuned for 5-25GB local models. Every prompt is trimmed to `littleCoder.maxPromptChars` middle-out (keeping the system instruction and the JSON contract), turns are tool-gated, and `intentModel`/`reviewModel` take little-coder's `provider/id` form:
 
 ```json
 {
   "agent": "little-coder",
   "littleCoder": { "binary": "little-coder", "maxPromptChars": 12000 },
   "intentModel": "llamacpp/qwen3-30b",
-  "reviewModel": "llamacpp/qwen3-30b",
   "reviewChunkChars": 6000,
   "review": false
 }
 ```
 
-What makes this workable on a small context window:
-
-- **Prompt cap.** Every prompt is trimmed to `littleCoder.maxPromptChars` before it is handed over, middle-out, keeping the system instruction at the head and the JSON contract at the tail — the two parts a small model cannot do without. An over-long prompt otherwise fails quietly, losing whichever end the runtime drops.
-- **Fewer tools per turn.** The turns above are gated to `Read` or to read/write, which for a local model also means fewer tool-use rounds to get wrong.
-- **Smaller review chunks.** `reviewChunkChars` decides how much diff one review turn carries; drop it well below the 24000 default (the example uses 6000), or leave `review` off entirely and let the local model handle intent capture and CI fixes only.
-- **Model naming.** `intentModel`/`reviewModel` are passed through as `--model`, so use little-coder's `provider/id` form (`llamacpp/…`, `ollama/…`), not the `haiku`/`sonnet` aliases.
-
-little-coder's own `LITTLE_CODER_BASH_ALLOW` and model profiles (`.pi/settings.json`) stay yours to configure; pipeline-worker does not write them.
+little-coder's own `LITTLE_CODER_BASH_ALLOW` and model profiles (`.pi/settings.json`) stay yours to configure.
 
 ### Check command auto-detection
 
-`build` / `lint` / `test` are picked from the repo's toolchain (first marker found wins; mixed-language repos should set `build` / `lint` / `test` explicitly):
+First marker found wins; set `build`/`lint`/`test` explicitly in mixed-language repos.
 
-| Toolchain         | Marker                                                 | build            | lint                                | test                                             |
-| ----------------- | ------------------------------------------------------ | ---------------- | ----------------------------------- | ------------------------------------------------ |
-| Node / TypeScript | `package.json`                                         | `npm run build`  | `npm run lint`                      | `npm test` — each only if the script is declared |
-| .NET              | `*.sln` / `*.csproj` / `*.fsproj` / `*.vbproj` at root | `dotnet build`   | `dotnet format --verify-no-changes` | `dotnet test`                                    |
-| Go                | `go.mod`                                               | `go build ./...` | `go vet ./...`                      | `go test ./...`                                  |
-| Python            | `pyproject.toml` / `setup.py` / `requirements.txt`     | —                | —                                   | `pytest`                                         |
+| Toolchain | Marker | build | lint | test |
+| --- | --- | --- | --- | --- |
+| Node / TypeScript | `package.json` | `npm run build` | `npm run lint` | `npm test` — each only if declared |
+| .NET | `*.sln` / `*.csproj` / `*.fsproj` / `*.vbproj` | `dotnet build` | `dotnet format --verify-no-changes` | `dotnet test` |
+| Go | `go.mod` | `go build ./...` | `go vet ./...` | `go test ./...` |
+| Python | `pyproject.toml` / `setup.py` / `requirements.txt` | — | — | `pytest` |
 
-A stage with no command (`—`) is skipped. If no toolchain is detected and no commands are configured, all local checks are skipped with a warning.
+A stage with no command is skipped. No toolchain and no configured commands means all local checks are skipped with a warning.
 
 ## Commands
 
-| Command                                      | What it does                                                              |
-| -------------------------------------------- | ------------------------------------------------------------------------- |
-| `pipeline-worker` (or `pipeline-worker run`) `[--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
-| `pipeline-worker serve`                      | Start the forge MCP server over stdio (used by the agent during fix runs) |
-| `pipeline-worker resume --branch <name>` `[--target <branch>]` | Resume watching/fixing a run after a crash, or adopt a branch pipeline-worker has no record of |
-| `pipeline-worker review --branch <name>`     | Review that branch's open MR/PR with the agent and post line-anchored comments (nothing else) |
-| `pipeline-worker status --branch <name>`     | Print the persisted state of a run                                        |
-| `pipeline-worker sessions [--branch <name>]` | List every persisted run in this repo, or show one run's full step-by-step timeline |
-| `pipeline-worker update`                     | Install the latest release from npm (`npm install -g pipeline-worker@latest`) |
+| Command | What it does |
+| --- | --- |
+| `pipeline-worker [run] [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
+| `pipeline-worker serve` | Start the forge MCP server over stdio (used by the agent during fix runs) |
+| `pipeline-worker resume --branch <name> [--target <branch>]` | Resume a crashed run, or adopt a branch it has no record of |
+| `pipeline-worker review --branch <name>` | Review that branch's open MR/PR and post line-anchored comments |
+| `pipeline-worker status --branch <name>` | Print the persisted state of a run |
+| `pipeline-worker sessions [--branch <name>]` | List persisted runs, or one run's full timeline |
+| `pipeline-worker update` | Install the latest release from npm |
 
-Before doing any work, `pipeline-worker run` checks npm for a newer published version and installs it automatically if the locally installed one is out of date (the update takes effect on the next run). This check is best-effort: if npm is unreachable or the install fails, the run proceeds anyway on whatever version is already installed.
+`run` self-updates from npm first (best-effort; takes effect next run). Every agent turn reports its duration and an `agent session: <id>` — replay it with `claude --resume <id>`, `pi --session <id>`, or `copilot --resume <id>`.
 
 ### Following up on a PR/MR under review
 
-A run leaves you standing on the feature branch it just built (`switchToFeatureBranch`, on by default) — so "make one more change" needs no `git checkout` and no hunt for the run's now-deleted worktree. A reviewer comments, you make the fix locally, you run `pipeline-worker` again from that same branch. Because the branch already has an open MR/PR, the run does **not** open a second one:
+A run leaves you on the feature branch it built, so "one more change" needs no `git checkout`. Run `pipeline-worker` again from there and, because the branch has an open MR/PR:
 
-- the target branch comes from the MR/PR itself, not from `--target`/default-branch detection;
-- the worktree rebases onto the MR/PR's own branch first, so a commit pushed there in the meantime (a reviewer's fixup, another run) is never clobbered;
-- checks, intent capture, and the commit all run as usual, then the commit is pushed onto that same branch;
-- the file-wise breakdown of this change is **appended** to the MR/PR description under a `🔁 Follow-up` heading — the original description, the reviewer's edits, and any earlier follow-ups all stay above it;
-- CI is then watched (and auto-fixed) exactly as on a first run. `squashOnMerge` is skipped here: rewriting the history of a PR under review would detach the comments anchored to it.
+- the target branch comes from the MR/PR itself, not from `--target`;
+- the worktree rebases onto the MR/PR's branch first, so commits pushed meanwhile are never clobbered;
+- the new breakdown is **appended** under a `🔁 Follow-up` heading, leaving the original description and reviewer edits intact;
+- CI is watched and auto-fixed as usual. `squashOnMerge` is skipped — rewriting history would detach anchored comments.
 
-The commit is made in the run's own worktree, so your local branch does not have it — `git pull` once the run finishes.
-
-If the working tree still holds uncommitted changes when the run ends (`"cleanupOnSuccess": false`), the switch is skipped with a note rather than dragging them onto the feature branch; `git checkout <branch>` yourself when you have dealt with them.
+The commit is made in the run's own worktree, so `git pull` once it finishes. If the working tree still has uncommitted changes (`"cleanupOnSuccess": false`), the branch switch is skipped with a note.
 
 ### AI code review
 
-With `"review": true`, the run adds one stage right after the MR/PR is opened and before CI is watched: the agent reviews the branch's own diff and comments **on the diff lines**, not in the description.
+With `"review": true`, the agent reviews the branch diff right after the MR/PR opens and comments **on the diff lines**:
 
-- **Chunking** — the diff is split per file, and a file larger than `reviewChunkChars` is split further, so a large MR/PR never overflows the model's context. One agent turn per chunk; each carries the file name, its language, and the surrounding lines. The reviewer works from that diff only — it is told not to read the changed file back in full, and its tool set is gated to `Read` (see [What each agent turn is allowed to do](#what-each-agent-turn-is-allowed-to-do)).
-- **Line targeting** — every line in a chunk is presented with its line number in the *new* file, and a finding may only anchor to an added (`+`) line. Anything else the model returns (an old-file number, a hallucinated one, a file not in the diff) is dropped before any API call.
-- **One-click fixes** — comments carry a ` ```suggestion ` block where a concrete fix fits, in the dialect the active forge accepts (GitLab's ` ```suggestion:-0+0 `).
-- **Gatekeeping** — the reviewer is instructed to report only logic errors, security holes, performance problems, and severe anti-patterns; on top of that, findings below `reviewMinSeverity` are dropped, duplicates on the same file+line are collapsed, and at most `reviewMaxComments` are posted, most severe first. A clean diff produces no comments at all.
-- **Best-effort** — a failure anywhere in this stage (unusable agent output, a forge rejecting a position, an unreachable merge-base) becomes a note; the run's outcome is unchanged.
+- **Chunking** — split per file, then further at `reviewChunkChars`; one agent turn per chunk, working from the diff only.
+- **Line targeting** — findings may only anchor to an added (`+`) line; anything else the model returns is dropped before any API call.
+- **One-click fixes** — comments carry a ` ```suggestion ` block in the active forge's dialect.
+- **Gatekeeping** — only logic errors, security holes, performance problems, and severe anti-patterns; findings below `reviewMinSeverity` are dropped, duplicates collapsed, at most `reviewMaxComments` posted, most severe first.
+- **Best-effort** — any failure here becomes a note; the run's outcome is unchanged.
 
-A follow-up run on a branch whose MR/PR is already open reviews only the files *that* run touched, so lines a human has already reviewed are not commented on again.
-
-`pipeline-worker review --branch <name>` runs just this stage against a branch's open MR/PR — no checks, no commit, no CI watch — and ignores `review`, since asking for it explicitly is the opt-in.
+A follow-up run reviews only the files *that* run touched. `pipeline-worker review --branch <name>` runs this stage alone and ignores the `review` setting.
 
 ### Target branch
 
-`pipeline-worker run` targets origin's default branch, resolved in this order: `--target <branch>` if you passed one (validated against origin before any work starts), else `refs/remotes/origin/HEAD`, else the remote's HEAD symref, else whichever of `main`/`master` origin actually has (when both exist, the one your HEAD's merge-base is closest to). Only if origin can't answer at all does it fall back to the branch you are standing on.
+Resolved in order: `--target` (validated against origin first), `refs/remotes/origin/HEAD`, the remote's HEAD symref, then whichever of `main`/`master` origin has (closest merge-base wins if both). Only if origin can't answer does it fall back to your current branch.
 
-### Adopting a branch: never run, or run and stalled
+### Adopting a branch
 
-`pipeline-worker resume --branch <name>` also works for a branch with no *resumable* run behind it — one you committed and pushed by hand, or one whose run pushed the branch and then died before the PR/MR existed (the forge went down, the process was killed). Both are recovered the same way: it checks out the branch as origin has it and checks the forge for an open PR/MR for it:
+`pipeline-worker resume --branch <name>` also handles a branch with no resumable run — one you pushed by hand, or one whose run died before the PR/MR existed. It checks the branch out as origin has it and asks the forge:
 
-- **No PR/MR yet:** runs it like a fresh `pipeline-worker run` from this point on — build/lint/test checks (aborting the same way a normal run does on failure), intent capture, then opens the MR/PR — targeting `--target <branch>` if given, or origin's auto-detected default branch otherwise.
-- **PR/MR already open:** re-captures intent from the branch's actual diff, overwrites the PR/MR's description with it (using the PR/MR's own target branch — no guessing needed), and resumes the normal watch/fix loop: poll CI, and on failure pull the failed jobs' logs, hand them to the agent to fix, commit, push, and repoll.
+- **No PR/MR yet** — runs like a fresh `run` from that point: checks, intent capture, then opens the MR/PR.
+- **PR/MR open** — re-captures intent from the branch's diff, overwrites the description, and resumes the watch/fix loop.
 
-A stalled run's own target branch is reused unless you pass `--target`. If the branch was never pushed there is nothing to adopt, and the command says so rather than failing inside git.
-
-Every time a run hands a turn to the agent (resolving a conflict, capturing intent, fixing a failed pipeline), the output includes that turn's duration and an `agent session: <id>` line — `claude --resume <id>`, `pi --session <id>`, or `copilot --resume <id>` opens the same session later to see exactly what it did and why. Copilot CLI has no way to report the session id it picked for itself, so pipeline-worker assigns one via `--name` instead and reports that.
+A stalled run reuses its own target branch unless you pass `--target`. An unpushed branch is reported as nothing to adopt.
 
 ## How the fix loop stays bounded
 
-Every retry path has a cap: local checks abort the run before an MR is ever opened; if no CI pipeline shows up for the MR/PR within 60s, the run ends there instead of polling; otherwise pipeline polling gives up after a 2-hour safety window; fix attempts stop at `maxFixAttempts`; a fix attempt that changes no files, or a pipeline that ends `canceled`/`skipped`, escalates immediately instead of spending agent tokens. Escalation always leaves a comment on the MR/PR so a human knows to take over.
+Local checks abort before an MR is opened; no CI pipeline within 60s ends the run; polling gives up after 2 hours; fix attempts stop at `maxFixAttempts`; a fix that changes no files, or a `canceled`/`skipped` pipeline, escalates immediately. Escalation always leaves a comment on the MR/PR.
 
 ## License
 
