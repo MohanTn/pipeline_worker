@@ -8,19 +8,20 @@ import { styleText } from 'node:util';
 import type { RunSession } from '../state/runState.js';
 import type { RunPhase } from '../types.js';
 import { formatTokens } from './format.js';
+import { mocha, type MochaRole } from './theme.js';
 
-const PHASE_COLOR: Record<RunPhase, Parameters<typeof styleText>[0]> = {
-  diff: 'dim',
-  intent: 'dim',
-  checks: 'cyan',
-  mr: 'cyan',
+const PHASE_COLOR: Record<RunPhase, MochaRole> = {
+  diff: 'overlay1',
+  intent: 'overlay1',
+  checks: 'sky',
+  mr: 'sky',
   watch: 'yellow',
   done: 'green',
   escalated: 'red',
 };
 
 function formatPhase(phase: RunPhase): string {
-  return styleText(PHASE_COLOR[phase], phase.padEnd(9));
+  return mocha(PHASE_COLOR[phase], phase.padEnd(9));
 }
 
 function formatTimestamp(iso: string | undefined): string {
@@ -59,7 +60,7 @@ export function printSessionList(sessions: RunSession[]): void {
     console.log(formatSessionRow(session));
   }
   console.log();
-  console.log(styleText('dim', "Run `pipeline-worker sessions --branch <name>` for a run's full timeline."));
+  console.log(mocha('overlay1', "Run `pipeline-worker sessions --branch <name>` for a run's full timeline."));
 }
 
 const LEVEL_ICON: Record<'info' | 'error', string> = { info: 'ℹ️ ', error: '❌' };
@@ -72,9 +73,9 @@ function formatOptionalMetaParts(state: RunSession['state']): { mrPart: string; 
 }
 
 function formatHistoryEntry(entry: NonNullable<RunSession['state']['history']>[number]): string {
-  const message = entry.level === 'error' ? styleText('red', entry.message) : entry.message;
-  const tokensPart = entry.tokens !== undefined ? ` ${styleText('dim', `· ${formatTokens(entry.tokens)}`)}` : '';
-  return `  ${LEVEL_ICON[entry.level]} ${styleText('dim', formatTimestamp(entry.at))} ${styleText('dim', `[${entry.phase}]`)} ${message}${tokensPart}`;
+  const message = entry.level === 'error' ? mocha('red', entry.message) : entry.message;
+  const tokensPart = entry.tokens !== undefined ? ` ${mocha('overlay1', `· ${formatTokens(entry.tokens)}`)}` : '';
+  return `  ${LEVEL_ICON[entry.level]} ${mocha('overlay1', formatTimestamp(entry.at))} ${mocha('overlay1', `[${entry.phase}]`)} ${message}${tokensPart}`;
 }
 
 /** `pipeline-worker sessions --branch <name>`: one run's metadata plus its full step-by-step history. */
@@ -83,18 +84,18 @@ export function printSessionDetail(session: RunSession): void {
   const { mrPart, pipelinePart } = formatOptionalMetaParts(state);
 
   console.log(styleText('bold', `Session: ${state.branch}`));
-  console.log(styleText('dim', `  target: ${state.targetBranch}`));
-  console.log(styleText('dim', `  worktree: ${state.worktreePath}`));
+  console.log(mocha('overlay1', `  target: ${state.targetBranch}`));
+  console.log(mocha('overlay1', `  worktree: ${state.worktreePath}`));
   const tokensPart = state.totalTokens !== undefined ? `  tokens: ${formatTokens(state.totalTokens)}` : '';
   console.log(
-    styleText('dim', `  phase: ${state.phase}  ci-fix: ${state.ciFixAttempt}  conflict: ${state.conflictAttempt}${mrPart}${pipelinePart}${tokensPart}`),
+    mocha('overlay1', `  phase: ${state.phase}  ci-fix: ${state.ciFixAttempt}  conflict: ${state.conflictAttempt}${mrPart}${pipelinePart}${tokensPart}`),
   );
-  console.log(styleText('dim', `  started: ${formatTimestamp(state.startedAt)}  updated: ${formatTimestamp(state.updatedAt)}`));
+  console.log(mocha('overlay1', `  started: ${formatTimestamp(state.startedAt)}  updated: ${formatTimestamp(state.updatedAt)}`));
 
   const history = state.history ?? [];
   if (history.length === 0) {
     console.log();
-    console.log(styleText('dim', "  (no step history recorded for this run — it predates pipeline-worker's session history feature)"));
+    console.log(mocha('overlay1', "  (no step history recorded for this run — it predates pipeline-worker's session history feature)"));
     return;
   }
 

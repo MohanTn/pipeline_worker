@@ -389,7 +389,8 @@ export async function tryResolveConflicts(
         `asking the agent to fix the ${lastLocalFailure.name} failure the merge introduced`,
         // No allowedTools: unlike a conflict edit, fixing a broken build
         // legitimately needs to run the failing command to see it pass.
-        () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits' }),
+        // model: 'haiku' — pipeline fix turns run on the cheaper model.
+        () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: 'haiku' }),
       );
       reportAgentInvocation(agentResult, worktreePath);
       recordAgentTokens(repoRoot, state, 'fix local check failure after merge', agentResult.usage);
@@ -509,7 +510,8 @@ export async function runCiFixAttempt(
           : `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
         // No allowedTools here either: this turn pulls failed jobs and logs
         // through the forge MCP server and re-runs checks locally.
-        () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits' }),
+        // model: 'haiku' — pipeline fix turns run on the cheaper model.
+        () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits', model: 'haiku' }),
       );
     } finally {
       unlinkSync(mcpConfigPath);

@@ -3,8 +3,9 @@
  *
  * - LineRenderer (here): append-only scrolled lines — used when stdout is not
  *   a TTY (CI logs, piped output) or when PIPELINE_WORKER_PLAIN_OUTPUT=true.
- *   Zero cursor movement; colors are applied via node:util's styleText, which
- *   already disables itself on non-color streams.
+ *   Zero cursor movement; colors are the Catppuccin Mocha palette (ui/theme.js),
+ *   which, like node:util's styleText used for bold, disables itself on
+ *   non-color streams.
  * - TreeRenderer (ui/treeRenderer.ts): the live TTY dashboard with a pinned
  *   bottom region.
  *
@@ -16,6 +17,7 @@
 
 import { styleText } from 'node:util';
 import { formatTokens, formatUsageInline, usageFooter } from './format.js';
+import { mocha, type MochaRole } from './theme.js';
 import type { RunStatus, RunTree, StepNode, TreeEvent } from './runTree.js';
 
 export interface Renderer {
@@ -50,7 +52,7 @@ export function formatAttempt(node: StepNode): string {
 }
 
 const FINISH_GLYPH: Record<'done' | 'failed' | 'skipped', string> = { done: '✓', failed: '✗', skipped: '–' };
-const FINISH_COLOR: Record<'done' | 'failed' | 'skipped', 'green' | 'red' | 'dim'> = { done: 'green', failed: 'red', skipped: 'dim' };
+const FINISH_COLOR: Record<'done' | 'failed' | 'skipped', MochaRole> = { done: 'green', failed: 'red', skipped: 'overlay1' };
 
 const FINAL_LINE: Record<Exclude<RunStatus, 'running'>, string> = {
   done: '🎉 Done',
@@ -75,12 +77,12 @@ export class LineRenderer implements Renderer {
     if (event.kind === 'start') {
       const attempt = formatAttempt(event.node);
       this.out('');
-      this.out(styleText(['bold', 'cyan'], `▶ ${event.node.label}${attempt ? ` — ${attempt}` : ''}`));
-      if (event.node.detail) this.out(styleText('dim', `  ${event.node.detail}`));
+      this.out(styleText('bold', mocha('sky', `▶ ${event.node.label}${attempt ? ` — ${attempt}` : ''}`)));
+      if (event.node.detail) this.out(mocha('overlay1', `  ${event.node.detail}`));
       return;
     }
     if (event.kind === 'update' && event.node.status === 'running' && event.node.detail) {
-      this.out(styleText('dim', `  → ${event.node.detail}`));
+      this.out(mocha('overlay1', `  → ${event.node.detail}`));
       return;
     }
     if (event.kind === 'finish') {
@@ -88,7 +90,7 @@ export class LineRenderer implements Renderer {
       const glyph = FINISH_GLYPH[status] ?? '?';
       const skipTail = status === 'skipped' ? ' (skipped)' : '';
       const detail = event.node.detail ? ` — ${event.node.detail}` : '';
-      this.out(styleText(FINISH_COLOR[status] ?? 'dim', `${glyph} ${event.node.label}${skipTail}${detail}${formatStepFigures(event.node)}`));
+      this.out(mocha(FINISH_COLOR[status] ?? 'overlay1', `${glyph} ${event.node.label}${skipTail}${detail}${formatStepFigures(event.node)}`));
     }
     // 'add', 'tokens', and 'header' need no line of their own: tokens show on
     // the finish line, and header changes only matter to the live dashboard.
@@ -104,9 +106,9 @@ export class LineRenderer implements Renderer {
     const tokensPart = total > 0 ? ` (${formatTokens(total)})` : '';
     this.out('');
     this.out(styleText('bold', `${FINAL_LINE[status]}${tokensPart}`));
-    if (detail) this.out(styleText('dim', `  ${detail}`));
+    if (detail) this.out(mocha('overlay1', `  ${detail}`));
     const footer = usageFooter(tree.usageRows(), total);
     if (footer.length > 0) this.out('');
-    for (const line of footer) this.out(styleText('dim', line));
+    for (const line of footer) this.out(mocha('overlay1', line));
   }
 }

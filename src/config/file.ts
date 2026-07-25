@@ -49,18 +49,32 @@ export function readRawConfig(path: string = configFilePath()): Record<string, u
 }
 
 /**
+ * Serializes `contents` over the settings file. Returns the failure reason
+ * instead of throwing (this module's never-throw contract) so an interactive
+ * caller — the TUI's settings editor — can show "could not save: <why>" in
+ * place of the edit, rather than silently appearing to have saved.
+ */
+export function writeConfigFile(contents: unknown, path: string = configFilePath()): { ok: true } | { ok: false; error: string } {
+  try {
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(contents, null, 2)}\n`, 'utf-8');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * Writes the built-in defaults to `path` on first run, so the user has a
  * complete, editable file to fill in (host, tokens, project id) instead of
  * having to author one from the README. Best-effort: a read-only HOME warns
  * and the run continues on defaults.
  */
 export function writeDefaultConfig(contents: unknown, path: string = configFilePath()): void {
-  try {
-    mkdirSync(join(path, '..'), { recursive: true });
-    writeFileSync(path, `${JSON.stringify(contents, null, 2)}\n`, 'utf-8');
+  const result = writeConfigFile(contents, path);
+  if (result.ok) {
     console.error(`pipeline-worker: created ${path} — edit it to configure forge, tokens, and check commands.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Warning: failed to create ${path}: ${message}. Using defaults for this run.`);
+    return;
   }
+  console.error(`Warning: failed to create ${path}: ${result.error}. Using defaults for this run.`);
 }

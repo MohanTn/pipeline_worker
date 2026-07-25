@@ -5,90 +5,14 @@ import path from 'node:path';
 import { Command } from 'commander';
 import { ensureLatestVersion, installVersion } from './version/autoUpdate.js';
 import { runWorkflow } from './workflow/orchestrate.js';
-import { watchPipeline } from './workflow/watchPipeline.js';
+import { resumeRun, reviewBranch } from './workflow/runCommands.js';
 import { startServer } from './mcp/server.js';
-import { loadConfig } from './config/loader.js';
-import { createForge } from './forge/index.js';
-import { selectAgent } from './agent/index.js';
-import { loadRunState, listRunStates, recordEvent } from './state/runState.js';
+import { loadRunState, listRunStates } from './state/runState.js';
 import { findRepoRoot } from './git/commit.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
-import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from './git/worktree.js';
-import { remoteBranchExists } from './git/remote.js';
-import { adoptBranch, resolveResumeMode } from './workflow/adoptBranch.js';
-import { maybeSyncTargetBranch } from './workflow/syncTargetBranch.js';
-import { maybeReviewMergeRequest } from './workflow/reviewMr.js';
-import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './workflow/runPlan.js';
-import { beginRun, endRun, runStep, seedRunTokens, setPlainOutput } from './ui/steps.js';
-import { setCompletionSound } from './ui/notify.js';
+import { startTui, shouldOpenTui } from './ui/tui/index.js';
+import { endRun } from './ui/steps.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
-import { makeIdempotentCleanup, registerExitSignals } from './process/signalCleanup.js';
-import type { ForgeClient } from './forge/types.js';
-import type { AgentAdapter } from './agent/types.js';
-import type { PipelineWorkerConfig, ResumableRunState } from './types.js';
-
-/**
- * Adoption works off the branch as origin has it (see
- * git/worktree.ts's checkoutExistingBranch), so a branch that was never
- * pushed — a run that died before its push, leaving only a state file — has
- * nothing to adopt. Caught here to say so plainly, rather than surfacing a
- * raw `git fetch` failure.
- */
-async function requirePushedBranch(repoRoot: string, branch: string): Promise<void> {
-  if (await remoteBranchExists(repoRoot, branch)) return;
-  console.error(
-    `pipeline-worker: branch ${branch} does not exist on origin — there is nothing to resume or adopt. ` +
-      'Re-run `pipeline-worker run` from your changes instead.',
-  );
-  process.exit(1);
-}
-
-/**
- * The worktree from the crashed run is almost always already gone by this
- * point (orchestrate.ts's `finally` removes it on any exception, and on
- * SIGINT/SIGTERM) — reuse it only in the narrow case it survived (e.g. a
- * SIGKILL), otherwise recreate it from the branch's current state on origin.
- */
-async function resolveResumeWorktree(repoRoot: string, state: ResumableRunState): Promise<string> {
-  const worktreePath = (await isWorktreeOnBranch(state.worktreePath, state.branch))
-    ? state.worktreePath
-    : await checkoutExistingBranch(repoRoot, state.branch);
-  if (worktreePath !== state.worktreePath) {
-    state.worktreePath = worktreePath;
-    recordEvent(repoRoot, state, `Recreated worktree at ${worktreePath}`);
-  }
-  return worktreePath;
-}
-
-async function runResumeWatch(
-  forge: ForgeClient,
-  config: PipelineWorkerConfig,
-  agent: AgentAdapter,
-  worktreePath: string,
-  state: ResumableRunState,
-  repoRoot: string,
-  cleanup: () => Promise<void>,
-): Promise<void> {
-  try {
-    await watchPipeline(forge, config, agent, worktreePath, state.branch, state.targetBranch, state.mrIid, state, repoRoot);
-    // Same 'merge' tail as a fresh run (see orchestrate.ts's finalizeRun):
-    // when auto-merge landed the MR/PR, pull the merged result back into the
-    // local target branch so it doesn't sit stale after the run ends.
-    if (state.phase === 'done') {
-      await maybeSyncTargetBranch(forge, config, repoRoot, state.targetBranch, state.mrIid);
-      endRun('done', `MR/PR #${state.mrIid} finished green`);
-    } else if (state.phase === 'escalated') {
-      endRun('escalated', 'see the MR/PR comment for what was tried and why');
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');
-    endRun('failed', message);
-    throw error;
-  } finally {
-    await cleanup();
-  }
-}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { name: string; version: string };
@@ -107,9 +31,32 @@ program
     try {
       await ensureLatestVersion(pkg.name, pkg.version);
       const repoRoot = await findRepoRoot(process.cwd());
+      // `run` is the default command, so this action also receives a bare
+      // `pipeline-worker`; on an interactive terminal that means the TUI.
+      if (shouldOpenTui(process.argv.slice(2), process.stdin.isTTY === true, process.stdout.isTTY === true)) {
+        await startTui(repoRoot);
+        return;
+      }
       await runWorkflow(repoRoot, { ticket: opts.ticket, target: opts.target });
     } catch (error) {
       console.error('pipeline-worker run failed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('tui')
+  .description('Open the full-screen interactive dashboard: start runs, browse sessions, edit every setting, and walk through first-time setup')
+  .action(async () => {
+    try {
+      const repoRoot = await findRepoRoot(process.cwd());
+      if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
+        console.error('pipeline-worker: the TUI needs an interactive terminal — use `pipeline-worker run` (or the other subcommands) when output is redirected.');
+        process.exit(1);
+      }
+      await startTui(repoRoot);
+    } catch (error) {
+      console.error('pipeline-worker tui failed:', error instanceof Error ? error.message : error);
       process.exit(1);
     }
   });
@@ -141,41 +88,8 @@ program
   .action(async (opts: { branch: string; target?: string }) => {
     try {
       const repoRoot = await findRepoRoot(process.cwd());
-      const config = loadConfig(repoRoot);
-      setCompletionSound(config.completionSound);
-      setPlainOutput(config.plainOutput);
-      const forge = createForge(config);
-      const agent = selectAgent(config);
-
-      const mode = resolveResumeMode(loadRunState(repoRoot, opts.branch), opts.target);
-      let state: ResumableRunState;
-      let worktreePath: string;
-      if (mode.kind === 'resume') {
-        beginRun(resumeSkeleton(mode.state.targetBranch), { title: opts.branch });
-        if (mode.state.totalTokens !== undefined) seedRunTokens(mode.state.totalTokens);
-        worktreePath = await runStep('resume', 'reattach: reuse the crashed run\'s worktree, or recreate it from origin', () =>
-          resolveResumeWorktree(repoRoot, mode.state),
-        );
-        state = mode.state;
-      } else {
-        await requirePushedBranch(repoRoot, opts.branch);
-        beginRun(adoptSkeleton(opts.branch), { title: opts.branch });
-        state = await adoptBranch(repoRoot, config, forge, agent, opts.branch, mode.target, mode.reason);
-        worktreePath = state.worktreePath;
-        // Adoption is the one resume path that just (re)opened an MR/PR, so
-        // it is the one that has something new to review; a resumed run's
-        // MR/PR was already reviewed when its original run opened it.
-        await maybeReviewMergeRequest(forge, config, agent, worktreePath, state.targetBranch, state.mrIid);
-      }
-
-      const { cleanup } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
-      registerExitSignals((exitCode) => {
-        endRun('interrupted', `resume again with: pipeline-worker resume --branch ${opts.branch}`);
-        void cleanup().then(() => process.exit(exitCode));
-      });
-
-      await runResumeWatch(forge, config, agent, worktreePath, state, repoRoot, cleanup);
-      console.log(`pipeline-worker: resumed run finished with phase "${state.phase}".`);
+      const phase = await resumeRun(repoRoot, { branch: opts.branch, target: opts.target });
+      console.log(`pipeline-worker: resumed run finished with phase "${phase}".`);
     } catch (error) {
       console.error('pipeline-worker resume failed:', error instanceof Error ? error.message : error);
       process.exit(1);
@@ -189,31 +103,7 @@ program
   .action(async (opts: { branch: string }) => {
     try {
       const repoRoot = await findRepoRoot(process.cwd());
-      const config = loadConfig(repoRoot);
-      setCompletionSound(config.completionSound);
-      setPlainOutput(config.plainOutput);
-      const forge = createForge(config);
-      const agent = selectAgent(config);
-
-      const mr = await forge.findExistingMr(opts.branch);
-      if (!mr) {
-        console.error(`pipeline-worker: no open MR/PR found for branch ${opts.branch} — open one first (pipeline-worker resume --branch ${opts.branch}).`);
-        process.exit(1);
-      }
-
-      beginRun(reviewSkeleton(opts.branch), { title: opts.branch });
-      const worktreePath = await runStep('adopt', `checkout ${opts.branch} into a disposable worktree`, () =>
-        checkoutExistingBranch(repoRoot, opts.branch),
-      );
-      try {
-        // Asking for a review explicitly *is* the opt-in, so config.review is
-        // overridden here — PIPELINE_WORKER_REVIEW only gates the automatic
-        // stage inside `run`/`resume`.
-        const posted = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid);
-        endRun('done', posted > 0 ? `posted ${posted} comment(s) on ${mr.webUrl}` : `nothing worth commenting on — ${mr.webUrl}`);
-      } finally {
-        await removeWorktree(repoRoot, worktreePath);
-      }
+      await reviewBranch(repoRoot, { branch: opts.branch });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       endRun('failed', message);
@@ -272,6 +162,15 @@ program.addHelpText(
   'after',
   `
 Examples:
+  $ pipeline-worker
+      On an interactive terminal, opens the TUI (same as \`pipeline-worker tui\`).
+      With any argument, or when stdin/stdout is redirected, behaves as \`run\`.
+
+  $ pipeline-worker tui
+      Full-screen dashboard: start a run, browse this repo's sessions and resume
+      or review one, edit every setting with an explanation of what it does, or
+      walk the setup guide. Start here on a new machine.
+
   $ pipeline-worker run
       Capture your uncommitted changes and drive them to a green MR/PR, targeting
       origin's default branch (main or master). If the branch you are on already has

@@ -29,8 +29,11 @@ const REVIEW_SEVERITIES: readonly ReviewSeverity[] = ['CRITICAL', 'MAJOR', 'MINO
  * Also the template written to config.json on first run, so the file the user
  * opens lists every key with its default — build/lint/test are left out on
  * purpose: they come from detectChecks(repoRoot) unless the file names them.
+ *
+ * Exported so the TUI's settings editor and setup wizard can show "the default
+ * for this key" without keeping a second copy of these values in sync.
  */
-const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
+export const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test'> = {
   agent: 'claude',
   forge: 'gitlab',
   gitlab: {
