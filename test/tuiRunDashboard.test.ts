@@ -44,10 +44,31 @@ test('onEvent draws the tree exactly as the plain CLI would, and calls the bound
   assert.match(textOf(dashboard).join('\n'), /capture\s+reading the diff/);
 });
 
-test('log() lines from steps.ts (note/announce) appear above the tree', () => {
+test('log() lines from steps.ts (note/announce) appear under their own "notes" section, separate from the steps', () => {
   const dashboard = new RunDashboardView();
   dashboard.log('  agent: fixed the failing test');
-  assert.ok(textOf(dashboard).some((line) => line.includes('agent: fixed the failing test')));
+  const shown = textOf(dashboard);
+  const notesHeader = shown.findIndex((line) => line.includes('notes'));
+  const noteLine = shown.findIndex((line) => line.includes('agent: fixed the failing test'));
+  const stepsHeader = shown.findIndex((line) => line.includes('steps'));
+  assert.ok(notesHeader >= 0 && noteLine > notesHeader, 'the note must be under the notes header');
+  assert.ok(stepsHeader > noteLine, 'the steps section must come after the notes, not interleaved with them');
+});
+
+test('bindRedraw starts an animation tick, so the spinner keeps moving between tree events; stop() cancels it', async () => {
+  const dashboard = new RunDashboardView();
+  let redraws = 0;
+  dashboard.bindRedraw(() => {
+    redraws += 1;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.ok(redraws >= 2, `expected several timer-driven redraws with no tree events at all, got ${redraws}`);
+
+  const tree = new RunTree([], { title: 'add-login' }, (event) => dashboard.onEvent(event, tree));
+  dashboard.stop('done', undefined, tree); // triggers one last redraw itself, then clears the timer
+  const afterStop = redraws;
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(redraws, afterStop, 'the timer must not fire again once the run has settled');
 });
 
 test('stop() shows the terminal status, the detail line, and switches the hint to press-any-key', () => {
