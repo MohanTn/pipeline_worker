@@ -71,8 +71,35 @@ test('captureDiff counts modified and deleted tracked files separately from untr
     const result = await captureDiff(dir);
     assert.equal(result.modifiedCount, 1);
     assert.equal(result.deletedCount, 1);
+    assert.equal(result.stagedNewCount, 0);
     assert.deepEqual(result.untrackedFiles, ['new.txt']);
     assert.deepEqual(result.changedFiles.sort(), ['edit.txt', 'remove.txt']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('captureDiff counts an already-staged new file under stagedNewCount, not untrackedFiles', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-capturediff-staged-new-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+    writeFileSync(join(dir, 'base.txt'), 'base\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
+
+    // `git add` a new file before running pipeline-worker (a common habit) —
+    // `git diff HEAD` sees it (it's new relative to HEAD) but `git status
+    // --porcelain` reports it as `A ` not `??`, so untrackedFiles must not
+    // be the only place a "new file" gets counted.
+    writeFileSync(join(dir, 'staged-new.txt'), 'brand new\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+
+    const result = await captureDiff(dir);
+    assert.equal(result.stagedNewCount, 1);
+    assert.deepEqual(result.untrackedFiles, []);
+    assert.deepEqual(result.changedFiles, ['staged-new.txt']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
