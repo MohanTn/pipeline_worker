@@ -7,12 +7,41 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
+export interface ExecGitOptions {
+  cwd: string;
+  maxBuffer?: number;
+}
+
+/**
+ * Runs `git <args>`, rethrowing on failure with stdout folded into the error
+ * message when stderr is empty. Node's execFile error message is built from
+ * stderr only, but some git failures print entirely to stdout — e.g. `git
+ * commit` with nothing staged prints "nothing to commit, working tree
+ * clean" there, not to stderr — so without this, those failures surface to
+ * the user as a bare "Command failed: git ..." with no indication of what
+ * actually went wrong.
+ */
+export async function execGit(args: string[], options: ExecGitOptions): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execFileAsync('git', args, options);
+  } catch (error) {
+    if (error instanceof Error) {
+      const stdout = String((error as { stdout?: unknown }).stdout ?? '').trim();
+      const stderr = String((error as { stderr?: unknown }).stderr ?? '').trim();
+      if (stdout.length > 0 && stderr.length === 0) {
+        error.message = `${error.message.trim()}\n${stdout}`;
+      }
+    }
+    throw error;
+  }
+}
+
 export async function stageAll(worktreePath: string): Promise<void> {
-  await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+  await execGit(['add', '-A'], { cwd: worktreePath });
 }
 
 export async function commit(worktreePath: string, message: string): Promise<void> {
-  await execFileAsync('git', ['commit', '-m', message], { cwd: worktreePath });
+  await execGit(['commit', '-m', message], { cwd: worktreePath });
 }
 
 /**
@@ -25,7 +54,7 @@ export async function commit(worktreePath: string, message: string): Promise<voi
  * run the two are the same and this is exactly `git push -u origin <branch>`.
  */
 export async function push(worktreePath: string, remote: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['push', '--set-upstream', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
+  await execGit(['push', '--set-upstream', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
 }
 
 /**
@@ -37,18 +66,18 @@ export async function push(worktreePath: string, remote: string, branch: string)
  * rewrites already-pushed history.
  */
 export async function forcePushWithLease(worktreePath: string, remote: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['push', '--force-with-lease', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
+  await execGit(['push', '--force-with-lease', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
 }
 
 /** True when the worktree has staged, unstaged, or untracked changes. */
 export async function hasChanges(worktreePath: string): Promise<boolean> {
-  const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: worktreePath });
+  const { stdout } = await execGit(['status', '--porcelain'], { cwd: worktreePath });
   return stdout.trim().length > 0;
 }
 
 /** Files git still reports as unmerged — conflict markers from a `git apply --3way` or `git merge` not yet resolved and staged. */
 export async function listConflictedFiles(worktreePath: string): Promise<string[]> {
-  const { stdout } = await execFileAsync('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: worktreePath });
+  const { stdout } = await execGit(['diff', '--name-only', '--diff-filter=U'], { cwd: worktreePath });
   return stdout.trim().split('\n').filter(Boolean);
 }
 
@@ -71,12 +100,12 @@ export function findUnresolvedConflictMarkers(worktreePath: string, files: strin
 }
 
 export async function findRepoRoot(cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
+  const { stdout } = await execGit(['rev-parse', '--show-toplevel'], { cwd });
   return stdout.trim();
 }
 
 export async function currentBranch(cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+  const { stdout } = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
   return stdout.trim();
 }
 
@@ -87,7 +116,7 @@ export async function currentBranch(cwd: string): Promise<string> {
  * be gone first, since git refuses to check one branch out in two worktrees.
  */
 export async function checkoutBranch(cwd: string, branch: string): Promise<void> {
-  await execFileAsync('git', ['checkout', branch], { cwd });
+  await execGit(['checkout', branch], { cwd });
 }
 
 /**
@@ -99,7 +128,7 @@ export async function checkoutBranch(cwd: string, branch: string): Promise<void>
  * exactly its (single, uncommitted) change set.
  */
 export async function mergeBase(worktreePath: string, ref: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['merge-base', ref, 'HEAD'], { cwd: worktreePath });
+  const { stdout } = await execGit(['merge-base', ref, 'HEAD'], { cwd: worktreePath });
   return stdout.trim();
 }
 
@@ -107,7 +136,7 @@ export async function mergeBase(worktreePath: string, ref: string): Promise<stri
 export async function getGitUser(cwd: string): Promise<{ name: string; email: string }> {
   async function readConfig(key: string): Promise<string> {
     try {
-      const { stdout } = await execFileAsync('git', ['config', key], { cwd });
+      const { stdout } = await execGit(['config', key], { cwd });
       return stdout.trim();
     } catch {
       return '';

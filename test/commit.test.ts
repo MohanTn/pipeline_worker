@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getGitUser, listConflictedFiles, findUnresolvedConflictMarkers, mergeBase, findRepoRoot } from '../src/git/commit.js';
+import { getGitUser, listConflictedFiles, findUnresolvedConflictMarkers, mergeBase, findRepoRoot, execGit, commit } from '../src/git/commit.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -120,6 +120,45 @@ test('mergeBase returns the commit where HEAD diverged from the given ref, not e
     await execFileAsync('git', ['commit', '-q', '-m', 'feature work'], { cwd: dir });
 
     assert.equal(await mergeBase(dir, 'main-ahead'), baseSha.trim());
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('execGit folds stdout into the thrown error when stderr is empty, so a stdout-only git failure is still diagnosable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-execgit-stdout-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+    writeFileSync(join(dir, 'f.txt'), 'base\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
+
+    // `git commit` with nothing staged prints "nothing to commit, working
+    // tree clean" to stdout and exits non-zero, with an empty stderr — the
+    // exact case Node's execFile error message (stderr-only) would
+    // otherwise render as a content-free "Command failed: git commit ...".
+    await assert.rejects(commit(dir, 'empty commit'), (error: Error) => {
+      assert.match(error.message, /nothing to commit/);
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('execGit leaves the error message alone when stderr already has content', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-execgit-stderr-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await assert.rejects(execGit(['rev-parse', '--verify', 'refs/heads/does-not-exist'], { cwd: dir }), (error: Error) => {
+      assert.match(error.message, /Command failed/);
+      // A real stderr message from git ("fatal: ..."/"unknown revision...")
+      // must not be duplicated or replaced by empty stdout.
+      assert.equal(error.message.split('\n').filter((l) => l.trim().length > 0).length > 0, true);
+      return true;
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

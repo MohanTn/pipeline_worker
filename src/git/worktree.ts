@@ -5,15 +5,11 @@
  * `resume` command's finally blocks).
  */
 
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { mkdtempSync, mkdirSync, cpSync, writeFileSync, unlinkSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
-import { listConflictedFiles } from './commit.js';
-
-const execFileAsync = promisify(execFile);
+import { listConflictedFiles, execGit } from './commit.js';
 
 export function generateTempBranchName(): string {
   return `pipeline-worker/tmp-${randomUUID().slice(0, 8)}`;
@@ -56,7 +52,7 @@ function newWorktreeDir(): string {
 /** Creates a new worktree off HEAD on a fresh branch, returning its path. */
 export async function createWorktree(repoRoot: string, branchName: string): Promise<string> {
   const worktreePath = newWorktreeDir();
-  await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], { cwd: repoRoot });
+  await execGit(['worktree', 'add', '-b', branchName, worktreePath, 'HEAD'], { cwd: repoRoot });
   return worktreePath;
 }
 
@@ -71,7 +67,7 @@ export async function createWorktree(repoRoot: string, branchName: string): Prom
 export async function isWorktreeOnBranch(worktreePath: string, branch: string): Promise<boolean> {
   if (!existsSync(worktreePath)) return false;
   try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: worktreePath });
+    const { stdout } = await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: worktreePath });
     return stdout.trim() === branch;
   } catch {
     return false;
@@ -89,8 +85,8 @@ export async function isWorktreeOnBranch(worktreePath: string, branch: string): 
  */
 export async function checkoutExistingBranch(repoRoot: string, branch: string): Promise<string> {
   const worktreePath = newWorktreeDir();
-  await execFileAsync('git', ['fetch', 'origin', branch], { cwd: repoRoot });
-  await execFileAsync('git', ['worktree', 'add', '-B', branch, worktreePath, `origin/${branch}`], { cwd: repoRoot });
+  await execGit(['fetch', 'origin', branch], { cwd: repoRoot });
+  await execGit(['worktree', 'add', '-B', branch, worktreePath, `origin/${branch}`], { cwd: repoRoot });
   // Same dependency link a fresh run gets (see linkNodeModules): without it,
   // every check in the adopted worktree runs against a repo with no
   // node_modules — `npm run build` dies with "tsc: not found" before the
@@ -116,7 +112,7 @@ export async function checkoutExistingBranch(repoRoot: string, branch: string): 
  * conflict would for a human.
  */
 export async function syncWithOrigin(worktreePath: string, targetBranch: string): Promise<void> {
-  await execFileAsync('git', ['pull', '--rebase', 'origin', targetBranch], { cwd: worktreePath });
+  await execGit(['pull', '--rebase', 'origin', targetBranch], { cwd: worktreePath });
 }
 
 export interface ApplyDiffResult {
@@ -143,7 +139,7 @@ async function applyDiffPatch(worktreePath: string, diffText: string): Promise<s
   const diffFile = join(tmpdir(), `pipeline-worker-diff-${randomUUID()}.patch`);
   writeFileSync(diffFile, diffText, 'utf-8');
   try {
-    await execFileAsync('git', ['apply', '--3way', '--index', diffFile], { cwd: worktreePath });
+    await execGit(['apply', '--3way', '--index', diffFile], { cwd: worktreePath });
     return [];
   } catch (error) {
     const conflictedFiles = await listConflictedFiles(worktreePath);
@@ -165,7 +161,7 @@ function copyUntrackedFiles(repoRoot: string, worktreePath: string, untrackedFil
 
 async function stageUntrackedIfNeeded(worktreePath: string, untrackedFiles: string[], conflictedFiles: string[]): Promise<void> {
   if (untrackedFiles.length > 0 && conflictedFiles.length === 0) {
-    await execFileAsync('git', ['add', '-A'], { cwd: worktreePath });
+    await execGit(['add', '-A'], { cwd: worktreePath });
   }
 }
 
@@ -201,7 +197,7 @@ export async function renameBranch(worktreePath: string, newBranchName: string):
   let candidate = newBranchName;
   for (let attempt = 1; attempt <= RENAME_BRANCH_MAX_ATTEMPTS; attempt++) {
     try {
-      await execFileAsync('git', ['branch', '-m', candidate], { cwd: worktreePath });
+      await execGit(['branch', '-m', candidate], { cwd: worktreePath });
       return candidate;
     } catch (error) {
       const stderr = (error as { stderr?: string }).stderr ?? '';
@@ -221,7 +217,7 @@ export async function renameBranch(worktreePath: string, newBranchName: string):
 // fallow-ignore-next-line complexity
 export async function removeWorktree(repoRoot: string, worktreePath: string): Promise<void> {
   try {
-    await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoRoot });
+    await execGit(['worktree', 'remove', '--force', worktreePath], { cwd: repoRoot });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Warning: failed to remove worktree ${worktreePath}: ${message}`);
