@@ -2,10 +2,9 @@
  * The TUI's app loop and its terminal contract.
  *
  * The assertions that matter here are about restoration, not appearance: the
- * alt screen and cursor must come back on every exit path, and stdin must be
- * handed back in cooked mode before a suspended workflow runs — otherwise an
- * agent CLI prompting for input reads nothing, and a crash leaves the user in
- * a cursorless alt buffer.
+ * alt screen and cursor must come back on every exit path, a foreground job
+ * (a 'run' action) must never leave the alt screen while it runs, and a crash
+ * must never leave the user in a cursorless alt buffer.
  */
 
 import test from 'node:test';
@@ -92,7 +91,7 @@ function harness(view: View): { app: TuiApp; out: FakeStream; input: FakeInput }
   return { app: new TuiApp(view, new Screen(out), new KeyReader(input)), out, input };
 }
 
-/** Lets the app finish handling the key just sent. Key handling is async (a view may suspend into a whole workflow), and the app deliberately drops keys arriving while one is in flight. */
+/** Lets the app finish handling the key just sent. Key handling is async (a view may return a 'run' action that runs a whole workflow), and the app deliberately drops keys arriving while one is in flight. */
 function tick(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
@@ -149,19 +148,24 @@ test('the frame is repainted on a terminal resize, and the listener is removed o
   assert.equal(out.resizeListeners, 0);
 });
 
-test('a suspend drops to the normal screen with stdin cooked, then restores the TUI', async () => {
-  let rawModeDuringJob: boolean | undefined;
-  let altScreenDuringJob = true;
+test('a run action pushes its view and stays on the alt screen for the whole job, then restores dispatch after any key', async () => {
+  let altScreenDuringJob = false;
+  let redrawn = false;
   const out = new FakeStream();
   const input = new FakeInput();
+  const jobView = new ScriptedView('run');
   const view = new ScriptedView('home', [
     {
-      type: 'suspend',
+      type: 'run',
       label: 'run',
-      run: async () => {
-        rawModeDuringJob = input.rawModes[input.rawModes.length - 1];
-        // The last alt-screen instruction written must be the exit one.
+      view: jobView,
+      run: async (ctx) => {
+        // The alt screen must never be exited while the job runs.
         altScreenDuringJob = out.written.lastIndexOf(ENTER_ALT) > out.written.lastIndexOf(EXIT_ALT);
+        const beforeRedraw = out.written.length;
+        ctx.redraw();
+        // Proves redraw() actually repainted, not just that it ran without throwing.
+        redrawn = out.written.length > beforeRedraw;
       },
     },
     { type: 'quit' },
@@ -169,18 +173,46 @@ test('a suspend drops to the normal screen with stdin cooked, then restores the 
   const app = new TuiApp(view, new Screen(out), new KeyReader(input));
 
   const running = app.run();
-  input.send('\r'); // triggers the suspend
+  input.send('\r'); // triggers the run action
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(rawModeDuringJob, false, 'raw mode must be off while the workflow owns the terminal');
-  assert.equal(altScreenDuringJob, false, 'the job must run outside the alt screen');
+  assert.ok(altScreenDuringJob, 'the job must run without leaving the alt screen');
+  assert.ok(redrawn, 'the ctx.redraw callback must repaint');
+  assert.ok(out.written.includes('run'), "the job's own view must be on screen");
 
   input.send('x'); // dismisses the "press any key" pause
   await new Promise((resolve) => setImmediate(resolve));
-  assert.ok(out.written.lastIndexOf(ENTER_ALT) > out.written.lastIndexOf(EXIT_ALT), 'the TUI must come back after the job');
 
+  // Dispatch must be restored: the root view (now back on top) receives keys again.
   input.send('q');
   await running;
   assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
+});
+
+test('an error thrown by a run action is shown as the usual error banner, not a raw write, and clears once dismissed', async () => {
+  const out = new FakeStream();
+  const input = new FakeInput();
+  const jobView = new ScriptedView('run');
+  const view = new ScriptedView('home', [
+    { type: 'run', label: 'run', view: jobView, run: async () => { throw new Error('forge unreachable'); } },
+    { type: 'quit' },
+  ]);
+  const app = new TuiApp(view, new Screen(out), new KeyReader(input));
+
+  const running = app.run();
+  input.send('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(out.written.includes('run failed: forge unreachable'));
+
+  out.written = ''; // isolate the paint that follows dismissal
+  input.send('x'); // dismiss — pops the job view and returns to the root
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(
+    !out.written.includes('run failed: forge unreachable'),
+    'the error banner must clear after the pause, before the restored root view is drawn — not linger until the next keypress',
+  );
+
+  input.send('q');
+  await running;
 });
 
 test('a view that throws is reported in the frame instead of taking the process down', async () => {

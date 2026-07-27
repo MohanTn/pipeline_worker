@@ -15,8 +15,6 @@
  *  - no structured-output/JSON-schema flag -> the schema is embedded in the
  *    prompt and the JSON object is extracted from the response text (same
  *    strategy as the copilot adapter);
- *  - no per-invocation MCP config flag -> `mcpConfigPath` is unsupported;
- *    register the server in pi's config or pass `-e` in pi's own settings;
  *  - no `--allowedTools` flag -> pi uses `--tools <list>` for allowlisting,
  *    so `opts.allowedTools` is mapped from Claude-style names to pi-style
  *    names (PascalCase -> lowercase, scoped patterns e.g. `Bash(git diff:*)`

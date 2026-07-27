@@ -11,8 +11,6 @@
  * permission-denied instead. Known gaps vs the Claude adapter, handled here:
  *  - no structured-output/JSON-schema flag -> the schema is embedded in the
  *    prompt and the JSON object is extracted from the response text;
- *  - no per-invocation MCP config flag -> Copilot only reads
- *    ~/.copilot/mcp-config.json, so `mcpConfigPath` is ignored with a warning.
  *  - `--model` expects Copilot's own model names (e.g. `claude-haiku-4.5`),
  *    not the Claude CLI aliases the config defaults to -> known aliases are
  *    mapped (haiku/sonnet), anything else is passed through verbatim.
@@ -53,16 +51,6 @@ function extractJsonObject(text: string): string {
   return start !== -1 && end > start ? text.slice(start, end + 1) : text;
 }
 
-/** Warns about the AgentInvokeOptions Copilot CLI has no per-invocation flag for (see module comment). */
-function warnUnsupportedOptions(opts: AgentInvokeOptions): void {
-  if (opts.mcpConfigPath) {
-    console.error(
-      'pipeline-worker: copilot CLI has no per-invocation MCP config flag; ignoring it. ' +
-        'Register the server in ~/.copilot/mcp-config.json to give copilot forge access.',
-    );
-  }
-}
-
 /** Copilot's `--model` takes its own model names, not the Claude CLI aliases config defaults to (see module comment). */
 const COPILOT_MODEL_ALIASES: Record<string, string> = {
   haiku: 'claude-haiku-4.5',
@@ -78,7 +66,6 @@ export const copilotAdapter: AgentAdapter = {
     // Copilot CLI has no --system-prompt or --json-schema flag, so both are
     // folded into the prompt text (see promptText.ts).
     const prompt = composePrompt(opts);
-    warnUnsupportedOptions(opts);
 
     const sessionName = `pipeline-worker-${randomUUID()}`;
     const args = ['-s', '--no-ask-user', '--allow-all-tools', '--allow-all-paths', '--name', sessionName];

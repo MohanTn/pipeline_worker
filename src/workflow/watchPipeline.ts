@@ -1,13 +1,12 @@
 /**
  * Stage 12: poll the MR/PR's pipeline (at config.pollIntervalSeconds) until it
  * succeeds; on failure, hand the pipeline id/URL to the configured agent and
- * let it pull the failed jobs and logs itself via whatever forge MCP tooling
- * is available (pipeline-worker's own, or an external GitLab/GitHub MCP
- * server the agent already has configured), then commit the fix, push, and
- * retry — capped at config.maxFixAttempts before escalating via an MR
- * comment. Never retries indefinitely, and never spends agent tokens on
- * pipelines that are not actually failed (canceled/skipped go straight to a
- * human).
+ * let it inspect the failure itself via the forge's own CLI (`glab`/`gh`) or
+ * whatever tooling is already available in this environment, then commit the
+ * fix, push, and retry — capped at config.maxFixAttempts before escalating
+ * via an MR comment. Never retries indefinitely, and never spends agent
+ * tokens on pipelines that are not actually failed (canceled/skipped go
+ * straight to a human).
  *
  * Also watches for the forge confirming a real merge conflict against the
  * target branch (GitHub's "dirty" / GitLab's "cannot_be_merged") — some
@@ -24,10 +23,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import type { AgentAdapter, AgentInvokeResult } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolvedConflictMarkers } from '../git/commit.js';
@@ -41,6 +38,10 @@ const execFileAsync = promisify(execFile);
 
 /** Tail-truncation cap for a failing check's stderr fed back to the agent — mirrors agent/claude.ts's own cap on error output it surfaces. */
 const MAX_LOCAL_CHECK_OUTPUT_CHARS = 4000;
+/** Same cap, per failed job, for the CI-fix prompt's embedded job logs. */
+const MAX_FAILED_JOB_LOG_CHARS = 4000;
+/** Caps how many failed jobs' logs are embedded in one fix prompt, so a pipeline with dozens of failed jobs can't blow the prompt budget. */
+const MAX_FAILED_JOBS_IN_PROMPT = 3;
 
 const MAX_POLL_WINDOW_MS = 2 * 60 * 60 * 1000; // per pipeline attempt, as a safety net
 // How long to tolerate zero pipelines before concluding the repo has no CI
@@ -189,24 +190,63 @@ function buildConflictPrompt(conflictedFiles: string[]): string {
   );
 }
 
-function writeAgentMcpConfig(): string {
-  const path = join(tmpdir(), `pipeline-worker-mcp-${randomUUID()}.json`);
-  const config = { mcpServers: { 'pipeline-worker-forge': { type: 'stdio', command: 'npx', args: ['pipeline-worker', 'serve'], env: {} } } };
-  writeFileSync(path, JSON.stringify(config), 'utf-8');
-  return path;
-}
-
 function forgeLabel(forgeName: ForgeName): string {
   return forgeName === 'gitlab' ? 'GitLab' : 'GitHub';
 }
 
-function buildFixPrompt(pipeline: Pipeline, forgeName: ForgeName): string {
+function forgeCli(forgeName: ForgeName): string {
+  return forgeName === 'gitlab' ? 'glab' : 'gh';
+}
+
+/**
+ * Best-effort: fetches the failed jobs' logs through pipeline-worker's own
+ * (already-authenticated) forge client — the same data the deleted MCP
+ * server used to hand the agent — so the fix prompt carries real failure
+ * output instead of just a URL. Empty string on any failure (forge hiccup,
+ * no jobs reported yet); the caller falls back to telling the agent to look
+ * it up itself.
+ */
+async function fetchFailedJobContext(forge: ForgeClient, pipeline: Pipeline): Promise<string> {
+  try {
+    const jobs = await forge.getFailedJobs(pipeline.id);
+    if (jobs.length === 0) return '';
+    const sections = await Promise.all(
+      jobs.slice(0, MAX_FAILED_JOBS_IN_PROMPT).map(async (job) => {
+        try {
+          const log = await forge.getJobLog(job.id);
+          return `--- ${job.name} (job ${job.id}) ---\n${log.slice(-MAX_FAILED_JOB_LOG_CHARS)}`;
+        } catch {
+          return `--- ${job.name} (job ${job.id}) ---\n(log unavailable)`;
+        }
+      }),
+    );
+    return sections.join('\n\n');
+  } catch {
+    return '';
+  }
+}
+
+async function buildFixPrompt(forge: ForgeClient, pipeline: Pipeline, forgeName: ForgeName): Promise<string> {
   const label = forgeLabel(forgeName);
+  const cli = forgeCli(forgeName);
+  const context = await fetchFailedJobContext(forge, pipeline);
+  if (context) {
+    return (
+      `The CI pipeline ${pipeline.webUrl} (id ${pipeline.id}) failed. Here is the failed job output:\n\n${context}\n\n` +
+      'Fix the underlying issue in this worktree so the pipeline passes. If you need more detail than the output ' +
+      `above, the ${cli} CLI may be available in this environment for further ${label} investigation.`
+    );
+  }
+  // pipeline-worker could not fetch the failure itself (forge hiccup, or the
+  // pipeline reported no failed jobs yet) — fall back to pointing the agent
+  // at the CLI, with an explicit escape hatch for when that isn't usable
+  // either (not installed, not authenticated in this environment).
   return (
-    `The CI pipeline ${pipeline.webUrl} (id ${pipeline.id}) failed. Use whichever ${label} MCP server tooling is ` +
-    `available in this environment (pipeline-worker's own forge MCP server, or an external ${label} MCP server if ` +
-    'one is configured) to see which jobs failed and why, then fix the underlying issue in this worktree so the ' +
-    'pipeline passes.'
+    `The CI pipeline ${pipeline.webUrl} (id ${pipeline.id}) failed, and pipeline-worker could not fetch the failed ` +
+    `job logs itself. Use the ${cli} CLI (or whichever ${label} tooling is already available) to see which jobs ` +
+    `failed and why. If ${cli} is not installed or not authenticated in this environment, re-run this worktree's ` +
+    'local build/lint/test commands yourself to reproduce the failure instead. Then fix the underlying issue so ' +
+    'the pipeline passes.'
   );
 }
 
@@ -251,25 +291,18 @@ async function attemptCleanMerge(stepId: string, worktreePath: string, targetBra
 async function resolveConflictsWithAgent(stepId: string, agent: AgentAdapter, worktreePath: string, conflictedFiles: string[], state: RunState, repoRoot: string): Promise<string[]> {
   note(conflictedFiles.join(', '));
 
-  const mcpConfigPath = writeAgentMcpConfig();
-  let agentResult: AgentInvokeResult;
-  try {
-    agentResult = await runPhase(
-      stepId,
-      `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-      () =>
-        agent.invoke({
-          prompt: buildConflictPrompt(conflictedFiles),
-          systemPrompt: CONFLICT_SYSTEM,
-          cwd: worktreePath,
-          mcpConfigPath,
-          permissionMode: 'acceptEdits',
-          allowedTools: CONFLICT_TOOLS,
-        }),
-    );
-  } finally {
-    unlinkSync(mcpConfigPath);
-  }
+  const agentResult = await runPhase(
+    stepId,
+    `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
+    () =>
+      agent.invoke({
+        prompt: buildConflictPrompt(conflictedFiles),
+        systemPrompt: CONFLICT_SYSTEM,
+        cwd: worktreePath,
+        permissionMode: 'acceptEdits',
+        allowedTools: CONFLICT_TOOLS,
+      }),
+  );
   reportAgentInvocation(agentResult, worktreePath);
   recordAgentTokens(repoRoot, state, 'resolve merge conflicts', agentResult.usage);
 
@@ -499,23 +532,17 @@ export async function runCiFixAttempt(
       maxAttempts: config.maxFixAttempts,
     });
 
-    const prompt = lastLocalFailure ? buildLocalCheckFixPrompt(lastLocalFailure) : buildFixPrompt(pipeline, config.forge);
-    const mcpConfigPath = writeAgentMcpConfig();
-    let agentResult: AgentInvokeResult;
-    try {
-      agentResult = await runPhase(
-        stepId,
-        lastLocalFailure
-          ? `asking the agent to fix the ${lastLocalFailure.name} failure its last edit left behind`
-          : `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
-        // No allowedTools here either: this turn pulls failed jobs and logs
-        // through the forge MCP server and re-runs checks locally.
-        // model: 'haiku' — pipeline fix turns run on the cheaper model.
-        () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits', model: 'haiku' }),
-      );
-    } finally {
-      unlinkSync(mcpConfigPath);
-    }
+    const prompt = lastLocalFailure ? buildLocalCheckFixPrompt(lastLocalFailure) : await buildFixPrompt(forge, pipeline, config.forge);
+    const agentResult: AgentInvokeResult = await runPhase(
+      stepId,
+      lastLocalFailure
+        ? `asking the agent to fix the ${lastLocalFailure.name} failure its last edit left behind`
+        : `asking the agent to diagnose and fix ${pipeline.webUrl} — pulling the failed job logs first`,
+      // No allowedTools here either: this turn needs shell access for the
+      // forge CLI (glab/gh, as a fallback) plus edit tools to apply the fix.
+      // model: 'haiku' — pipeline fix turns run on the cheaper model.
+      () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: 'haiku' }),
+    );
     reportAgentInvocation(agentResult, worktreePath);
     recordAgentTokens(repoRoot, state, 'fix CI failure', agentResult.usage);
 

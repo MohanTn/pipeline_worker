@@ -3,7 +3,7 @@
  * reader that puts stdin into raw mode and feeds parsed keys to a listener.
  *
  * Hand-rolled rather than pulled from a dependency — CLAUDE.md caps runtime
- * deps at commander + MCP SDK + toon, and terminal key decoding is well under
+ * deps at commander + zod + toon, and terminal key decoding is well under
  * the ~150-line bar that rule draws. Only the sequences the TUI actually binds
  * are decoded; anything unrecognized is dropped rather than thrown, because the
  * UI layer must never kill the process (CLAUDE.md's never-throw contract).
@@ -127,10 +127,11 @@ export interface InStream {
 
 /**
  * Puts stdin in raw mode (no line buffering, no terminal echo, no automatic
- * ctrl-C) and delivers decoded keys to `listener`. start()/stop() are paired
- * around every suspend, so a workflow that runs on the normal terminal gets a
- * cooked stdin back — otherwise an agent CLI prompting for input would read
- * nothing.
+ * ctrl-C) and delivers decoded keys to `listener`. Only one listener is ever
+ * attached at a time, via the internal 'data' handler's single-listener
+ * field — swapping listeners (app.ts's waitForAnyKey does this around a
+ * finished job's dismissal) must call stop() before the next start(), or the
+ * 'data' handler ends up registered twice and double-fires every keystroke.
  */
 export class KeyReader {
   private listener: ((key: Key) => void) | undefined;

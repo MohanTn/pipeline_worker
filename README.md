@@ -10,10 +10,10 @@ Takes the uncommitted diff in your repo and drives it — unattended — to a me
 2. Asks a coding agent to infer intent: change type, branch slug, commit message, summary.
 3. Runs `build` / `lint` / `test`, fail-fast.
 4. Commits, pushes, opens a GitLab MR or GitHub PR against origin's default branch (or `--target`). If the current branch already has an open MR/PR, no second one is opened: the commit lands on it and a follow-up breakdown is appended to its description.
-5. Polls CI; on failure hands the pipeline to the agent, which pulls failed jobs and logs over MCP, commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating with an MR/PR comment.
+5. Polls CI; on failure hands the pipeline to the agent, which inspects the failure itself via the forge CLI (`glab`/`gh`), commits the fix, pushes, and re-polls — capped at `maxFixAttempts` before escalating with an MR/PR comment.
 6. Resets your repo back to HEAD, waits for the auto-merge to land, fast-forwards your local target branch, then checks the feature branch out so your next change becomes a follow-up commit.
 
-Polling costs zero agent tokens; the agent runs only when a pipeline actually fails, fetching detail through a [TOON](https://github.com/toon-format/toon)-encoded MCP server. On a real terminal the run renders as a live step tree; piped output falls back to append-only narration (or set `plainOutput`).
+Polling costs zero agent tokens; the agent runs only when a pipeline actually fails. On a terminal the run renders as a live step tree — inside the TUI's own screen when started from there, or as a scrollback dashboard from the plain CLI; piped output falls back to append-only narration (or set `plainOutput`).
 
 ## Requirements
 
@@ -21,6 +21,7 @@ Polling costs zero agent tokens; the agent runs only when a pipeline actually fa
 - One agent CLI on PATH: `claude`, `pi`, `copilot`, or `little-coder`
 - A GitLab or GitHub token with API access
 - For `"forge": "gitlab"`: the [`glab`](https://gitlab.com/gitlab-org/cli) CLI (authenticated non-interactively via `GITLAB_TOKEN` + `--hostname`)
+- Optional, either forge: an authenticated [`glab`](https://gitlab.com/gitlab-org/cli)/[`gh`](https://cli.github.com/) CLI on the agent's PATH gives a CI-fix turn a fallback way to dig deeper into a failure. pipeline-worker fetches the failed jobs' logs itself first and embeds them in the fix prompt, so this isn't required — without it, the agent works from that embedded output (and from re-running local checks) instead.
 
 ## Install
 
@@ -135,7 +136,6 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 | `pipeline-worker` | On a terminal, opens the TUI; with any argument or when redirected, behaves as `run` |
 | `pipeline-worker tui` | Full-screen dashboard: runs, sessions, settings editor, setup guide |
 | `pipeline-worker run [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
-| `pipeline-worker serve` | Start the forge MCP server over stdio (used by the agent during fix runs) |
 | `pipeline-worker resume --branch <name> [--target <branch>]` | Resume a crashed run, or adopt a branch it has no record of |
 | `pipeline-worker review --branch <name>` | Review that branch's open MR/PR and post line-anchored comments |
 | `pipeline-worker status --branch <name>` | Print the persisted state of a run |
@@ -168,7 +168,7 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 - **Settings** — every key with the value in force, where it came from (`file` you set it, `auto` detected from the repo, `default` built in), and `?` for what it does. Edits save immediately; `d` clears a key back to auto-detection.
 - **Setup guide** — the questions that decide whether pipeline-worker can run at all (forge, credentials, agent), each explaining why it is being asked. Nothing is written until you confirm.
 
-Starting a run, a resume, or a review hands the terminal to the usual live step dashboard and returns to the TUI afterwards, so run output lands in your scrollback exactly as it does from the plain CLI. Everything remains scriptable: any argument, or a redirected stdin/stdout, skips the TUI entirely.
+Starting a run, a resume, or a review opens the same live step dashboard inside the TUI's own screen, and returns to the TUI once it settles. Everything remains scriptable: any argument, or a redirected stdin/stdout, skips the TUI entirely and runs the plain, non-interactive CLI instead.
 
 ### Following up on a PR/MR under review
 

@@ -1,5 +1,6 @@
 /**
- * TOON response envelope for the GitLab MCP server's tools.
+ * TOON response envelope for pipeline-worker's machine-readable CLI output
+ * (`status`, `sessions`).
  *
  * Ports the response conventions already established in this repo family's
  * files-mcp/server.py (status / aggregate counts / chars / truncate-with-

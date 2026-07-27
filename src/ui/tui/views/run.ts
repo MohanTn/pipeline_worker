@@ -1,19 +1,19 @@
 /**
  * The run launcher: the two optional flags `pipeline-worker run` takes
- * (--ticket, --target), then a button that hands the terminal over.
+ * (--ticket, --target), then a button that starts it.
  *
- * The run itself is deliberately NOT painted inside the TUI. Suspending to the
- * normal screen means the existing live tree dashboard (ui/steps.ts,
- * ui/treeRenderer.ts) drives the run exactly as it does from the plain CLI —
- * one renderer to maintain, one output format to reason about, and the run's
- * narration is left in scrollback afterwards instead of vanishing with the alt
- * screen.
+ * The run is painted inside the TUI's own alt screen: Start pushes a
+ * RunDashboardView (ui/tui/views/runDashboard.ts) wired to ui/steps.ts, which
+ * drives it exactly the events it would otherwise send to TreeRenderer for
+ * the plain CLI — one tree layout to maintain (ui/runTreeFormat.ts), two
+ * paint targets.
  */
 
 import { seg, wrap, type Line } from '../line.js';
 import { moveIndex } from '../list.js';
 import { sectionRow } from '../chrome.js';
 import { applyKey, createInput, renderInput, type InputState } from '../textInput.js';
+import { runInDashboard } from './runDashboard.js';
 import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { Key } from '../keys.js';
 import type { Size } from '../screen.js';
@@ -79,7 +79,7 @@ export class RunView implements View {
       seg(' Start run ', { invert: startSelected, bold: true, role: startSelected ? undefined : 'overlay1' }),
     ]);
 
-    const help = FIELDS[this.index]?.help ?? 'Hands the terminal to the run dashboard until the run settles, then comes back here.';
+    const help = FIELDS[this.index]?.help ?? 'Opens the run dashboard until the run settles, then comes back here.';
     body.push([], sectionRow('about this field', inner.columns));
     for (const text of wrap(help, inner.columns)) body.push([seg(text, { role: 'overlay1' })]);
 
@@ -100,7 +100,7 @@ export class RunView implements View {
     if (this.index === START_ROW) {
       if (key.name === 'enter') {
         const options = this.options();
-        return { type: 'suspend', label: 'run', run: () => this.io.start(options) };
+        return runInDashboard('run', () => this.io.start(options));
       }
       // A ticket id is a plausible thing to type while the button is focused,
       // so 'q' here means quit only because no field has focus to receive it.

@@ -1,7 +1,7 @@
 /**
  * Forge-neutral client interface. "MR" naming follows GitLab; the GitHub
  * implementation maps pull requests / workflow runs / jobs onto the same
- * shapes so the workflow and MCP server never branch on the forge.
+ * shapes so the workflow never branches on the forge.
  */
 
 import type { MergeMethod, MergeRequest, Pipeline, PipelineJob } from '../types.js';

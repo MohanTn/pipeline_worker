@@ -25,8 +25,6 @@ export interface AgentInvokeOptions {
   cwd: string;
   /** Optional JSON schema the agent should conform its final answer to. */
   jsonSchema?: object;
-  /** Optional path to an MCP config file (e.g. pipeline-worker's own `serve` registration) to load for this turn. */
-  mcpConfigPath?: string;
   /** Optional permission mode override; adapters default to an auto-accept mode suitable for unattended runs. */
   permissionMode?: string;
   /**

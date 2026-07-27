@@ -3,14 +3,15 @@
  *
  * Three rules keep it honest:
  *
- * - Keys are handled one at a time. A view's onKey may be async (a suspend
- *   runs a whole workflow), so incoming keys are dropped while one is in
- *   flight rather than queued — a held-down arrow key must not stack up a
+ * - Keys are handled one at a time. A view's onKey may be async (a 'run'
+ *   action runs a whole workflow), so incoming keys are dropped while one is
+ *   in flight rather than queued — a held-down arrow key must not stack up a
  *   hundred pending navigations behind a running job.
  * - A view that throws is caught and shown as an error banner rather than
  *   taking the process down, per CLAUDE.md's never-throw UI contract.
- * - The screen is restored on every exit path: quit, empty stack, ctrl-C, an
- *   unhandled throw, and around every suspend.
+ * - The screen is restored on every exit path: quit, empty stack, ctrl-C, and
+ *   an unhandled throw. Unlike the old suspend()-based design, a 'run' action
+ *   never leaves the alt screen at all — see screen.ts.
  */
 
 import { frame, innerSize } from './chrome.js';
@@ -18,11 +19,6 @@ import { seg, type Line } from './line.js';
 import { KeyReader, type Key } from './keys.js';
 import { Screen } from './screen.js';
 import type { Action, View } from './view.js';
-
-/** Printed on the normal screen while a suspended job runs, so the handover is visible rather than looking like a crash. */
-function suspendBanner(label: string): string {
-  return `\n── pipeline-worker · ${label} ────────────────────────────\n`;
-}
 
 export class TuiApp {
   private readonly stack: View[] = [];
@@ -59,31 +55,46 @@ export class TuiApp {
     }
   }
 
-  /** Leaves the alt screen, runs the job against the normal terminal with cooked stdin, then restores the TUI. */
-  private async suspend(label: string, run: () => Promise<void>): Promise<void> {
-    this.keys.stop();
-    await this.screen.suspend(async () => {
-      process.stdout.write(suspendBanner(label));
-      try {
-        await run();
-      } catch (error) {
-        this.error = `${label} failed: ${error instanceof Error ? error.message : String(error)}`;
-        process.stdout.write(`\n${this.error}\n`);
-      }
-      process.stdout.write('\nPress any key to return to pipeline-worker…');
-      await this.waitForAnyKey();
-    });
+  /**
+   * Runs a foreground job (a workflow run, a resume, a review) without
+   * leaving the alt screen: pushes the job's own view, redraws on demand as
+   * the job reports progress through `ctx.redraw`, then leaves the finished
+   * view up until any key is pressed. Errors surface as the usual error
+   * banner rather than a raw write, and are shown on the still-pushed view.
+   */
+  private async runJob(label: string, view: View, run: (ctx: { redraw(): void }) => Promise<void>): Promise<void> {
+    this.stack.push(view);
+    this.draw();
+    try {
+      await run({ redraw: () => this.draw() });
+    } catch (error) {
+      this.error = `${label} failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    this.draw();
+    await this.waitForAnyKey();
+    // The dismissal keypress never goes through onKey (waitForAnyKey uses
+    // its own one-shot listener), so it wouldn't otherwise clear this — an
+    // error from the finished job must not linger as a banner over the
+    // screen it returns to.
+    this.error = undefined;
+    // Swap the one-shot listener back for normal dispatch — see
+    // waitForAnyKey's note on why the reader is stopped first.
     this.keys.start((key) => void this.onKey(key));
+    this.stack.pop();
   }
 
   /**
-   * The "press any key" pause after a suspended job, so its output stays on
-   * screen long enough to read before the alt screen swallows it. Reuses the
-   * app's own reader rather than opening a second one on process.stdin —
-   * two readers in raw mode on one stdin race for every byte.
+   * The "press any key" pause after a job settles, so its final frame stays
+   * on screen long enough to read before the view stack moves on. Reuses the
+   * app's own reader rather than opening a second one on process.stdin — two
+   * readers in raw mode on one stdin race for every byte. KeyReader.start()
+   * re-registers its 'data' listener rather than replacing it, so the normal
+   * dispatching listener is stopped first; otherwise both would fire on every
+   * keystroke.
    */
   private waitForAnyKey(): Promise<void> {
     return new Promise((resolve) => {
+      this.keys.stop();
       this.keys.start(() => {
         this.keys.stop();
         resolve();
@@ -103,8 +114,8 @@ export class TuiApp {
       case 'quit':
         this.exit();
         break;
-      case 'suspend':
-        await this.suspend(action.label, action.run);
+      case 'run':
+        await this.runJob(action.label, action.view, action.run);
         break;
       default:
         break;

@@ -6,12 +6,13 @@
  * The two actions that matter live here rather than in a separate menu,
  * because "this run died, pick it back up" is the whole reason to look at this
  * screen: r resumes the highlighted run and v reviews its MR/PR, both by
- * suspending the TUI and handing the terminal to the normal run dashboard.
+ * opening the same in-TUI run dashboard the run launcher uses.
  */
 
 import { seg, type Line } from '../line.js';
 import { clampIndex, moveIndex, viewportWindow } from '../list.js';
 import { formatTokens } from '../../format.js';
+import { runInDashboard } from './runDashboard.js';
 import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { RunSession } from '../../../state/runState.js';
 import type { RunPhase } from '../../../types.js';
@@ -156,10 +157,10 @@ export class SessionsView implements View {
     else if (key.name === 'enter' && focused) return { type: 'push', view: new SessionDetailView(focused) };
     else if (key.name === 'char' && key.value === 'r' && focused) {
       const branch = focused.state.branch;
-      return { type: 'suspend', label: `resume ${branch}`, run: () => this.io.resume(branch) };
+      return runInDashboard(`resume ${branch}`, () => this.io.resume(branch));
     } else if (key.name === 'char' && key.value === 'v' && focused) {
       const branch = focused.state.branch;
-      return { type: 'suspend', label: `review ${branch}`, run: () => this.io.review(branch) };
+      return runInDashboard(`review ${branch}`, () => this.io.review(branch));
     }
     return NONE;
   }
