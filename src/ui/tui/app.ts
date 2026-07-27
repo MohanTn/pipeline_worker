@@ -72,6 +72,11 @@ export class TuiApp {
     }
     this.draw();
     await this.waitForAnyKey();
+    // The dismissal keypress never goes through onKey (waitForAnyKey uses
+    // its own one-shot listener), so it wouldn't otherwise clear this — an
+    // error from the finished job must not linger as a banner over the
+    // screen it returns to.
+    this.error = undefined;
     // Swap the one-shot listener back for normal dispatch — see
     // waitForAnyKey's note on why the reader is stopped first.
     this.keys.start((key) => void this.onKey(key));

@@ -21,6 +21,7 @@ Polling costs zero agent tokens; the agent runs only when a pipeline actually fa
 - One agent CLI on PATH: `claude`, `pi`, `copilot`, or `little-coder`
 - A GitLab or GitHub token with API access
 - For `"forge": "gitlab"`: the [`glab`](https://gitlab.com/gitlab-org/cli) CLI (authenticated non-interactively via `GITLAB_TOKEN` + `--hostname`)
+- Optional, either forge: an authenticated [`glab`](https://gitlab.com/gitlab-org/cli)/[`gh`](https://cli.github.com/) CLI on the agent's PATH gives a CI-fix turn a fallback way to dig deeper into a failure. pipeline-worker fetches the failed jobs' logs itself first and embeds them in the fix prompt, so this isn't required — without it, the agent works from that embedded output (and from re-running local checks) instead.
 
 ## Install
 

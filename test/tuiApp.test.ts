@@ -162,8 +162,10 @@ test('a run action pushes its view and stays on the alt screen for the whole job
       run: async (ctx) => {
         // The alt screen must never be exited while the job runs.
         altScreenDuringJob = out.written.lastIndexOf(ENTER_ALT) > out.written.lastIndexOf(EXIT_ALT);
+        const beforeRedraw = out.written.length;
         ctx.redraw();
-        redrawn = true;
+        // Proves redraw() actually repainted, not just that it ran without throwing.
+        redrawn = out.written.length > beforeRedraw;
       },
     },
     { type: 'quit' },
@@ -186,7 +188,7 @@ test('a run action pushes its view and stays on the alt screen for the whole job
   assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
 });
 
-test('an error thrown by a run action is shown as the usual error banner, not a raw write', async () => {
+test('an error thrown by a run action is shown as the usual error banner, not a raw write, and clears once dismissed', async () => {
   const out = new FakeStream();
   const input = new FakeInput();
   const jobView = new ScriptedView('run');
@@ -201,8 +203,14 @@ test('an error thrown by a run action is shown as the usual error banner, not a 
   await new Promise((resolve) => setImmediate(resolve));
   assert.ok(out.written.includes('run failed: forge unreachable'));
 
-  input.send('x'); // dismiss
+  out.written = ''; // isolate the paint that follows dismissal
+  input.send('x'); // dismiss — pops the job view and returns to the root
   await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(
+    !out.written.includes('run failed: forge unreachable'),
+    'the error banner must clear after the pause, before the restored root view is drawn — not linger until the next keypress',
+  );
+
   input.send('q');
   await running;
 });
