@@ -1,9 +1,9 @@
 /**
  * Headless Claude Code adapter. Flags verified against the locally installed
  * `claude` CLI: `-p/--print`, `--output-format json`, `--permission-mode`,
- * `--json-schema`, `--mcp-config`, `--allowedTools`, `--tools`,
- * `--system-prompt`, `--bare`. There is no `--cwd` flag — working directory is
- * controlled by the spawned process's `cwd` option.
+ * `--json-schema`, `--allowedTools`, `--tools`, `--system-prompt`, `--bare`.
+ * There is no `--cwd` flag — working directory is controlled by the spawned
+ * process's `cwd` option.
  *
  * The prompt is written to the child's stdin rather than passed as a CLI
  * argument. Some invocations (e.g. watchPipeline.ts's CI-fix prompt, which
@@ -143,9 +143,6 @@ export function buildClaudeArgs(opts: AgentInvokeOptions, bare = false): string[
   if (opts.allowedTools?.length) {
     args.push('--tools', toolGateNames(opts.allowedTools).join(','));
     args.push('--allowedTools', ...opts.allowedTools);
-  }
-  if (opts.mcpConfigPath) {
-    args.push('--mcp-config', opts.mcpConfigPath);
   }
   if (opts.model) {
     args.push('--model', opts.model);

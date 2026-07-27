@@ -340,14 +340,16 @@ test('the sessions browser lists each run with its phase', () => {
   assert.ok(shown.includes('#12'));
 });
 
-test('r resumes the highlighted run by suspending the TUI, and only after the action is applied', async () => {
+const NOOP_CTX = { redraw: () => {} };
+
+test('r resumes the highlighted run through the in-TUI dashboard, and only once the run action is applied', async () => {
   const io = fakeSessionsIo([session('feat/a'), session('feat/b')]);
   const view = new SessionsView(io);
   press(view, { name: 'down' });
   const action = press(view, { name: 'char', value: 'r' });
-  assert.equal(action.type, 'suspend');
-  assert.equal(io.resumed.length, 0, 'the job must not start until the app suspends the screen');
-  if (action.type === 'suspend') await action.run();
+  assert.equal(action.type, 'run');
+  assert.equal(io.resumed.length, 0, 'the job must not start until the app applies the run action');
+  if (action.type === 'run') await action.run(NOOP_CTX);
   assert.deepEqual(io.resumed, ['feat/b']);
 });
 
@@ -355,8 +357,8 @@ test('v reviews the highlighted run', async () => {
   const io = fakeSessionsIo([session('feat/a')]);
   const view = new SessionsView(io);
   const action = press(view, { name: 'char', value: 'v' });
-  assert.equal(action.type, 'suspend');
-  if (action.type === 'suspend') await action.run();
+  assert.equal(action.type, 'run');
+  if (action.type === 'run') await action.run(NOOP_CTX);
   assert.deepEqual(io.reviewed, ['feat/a']);
 });
 
@@ -400,8 +402,8 @@ test('the run launcher passes the typed ticket and target through, and omits emp
   type(view, 'release/2.0');
   press(view, { name: 'down' });
   const action = press(view, { name: 'enter' });
-  assert.equal(action.type, 'suspend');
-  if (action.type === 'suspend') await action.run();
+  assert.equal(action.type, 'run');
+  if (action.type === 'run') await action.run(NOOP_CTX);
   assert.deepEqual(started, [{ ticket: 'PROJ-123', target: 'release/2.0' }]);
 });
 
@@ -414,7 +416,7 @@ test('the run launcher sends undefined, not an empty string, for flags left blan
   });
   press(view, { name: 'down' }, { name: 'down' }, { name: 'enter' });
   const action = view.onKey({ name: 'enter' }) as Action;
-  if (action.type === 'suspend') await action.run();
+  if (action.type === 'run') await action.run(NOOP_CTX);
   assert.deepEqual(started[0], { ticket: undefined, target: undefined });
 });
 

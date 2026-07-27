@@ -1,13 +1,12 @@
 /**
  * Stage 12: poll the MR/PR's pipeline (at config.pollIntervalSeconds) until it
  * succeeds; on failure, hand the pipeline id/URL to the configured agent and
- * let it pull the failed jobs and logs itself via whatever forge MCP tooling
- * is available (pipeline-worker's own, or an external GitLab/GitHub MCP
- * server the agent already has configured), then commit the fix, push, and
- * retry — capped at config.maxFixAttempts before escalating via an MR
- * comment. Never retries indefinitely, and never spends agent tokens on
- * pipelines that are not actually failed (canceled/skipped go straight to a
- * human).
+ * let it inspect the failure itself via the forge's own CLI (`glab`/`gh`) or
+ * whatever tooling is already available in this environment, then commit the
+ * fix, push, and retry — capped at config.maxFixAttempts before escalating
+ * via an MR comment. Never retries indefinitely, and never spends agent
+ * tokens on pipelines that are not actually failed (canceled/skipped go
+ * straight to a human).
  *
  * Also watches for the forge confirming a real merge conflict against the
  * target branch (GitHub's "dirty" / GitLab's "cannot_be_merged") — some
@@ -24,10 +23,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync, readdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import type { AgentAdapter, AgentInvokeResult } from '../agent/types.js';
 import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolvedConflictMarkers } from '../git/commit.js';
@@ -189,24 +186,21 @@ function buildConflictPrompt(conflictedFiles: string[]): string {
   );
 }
 
-function writeAgentMcpConfig(): string {
-  const path = join(tmpdir(), `pipeline-worker-mcp-${randomUUID()}.json`);
-  const config = { mcpServers: { 'pipeline-worker-forge': { type: 'stdio', command: 'npx', args: ['pipeline-worker', 'serve'], env: {} } } };
-  writeFileSync(path, JSON.stringify(config), 'utf-8');
-  return path;
-}
-
 function forgeLabel(forgeName: ForgeName): string {
   return forgeName === 'gitlab' ? 'GitLab' : 'GitHub';
 }
 
+function forgeCli(forgeName: ForgeName): string {
+  return forgeName === 'gitlab' ? 'glab' : 'gh';
+}
+
 function buildFixPrompt(pipeline: Pipeline, forgeName: ForgeName): string {
   const label = forgeLabel(forgeName);
+  const cli = forgeCli(forgeName);
   return (
-    `The CI pipeline ${pipeline.webUrl} (id ${pipeline.id}) failed. Use whichever ${label} MCP server tooling is ` +
-    `available in this environment (pipeline-worker's own forge MCP server, or an external ${label} MCP server if ` +
-    'one is configured) to see which jobs failed and why, then fix the underlying issue in this worktree so the ' +
-    'pipeline passes.'
+    `The CI pipeline ${pipeline.webUrl} (id ${pipeline.id}) failed. Use the ${cli} CLI (or whichever ${label} ` +
+    `tooling is already available in this environment) to see which jobs failed and why, then fix the underlying ` +
+    'issue in this worktree so the pipeline passes.'
   );
 }
 
@@ -251,25 +245,18 @@ async function attemptCleanMerge(stepId: string, worktreePath: string, targetBra
 async function resolveConflictsWithAgent(stepId: string, agent: AgentAdapter, worktreePath: string, conflictedFiles: string[], state: RunState, repoRoot: string): Promise<string[]> {
   note(conflictedFiles.join(', '));
 
-  const mcpConfigPath = writeAgentMcpConfig();
-  let agentResult: AgentInvokeResult;
-  try {
-    agentResult = await runPhase(
-      stepId,
-      `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
-      () =>
-        agent.invoke({
-          prompt: buildConflictPrompt(conflictedFiles),
-          systemPrompt: CONFLICT_SYSTEM,
-          cwd: worktreePath,
-          mcpConfigPath,
-          permissionMode: 'acceptEdits',
-          allowedTools: CONFLICT_TOOLS,
-        }),
-    );
-  } finally {
-    unlinkSync(mcpConfigPath);
-  }
+  const agentResult = await runPhase(
+    stepId,
+    `asking the agent to resolve ${conflictedFiles.length} conflicted file(s)`,
+    () =>
+      agent.invoke({
+        prompt: buildConflictPrompt(conflictedFiles),
+        systemPrompt: CONFLICT_SYSTEM,
+        cwd: worktreePath,
+        permissionMode: 'acceptEdits',
+        allowedTools: CONFLICT_TOOLS,
+      }),
+  );
   reportAgentInvocation(agentResult, worktreePath);
   recordAgentTokens(repoRoot, state, 'resolve merge conflicts', agentResult.usage);
 
@@ -500,22 +487,16 @@ export async function runCiFixAttempt(
     });
 
     const prompt = lastLocalFailure ? buildLocalCheckFixPrompt(lastLocalFailure) : buildFixPrompt(pipeline, config.forge);
-    const mcpConfigPath = writeAgentMcpConfig();
-    let agentResult: AgentInvokeResult;
-    try {
-      agentResult = await runPhase(
-        stepId,
-        lastLocalFailure
-          ? `asking the agent to fix the ${lastLocalFailure.name} failure its last edit left behind`
-          : `asking the agent to diagnose and fix ${pipeline.webUrl} via whatever ${forgeLabel(config.forge)} MCP tooling is available`,
-        // No allowedTools here either: this turn pulls failed jobs and logs
-        // through the forge MCP server and re-runs checks locally.
-        // model: 'haiku' — pipeline fix turns run on the cheaper model.
-        () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, mcpConfigPath, permissionMode: 'acceptEdits', model: 'haiku' }),
-      );
-    } finally {
-      unlinkSync(mcpConfigPath);
-    }
+    const agentResult: AgentInvokeResult = await runPhase(
+      stepId,
+      lastLocalFailure
+        ? `asking the agent to fix the ${lastLocalFailure.name} failure its last edit left behind`
+        : `asking the agent to diagnose and fix ${pipeline.webUrl} via the ${forgeLabel(config.forge)} CLI and re-run checks locally`,
+      // No allowedTools here either: this turn needs shell access for the
+      // forge CLI (glab/gh) plus edit tools to apply the fix.
+      // model: 'haiku' — pipeline fix turns run on the cheaper model.
+      () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: 'haiku' }),
+    );
     reportAgentInvocation(agentResult, worktreePath);
     recordAgentTokens(repoRoot, state, 'fix CI failure', agentResult.usage);
 

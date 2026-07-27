@@ -3,8 +3,8 @@
  * ...`): auth is passed via a GITLAB_TOKEN in the child process's env and the
  * target instance via `--hostname`, so glab resolves the request itself. The
  * token comes from the settings file's `gitlab.token` (see config/file.ts) and
- * is never logged. Used both by the workflow orchestrator and the MCP tool handlers,
- * so there is exactly one place that knows how to talk to GitLab.
+ * is never logged. Used by the workflow orchestrator, so there is exactly one
+ * place that knows how to talk to GitLab.
  */
 
 import { execFile } from 'node:child_process';

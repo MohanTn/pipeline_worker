@@ -1,16 +1,18 @@
 /**
  * The TUI's drawing surface: the terminal's alternate screen buffer.
  *
- * Unlike the run dashboard (ui/treeRenderer.ts), which pins a region at the
- * bottom of the normal buffer so log lines can scroll past it, the TUI owns
- * the whole screen — so it switches to the alt buffer, paints absolute frames,
- * and switches back on exit, leaving the user's scrollback exactly as it was.
+ * Unlike the plain-CLI run dashboard (ui/treeRenderer.ts), which pins a
+ * region at the bottom of the normal buffer so log lines can scroll past it,
+ * the TUI owns the whole screen — so it switches to the alt buffer, paints
+ * absolute frames, and switches back on exit, leaving the user's scrollback
+ * exactly as it was. A run started from inside the TUI stays on the alt
+ * screen for its whole duration (see app.ts's runJob) — the screen is never
+ * left mid-session the way it used to be.
  *
  * Terminal restoration is the invariant that matters: alt buffer and cursor
- * are restored by stop(), by a process 'exit' hook (a sync write, which is
- * allowed there), and around every suspend() — so a crash, a ctrl-C, or an
- * agent CLI taking over the terminal can never strand the user in a cursorless
- * alt screen.
+ * are restored by stop(), and by a process 'exit' hook (a sync write, which
+ * is allowed there) — so a crash or a ctrl-C can never strand the user in a
+ * cursorless alt screen.
  */
 
 import { renderLine, type Line } from './line.js';
@@ -90,25 +92,5 @@ export class Screen {
     if (this.onResize) this.out.off?.('resize', this.onResize);
     this.onResize = undefined;
     this.out.write(SHOW_CURSOR + EXIT_ALT);
-  }
-
-  /**
-   * Drops back to the normal screen for the duration of `body`, then returns
-   * to the alt screen. This is how the TUI hands the terminal to a workflow
-   * run: the existing live tree dashboard (ui/steps.ts) paints into normal
-   * scrollback exactly as it does from the plain CLI, and its output survives
-   * in scrollback after the TUI resumes.
-   */
-  async suspend<T>(body: () => Promise<T>): Promise<T> {
-    const wasActive = this.active;
-    // stop() clears onResize, so the handler is captured before it runs and
-    // reinstated on the way back in.
-    const resizeHandler = this.onResize;
-    if (wasActive) this.stop();
-    try {
-      return await body();
-    } finally {
-      if (wasActive) this.start(resizeHandler);
-    }
   }
 }

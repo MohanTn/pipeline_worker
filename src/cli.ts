@@ -6,7 +6,6 @@ import { Command } from 'commander';
 import { ensureLatestVersion, installVersion } from './version/autoUpdate.js';
 import { runWorkflow } from './workflow/orchestrate.js';
 import { resumeRun, reviewBranch } from './workflow/runCommands.js';
-import { startServer } from './mcp/server.js';
 import { loadRunState, listRunStates } from './state/runState.js';
 import { findRepoRoot } from './git/commit.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
@@ -57,18 +56,6 @@ program
       await startTui(repoRoot);
     } catch (error) {
       console.error('pipeline-worker tui failed:', error instanceof Error ? error.message : error);
-      process.exit(1);
-    }
-  });
-
-program
-  .command('serve')
-  .description('Start the pipeline-worker forge (GitLab/GitHub) MCP server over stdio')
-  .action(async () => {
-    try {
-      await startServer();
-    } catch (error) {
-      console.error('Failed to start MCP server:', error);
       process.exit(1);
     }
   });
@@ -211,9 +198,6 @@ Examples:
 
   $ pipeline-worker sessions --branch pipeline-worker/add-login
       Show the full step-by-step timeline for that one run.
-
-  $ pipeline-worker serve
-      Start the forge MCP server over stdio (used internally by coding agents).
 
   $ pipeline-worker update
       Install the latest pipeline-worker release from npm.

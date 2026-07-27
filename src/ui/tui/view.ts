@@ -18,11 +18,12 @@ export type Action =
   | { type: 'pop' }
   | { type: 'quit' }
   /**
-   * Hand the terminal back for a foreground job — a workflow run, a resume, a
-   * review — which paints with the normal run dashboard while the TUI is off
-   * the alt screen. The app restores the TUI afterwards.
+   * Run a foreground job — a workflow run, a resume, a review — without
+   * leaving the alt screen: `view` is pushed to show its progress, `run`
+   * drives the job, and `redraw` lets it repaint as the job reports events.
+   * The app pops `view` and waits for a keypress once `run` settles.
    */
-  | { type: 'suspend'; label: string; run: () => Promise<void> };
+  | { type: 'run'; label: string; view: View; run: (ctx: { redraw(): void }) => Promise<void> };
 
 export const NONE: Action = { type: 'none' };
 

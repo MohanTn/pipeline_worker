@@ -23,14 +23,20 @@
  *   ctrl-C mid-frame never leaves a cursorless terminal.
  */
 
-import { styleText } from 'node:util';
+import { usageFooter } from './format.js';
+import type { Renderer } from './renderer.js';
+import { mocha } from './theme.js';
 import { truncateToWidth } from './steps.js';
-import { formatTokens, formatUsageInline, usageFooter } from './format.js';
-import { formatElapsed, formatAttempt, type Renderer } from './renderer.js';
-import { mocha, type MochaRole } from './theme.js';
-import type { RunStatus, RunTree, StepNode, TreeEvent, TreeRow } from './runTree.js';
+import { renderLine } from './tui/line.js';
+import { buildTreeLines } from './runTreeFormat.js';
+import type { RunStatus, RunTree, TreeEvent } from './runTree.js';
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+// Row layout (branch glyphs, figures budget, elision) moved to
+// runTreeFormat.js so the TUI's live run screen can draw the identical
+// frame; re-exported here so existing importers (test/treeRenderer.test.ts)
+// don't need to know it moved.
+export { fitToHeight, type DisplayRow, type ElisionRow } from './runTreeFormat.js';
+
 const PAINT_INTERVAL_MS = 80;
 const DEFAULT_COLUMNS = 80;
 
@@ -44,91 +50,6 @@ export interface OutStream {
   rows?: number;
   on?(event: 'resize', listener: () => void): void;
   off?(event: 'resize', listener: () => void): void;
-}
-
-/** A collapsed run of finished rows, produced by fitToHeight when the tree outgrows the screen. */
-export interface ElisionRow {
-  summary: string;
-  depth: number;
-}
-
-export type DisplayRow = TreeRow | ElisionRow;
-
-function isElision(row: DisplayRow): row is ElisionRow {
-  return 'summary' in row;
-}
-
-function isFinished(node: StepNode): boolean {
-  return node.status === 'done' || node.status === 'skipped';
-}
-
-/** True when this subtree holds nothing the user still needs to see individually. */
-function subtreeFinished(node: StepNode): boolean {
-  return isFinished(node) && node.children.every(subtreeFinished);
-}
-
-/**
- * Elides rows until header + rows fit in `maxRows`, keeping what the user
- * actually watches: the running/failed/pending steps. Two passes, both
- * deterministic (pure function, unit-tested directly):
- *
- * 1. collapse each parent's leading finished children (a long fix-attempt
- *    history) into one `… ✓ N earlier attempts` row, keeping the last
- *    finished child for context;
- * 2. collapse leading fully-finished top-level steps into `… ✓ N earlier
- *    steps`.
- *
- * If the tree still doesn't fit (tiny terminal), keep the tail — the newest
- * rows are the live ones.
- */
-export function fitToHeight(rows: TreeRow[], maxRows: number): DisplayRow[] {
-  const budget = Math.max(1, maxRows - 1); // header takes one row
-  if (rows.length <= budget) return rows;
-
-  let display: DisplayRow[] = [...rows];
-
-  // Walks runs of consecutive rows matching `candidate` at the same depth
-  // and collapses each run (if longer than 2) down to a summary line plus
-  // its final row, so the most recent item of a run stays visible for context.
-  const collapseRuns = (candidate: (row: TreeRow) => boolean, label: (n: number, depth: number) => string): void => {
-    const next: DisplayRow[] = [];
-    let run: TreeRow[] = [];
-    const flush = (): void => {
-      if (run.length > 2) {
-        const collapsed = run.slice(0, -1);
-        next.push({ summary: label(collapsed.length, run[0].depth), depth: run[0].depth });
-        next.push(run[run.length - 1]);
-      } else {
-        next.push(...run);
-      }
-      run = [];
-    };
-    for (const row of display) {
-      if (!isElision(row) && candidate(row) && (run.length === 0 || run[0].depth === row.depth)) {
-        run.push(row);
-      } else {
-        flush();
-        next.push(row);
-      }
-    }
-    flush();
-    display = next;
-  };
-
-  collapseRuns(
-    (row) => row.depth > 0 && isFinished(row.node) && row.node.children.length === 0,
-    (n) => `… ${n} earlier attempts`,
-  );
-  if (display.length <= budget) return display;
-
-  collapseRuns(
-    (row) => row.depth === 0 && subtreeFinished(row.node),
-    (n) => `… ${n} earlier steps`,
-  );
-  if (display.length <= budget) return display;
-
-  // Last resort: keep the newest rows (the live tail).
-  return display.slice(display.length - budget);
 }
 
 export class TreeRenderer implements Renderer {
@@ -199,80 +120,11 @@ export class TreeRenderer implements Renderer {
     if (!this.stopped) this.paint();
   }
 
-  private headerLine(status: RunStatus): string {
-    const tree = this.tree!;
-    const parts = ['pipeline-worker', tree.header.title];
-    if (tree.header.worktreeShortId) parts.push(`worktree ${tree.header.worktreeShortId}`);
-    parts.push(status);
-    const total = tree.totalTokens();
-    if (total > 0) parts.push(formatTokens(total));
-    return truncateToWidth(parts.join(' · '), this.columns());
-  }
-
-  private statusGlyph(node: StepNode): { glyph: string; color: MochaRole } {
-    switch (node.status) {
-      case 'done':
-        return { glyph: '✓', color: 'green' };
-      case 'failed':
-        return { glyph: '✗', color: 'red' };
-      case 'running':
-        return { glyph: SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length], color: 'sky' };
-      case 'skipped':
-        return { glyph: '–', color: 'overlay1' };
-      default:
-        return { glyph: '○', color: 'overlay1' };
-    }
-  }
-
-  /** Right-hand figures: 'attempt 2/5 · in 98.5k (92k cached) · out 3.2k · 3.2s' — whichever are known, with the plain total standing in when no split was reported. */
-  private figures(node: StepNode): string {
-    const parts: string[] = [];
-    const attempt = formatAttempt(node);
-    if (attempt) parts.push(attempt);
-    const split = node.usage ? formatUsageInline(node.usage) : '';
-    if (split) parts.push(split);
-    else if (node.tokens !== undefined) parts.push(formatTokens(node.tokens));
-    if (node.durationMs !== undefined) parts.push(formatElapsed(node.durationMs));
-    else if (node.status === 'running' && node.startedAt !== undefined) parts.push(formatElapsed(Date.now() - node.startedAt));
-    return parts.join(' · ');
-  }
-
-  private branchPrefix(row: TreeRow): string {
-    let prefix = '';
-    for (let d = 0; d < row.depth; d++) prefix += row.isLast[d] ? '   ' : '│  ';
-    prefix += row.isLast[row.depth] ? '└─ ' : '├─ ';
-    return prefix;
-  }
-
-  private rowLine(row: DisplayRow, labelWidth: number): string {
-    const width = this.columns();
-    if (isElision(row)) {
-      const indent = '   '.repeat(row.depth + 1);
-      return mocha('overlay1', truncateToWidth(`${indent}${row.summary}`, width));
-    }
-    const { node } = row;
-    const { glyph, color } = this.statusGlyph(node);
-    const prefix = this.branchPrefix(row);
-    const figures = this.figures(node);
-    // Compose the visible text first and truncate it, then colorize the two
-    // zones (glyph, rest) — escape codes are zero-width, so wrapping math
-    // must run on the plain string.
-    const body = `${node.label.padEnd(labelWidth)}  ${node.detail}`;
-    const room = Math.max(0, width - prefix.length - 2); // glyph + space
-    // Figures are truncated to the row's own room first, so a narrow terminal
-    // can't overflow via the right-hand column; the body gets what's left.
-    const figuresPart = figures && room > 0 ? truncateToWidth(`  ${figures}`, room) : '';
-    const bodyRoom = room - figuresPart.length;
-    const text = `${bodyRoom > 0 ? truncateToWidth(body, bodyRoom) : ''}${figuresPart}`;
-    const dimRow = node.status === 'skipped' || node.status === 'pending';
-    return `${prefix}${mocha(color, glyph)} ${dimRow ? mocha('overlay1', text) : text}`;
-  }
-
+  /** Row/branch/figures layout lives in runTreeFormat.js now; this just paints its Line[] as ANSI. */
   private buildFrame(status: RunStatus): string[] {
     const tree = this.tree!;
-    const rows = fitToHeight(tree.flatten(), this.out.rows ?? Number.POSITIVE_INFINITY);
-    const labelWidth = Math.max(0, ...rows.map((r) => (isElision(r) ? 0 : r.node.label.length)));
-    return [styleText('bold', this.headerLine(status)), ...rows.map((row) => this.rowLine(row, labelWidth))];
+    const lines = buildTreeLines(tree, status, this.frame, this.out.rows ?? Number.POSITIVE_INFINITY, this.columns());
+    return lines.map((line) => renderLine(line, this.columns()));
   }
 
   private paint(): void {

@@ -2,8 +2,9 @@
  * The workflow's one door to the terminal: module-level functions the
  * workflow code calls by step id, backed by a RunTree (the data model) and a
  * Renderer (LineRenderer for non-TTY/plain output, TreeRenderer for the live
- * TTY dashboard). Workflow code never touches process.stdout itself — see
- * CLAUDE.md's terminal-output discipline.
+ * TTY dashboard, or the TUI's RunDashboardView when setRenderer() has pointed
+ * a run at the alt screen). Workflow code never touches process.stdout itself
+ * — see CLAUDE.md's terminal-output discipline.
  *
  * The facade is safe to use without beginRun() (unit tests exercise workflow
  * helpers directly): the first call lazily creates an empty tree with a
@@ -66,7 +67,22 @@ export function setPlainOutput(on: boolean): void {
   plainOutput = on;
 }
 
+/**
+ * Set by the TUI (ui/tui/views/runDashboard.js) right before it starts a run,
+ * so the same steps.ts call sites drive the alt-screen dashboard instead of
+ * picking tree/line by TTY-ness. `undefined` reverts to that TTY/plainOutput
+ * selection — the non-interactive CLI never calls this, so createRenderer()
+ * falls back exactly as it always has.
+ */
+let rendererOverride: Renderer | undefined;
+
+/** Points every renderer created from here on at `renderer`, or clears the override when called with `undefined`. */
+export function setRenderer(renderer: Renderer | undefined): void {
+  rendererOverride = renderer;
+}
+
 function createRenderer(): Renderer {
+  if (rendererOverride) return rendererOverride;
   const mode = selectRendererMode(process.stdout.isTTY === true, plainOutput);
   return mode === 'tree' ? new TreeRenderer() : new LineRenderer();
 }
