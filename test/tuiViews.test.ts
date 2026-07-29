@@ -449,6 +449,12 @@ test('the menu moves its cursor and runs the selected item', () => {
   assert.deepEqual(picked, ['second']);
 });
 
+test('pressing q on a menu pops the view instead of doing nothing', () => {
+  const view = new MenuView('home', [{ label: 'First', onSelect: () => ({ type: 'none' }) }]);
+  assert.deepEqual(press(view, { name: 'char', value: 'q' }), { type: 'pop' });
+  assert.deepEqual(press(view, { name: 'escape' }), { type: 'pop' });
+});
+
 test('the menu marks exactly one row as selected', () => {
   const view = new MenuView('home', [
     { label: 'First', onSelect: () => ({ type: 'none' }) },

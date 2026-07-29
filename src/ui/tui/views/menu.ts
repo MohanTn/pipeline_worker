@@ -7,7 +7,7 @@
 
 import { seg, type Line } from '../line.js';
 import { moveIndex, viewportWindow } from '../list.js';
-import { NONE, type Action, type RenderedView, type View } from '../view.js';
+import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { Key } from '../keys.js';
 import type { Size } from '../screen.js';
 
@@ -55,6 +55,7 @@ export class MenuView implements View {
     if (key.name === 'up') this.index = moveIndex(this.index, -1, this.items.length);
     else if (key.name === 'down') this.index = moveIndex(this.index, 1, this.items.length);
     else if (key.name === 'enter') return this.items[this.index]?.onSelect() ?? NONE;
+    else if (isBackKey(key)) return { type: 'pop' };
     return NONE;
   }
 }
