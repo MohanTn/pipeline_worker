@@ -31,6 +31,7 @@ import { stageAll, commit, push, hasChanges, listConflictedFiles, findUnresolved
 import { runChecks } from './runChecks.js';
 import type { ForgeClient } from '../forge/types.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
+import { cancellableSleep } from '../process/cancelScope.js';
 import { runStep, runPhase, startStep, finishStep, addDynamicStep, note, reportAgentInvocation } from '../ui/steps.js';
 import type { ForgeName, PipelineWorkerConfig, Pipeline, RunState, CheckResult } from '../types.js';
 
@@ -53,9 +54,8 @@ const MAX_POLL_WINDOW_MS = 2 * 60 * 60 * 1000; // per pipeline attempt, as a saf
 const NO_PIPELINE_GRACE_MS = 60 * 1000;
 const TERMINAL_STATUSES: Pipeline['status'][] = ['success', 'failed', 'canceled', 'skipped', 'manual', 'scheduled'];
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+/** Aborts the moment a TUI run is cancelled, so a cancel during a 15s poll interval doesn't wait the interval out. A plain setTimeout outside the TUI. */
+const sleep = cancellableSleep;
 
 /**
  * Whether the worktree itself has a CI config file for `forge`. A repo that

@@ -20,6 +20,7 @@ import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { recordEvent, recordAgentTokens } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
+import { RunCancelledError } from '../process/cancelScope.js';
 import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, note, noteRisk, reportAgentInvocation, setPlainOutput } from '../ui/steps.js';
 import { setCompletionSound } from '../ui/notify.js';
 import { freshRunSkeleton } from './runPlan.js';
@@ -270,6 +271,18 @@ export async function maybeUpdateChangelog(config: PipelineWorkerConfig, worktre
   }
 }
 
+/**
+ * The three facts both MR/PR paths write onto state. The web URL is stored
+ * alongside the iid because only the forge's own response is right for a
+ * self-hosted host — everything downstream (sessions, the TUI's copy key)
+ * reads it back rather than guessing.
+ */
+export function recordMrOnState(state: RunState, mr: MergeRequest): void {
+  state.mrIid = mr.iid;
+  state.mrUrl = mr.webUrl;
+  state.phase = 'mr';
+}
+
 /** Stage 9 + opening the MR/PR: commit everything staged so far, then open the merge request and record it on state. */
 async function commitAndOpenMr(
   forge: ForgeClient,
@@ -291,8 +304,7 @@ async function commitAndOpenMr(
   );
 
   const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent, checks, config.autoMergeOnGreen, config.mergeMethod);
-  state.mrIid = mr.iid;
-  state.phase = 'mr';
+  recordMrOnState(state, mr);
   recordEvent(repoRoot, state, `Opened MR/PR ${mr.webUrl}`);
   return mr;
 }
@@ -318,8 +330,7 @@ async function commitOntoExistingMr(
 
   await appendToMergeRequest(forge, worktreePath, existingMr, intent, config.agent, checks);
 
-  state.mrIid = existingMr.iid;
-  state.phase = 'mr';
+  recordMrOnState(state, existingMr);
   recordEvent(repoRoot, state, `Added a follow-up commit to existing MR/PR ${existingMr.webUrl}`);
   return existingMr;
 }
@@ -540,6 +551,22 @@ async function finalizeRun(
   }
 }
 
+/**
+ * Settles a run stopped from the TUI's dashboard. Applies exactly the policy
+ * the SIGINT handler below applies — a phase that `resume` can pick up keeps
+ * its worktree, anything earlier has it removed — minus the process.exit,
+ * since the TUI must survive and paint the settled dashboard. `markDone`
+ * satisfies the caller's idempotent cleanup without running it, so the
+ * outer `finally { cleanup() }` becomes a no-op for a preserved worktree and
+ * still removes it otherwise. Exported for unit testing.
+ */
+export function settleCancelledRun(repoRoot: string, state: RunState, markDone: () => void): void {
+  const preserve = shouldPreserveWorktreeOnInterrupt(state.phase);
+  recordEvent(repoRoot, state, 'Run cancelled from the TUI', 'error');
+  endRun('interrupted', preserve ? `resume with: pipeline-worker resume --branch ${state.branch}` : undefined);
+  if (preserve) markDone();
+}
+
 // fallow-ignore-next-line complexity
 export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions = {}): Promise<void> {
   const config = loadConfig(repoRoot);
@@ -653,6 +680,13 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       const finalPhase = readPhase(state);
       await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent, followUpMr !== undefined, cleanup);
     } catch (error) {
+      // A cancel is a deliberate stop, not a failure: settle the display,
+      // let the finally below apply the worktree policy, and return normally
+      // so the TUI stays up (the CLI's SIGINT path exits the process instead).
+      if (error instanceof RunCancelledError) {
+        settleCancelledRun(repoRoot, state, markDone);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');
       endRun('failed', message);

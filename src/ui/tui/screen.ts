@@ -86,6 +86,17 @@ export class Screen {
     this.out.write(CURSOR_HOME + painted.join('\r\n') + ERASE_BELOW);
   }
 
+  /**
+   * Hands `text` to the terminal's own clipboard with OSC 52, which works over
+   * ssh (the terminal emulator does the copying, not the host) and needs no
+   * clipboard dependency. A terminal with OSC 52 disabled silently ignores it,
+   * so callers always show the text as well.
+   */
+  copyToClipboard(text: string): void {
+    if (!this.active) return;
+    this.out.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x07`);
+  }
+
   stop(): void {
     if (!this.active) return;
     this.active = false;

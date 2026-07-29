@@ -19,6 +19,7 @@ import { NONE, type Action, type RenderedView, type View } from '../view.js';
 import { buildTreeLines } from '../../runTreeFormat.js';
 import { usageFooter } from '../../format.js';
 import { setRenderer } from '../../steps.js';
+import { beginCancelScope, requestCancel } from '../../../process/cancelScope.js';
 import type { Renderer } from '../../renderer.js';
 import type { RunStatus, RunTree, TreeEvent } from '../../runTree.js';
 import type { Key } from '../keys.js';
@@ -35,6 +36,21 @@ const MAX_NOTE_LINES = 200;
  * Mirrors TreeRenderer's own PAINT_INTERVAL_MS for the plain CLI.
  */
 const TICK_MS = 80;
+
+/**
+ * How long a first ctrl-c stays armed. A single stray press must not throw
+ * away a ten-minute run, and a deliberate stop is two presses in a row —
+ * which is how long it takes to read the footer asking for the second one.
+ */
+const CANCEL_ARM_MS = 2000;
+
+/**
+ * The MR/PR link the run narrated (openMergeRequest.ts notes it, watchPipeline
+ * repeats it on escalation). Pulled out of the notes rather than threaded
+ * through the renderer contract, so the result section can end on the one
+ * thing the user goes looking for next.
+ */
+const MR_URL = /https?:\/\/\S+?(?:\/-\/merge_requests\/|\/pull\/)\d+/;
 
 const FINAL_LINE: Record<Exclude<RunStatus, 'running'>, string> = {
   done: '🎉 Done',
@@ -54,6 +70,13 @@ export class RunDashboardView implements View, Renderer {
   private usageLines: string[] = [];
   private redraw: (() => void) | undefined;
   private timer: ReturnType<typeof setInterval> | undefined;
+  /** undefined = follow the newest note; a number pins the window while the user reads back. */
+  private noteOffset: number | undefined;
+  /** How many note rows the last render had room for — the page size onKey scrolls by. */
+  private noteBudget = 1;
+  private cancelArmedAt: number | undefined;
+  private cancelRequested = false;
+  private mrUrl: string | undefined;
 
   /** Wired by runInDashboard() once TuiApp hands over the 'run' action's redraw callback; starts the animation tick. */
   bindRedraw(redraw: () => void): void {
@@ -68,7 +91,14 @@ export class RunDashboardView implements View, Renderer {
     this.redraw?.();
   }
 
+  /** Latest wins: a follow-up run narrates the MR/PR it appended to after the one it looked up. */
+  private captureMrUrl(text: string | undefined): void {
+    const found = text ? MR_URL.exec(text) : null;
+    if (found) this.mrUrl = found[0];
+  }
+
   log(text: string): void {
+    this.captureMrUrl(text);
     this.notes.push(text);
     if (this.notes.length > MAX_NOTE_LINES) this.notes.shift();
     this.redraw?.();
@@ -81,6 +111,7 @@ export class RunDashboardView implements View, Renderer {
     this.status = status;
     this.finalStatus = status;
     this.detail = detail;
+    this.captureMrUrl(detail);
     this.finished = true;
     // usageFooter's own hand-formatted '── token usage ──' header is sized
     // for the plain CLI's unboxed scrollback; drop it in favor of this
@@ -96,10 +127,15 @@ export class RunDashboardView implements View, Renderer {
 
     if (this.notes.length > 0) {
       // Most recent notes first fill the section; older ones drop off rather
-      // than pushing the (more important) live step tree off screen.
+      // than pushing the (more important) live step tree off screen — unless
+      // the user has scrolled back, in which case their window is honored.
       const budget = Math.max(1, Math.floor(inner.rows / 4));
-      body.push(sectionRow('notes', inner.columns));
-      for (const text of this.notes.slice(-budget)) body.push([seg(text, { role: 'overlay1' })]);
+      this.noteBudget = budget;
+      const start = this.noteWindowStart(budget);
+      const scrolled = this.noteOffset !== undefined;
+      const label = scrolled ? `notes ${start + 1}-${Math.min(start + budget, this.notes.length)} of ${this.notes.length}` : 'notes';
+      body.push(sectionRow(label, inner.columns));
+      for (const text of this.notes.slice(start, start + budget)) body.push([seg(text, { role: 'overlay1' })]);
       body.push([]);
     }
 
@@ -118,17 +154,63 @@ export class RunDashboardView implements View, Renderer {
       body.push(sectionRow('result', inner.columns));
       body.push([seg(this.finalStatus ? FINAL_LINE[this.finalStatus] : 'Done', { bold: true })]);
       if (this.detail) for (const text of wrap(this.detail, inner.columns)) body.push([seg(text, { role: 'overlay1' })]);
+      if (this.mrUrl) body.push([seg('mr/pr  ', { role: 'overlay1' }), seg(this.mrUrl)]);
     }
 
-    return {
-      title: this.tree?.header.title ?? 'run',
-      body,
-      hints: this.finished ? 'press any key to continue' : 'running…',
-    };
+    return { title: this.tree?.header.title ?? 'run', body, hints: this.hints() };
   }
 
-  onKey(_key: Key): Action {
-    return this.finished ? { type: 'pop' } : NONE;
+  private maxNoteOffset(budget: number): number {
+    return Math.max(0, this.notes.length - budget);
+  }
+
+  /** Where the notes window starts: pinned when scrolled, else the tail. Re-clamped every render, since new notes move the tail. */
+  private noteWindowStart(budget: number): number {
+    const max = this.maxNoteOffset(budget);
+    return this.noteOffset === undefined ? max : Math.min(this.noteOffset, max);
+  }
+
+  /** Scrolls the notes window; reaching the bottom clears the pin so the view follows new notes again, like every log pager. */
+  private scrollNotes(delta: number): void {
+    const max = this.maxNoteOffset(this.noteBudget);
+    const next = Math.max(0, Math.min(max, (this.noteOffset ?? max) + delta));
+    this.noteOffset = next >= max ? undefined : next;
+  }
+
+  private cancelArmed(): boolean {
+    return this.cancelArmedAt !== undefined && Date.now() - this.cancelArmedAt <= CANCEL_ARM_MS;
+  }
+
+  /** First ctrl-c arms, a second one within the window asks the run to stop at its next boundary (see process/cancelScope.ts). */
+  private armOrRequestCancel(): void {
+    if (this.cancelArmed()) {
+      this.cancelArmedAt = undefined;
+      this.cancelRequested = true;
+      requestCancel();
+      return;
+    }
+    this.cancelArmedAt = Date.now();
+  }
+
+  private hints(): string {
+    if (this.finished) return 'press any key to continue';
+    if (this.cancelRequested) return 'stopping after the current step…';
+    if (this.cancelArmed()) return 'ctrl-c again to stop this run';
+    return '↑↓ scroll notes · ctrl-c stop';
+  }
+
+  // fallow-ignore-next-line complexity
+  onKey(key: Key): Action {
+    // Once settled, any key dismisses — TuiApp's waitForAnyKey owns that
+    // handoff, so this is only reached when the app is still dispatching.
+    if (this.finished) return { type: 'pop' };
+    if (key.name === 'ctrl' && key.value === 'c') this.armOrRequestCancel();
+    else if (key.name === 'up') this.scrollNotes(-1);
+    else if (key.name === 'down') this.scrollNotes(1);
+    else if (key.name === 'pageup') this.scrollNotes(-this.noteBudget);
+    else if (key.name === 'pagedown') this.scrollNotes(this.noteBudget);
+    // Never a navigation action: a running job may not move the view stack.
+    return NONE;
   }
 }
 
@@ -146,8 +228,14 @@ export function runInDashboard(label: string, task: () => Promise<void>): Action
     view: dashboard,
     run: (ctx) => {
       dashboard.bindRedraw(ctx.redraw);
+      // Armed and disposed in lockstep with the renderer: a cancel requested
+      // after the job settles lands on a dead scope and does nothing.
+      const disposeCancelScope = beginCancelScope();
       setRenderer(dashboard);
-      return task().finally(() => setRenderer(undefined));
+      return task().finally(() => {
+        setRenderer(undefined);
+        disposeCancelScope();
+      });
     },
   };
 }
