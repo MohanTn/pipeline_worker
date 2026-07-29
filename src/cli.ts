@@ -9,6 +9,8 @@ import { resumeRun, reviewBranch } from './workflow/runCommands.js';
 import { loadRunState, listRunStates } from './state/runState.js';
 import { findRepoRoot } from './git/commit.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
+import { resolveMrUrl } from './ui/mrUrl.js';
+import { loadConfig } from './config/loader.js';
 import { startTui, shouldOpenTui } from './ui/tui/index.js';
 import { endRun } from './ui/steps.js';
 import { buildEnvelope, errorEnvelope } from './toon/envelope.js';
@@ -17,6 +19,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as { name: string; version: string };
 
 const program = new Command();
+
+/** Only used to rebuild an MR/PR link for a run recorded before RunState.mrUrl existed — a repo with unreadable settings just shows no link. */
+function safeLoadConfig(repoRoot: string): ReturnType<typeof loadConfig> | undefined {
+  try {
+    return loadConfig(repoRoot);
+  } catch {
+    return undefined;
+  }
+}
 
 program.name('pipeline-worker').description('Automated git-worktree -> agent-fix -> GitLab/GitHub MR workflow');
 program.version(pkg.version, '-v, --version', 'output the installed pipeline-worker version');
@@ -125,7 +136,10 @@ program
         console.error(`pipeline-worker: no session found for branch ${opts.branch}.`);
         process.exit(1);
       }
-      printSessionDetail({ branch: state.branch, state });
+      // Settings are only read when there is an iid but no recorded url —
+      // i.e. a run from before RunState.mrUrl existed.
+      const mrUrl = state.mrUrl ?? (state.mrIid !== undefined ? resolveMrUrl(state, safeLoadConfig(repoRoot)) : undefined);
+      printSessionDetail({ branch: state.branch, state }, mrUrl);
       return;
     }
     printSessionList(listRunStates(repoRoot));

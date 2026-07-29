@@ -19,6 +19,7 @@ import { TreeRenderer } from './treeRenderer.js';
 import { boxHeader, formatBulletBlock } from './format.js';
 import { maybeChime } from './notify.js';
 import { mocha, type MochaRole } from './theme.js';
+import { throwIfCancelled } from '../process/cancelScope.js';
 import type { RiskLevel } from '../types.js';
 import type { AgentInvokeResult } from '../agent/types.js';
 
@@ -154,6 +155,9 @@ export function skipStep(id: string, reason: string): void {
 
 /** Runs one step to completion: running → done, or running → failed + rethrow. */
 export async function runStep<T>(id: string, detail: string, task: () => Promise<T>): Promise<T> {
+  // Cancellation boundary: a run cancelled from the TUI stops here rather
+  // than starting another stage. No-op outside the TUI — see cancelScope.ts.
+  throwIfCancelled();
   const run = ensureActive();
   lastStepId = id;
   run.tree.start(id, { detail });
@@ -175,6 +179,7 @@ export async function runStep<T>(id: string, detail: string, task: () => Promise
  * leaves it running for the next phase (the caller finishes it).
  */
 export async function runPhase<T>(id: string, detail: string, task: () => Promise<T>): Promise<T> {
+  throwIfCancelled();
   const run = ensureActive();
   const node = run.tree.get(id);
   if (!node || node.status !== 'running') {

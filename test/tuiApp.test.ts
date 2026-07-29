@@ -188,6 +188,65 @@ test('a run action pushes its view and stays on the alt screen for the whole job
   assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
 });
 
+test('keys pressed while a job runs reach the job view instead of being dropped, without moving the stack', async () => {
+  const out = new FakeStream();
+  const input = new FakeInput();
+  // A job view that asks to pop on every key: the app must ignore it, since
+  // only the "press any key" pause may move the stack.
+  const jobView = new ScriptedView('run', [{ type: 'pop' }, { type: 'pop' }, { type: 'pop' }]);
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const root = new ScriptedView('home', [{ type: 'run', label: 'run', view: jobView, run: () => held }, { type: 'quit' }]);
+  const app = new TuiApp(root, new Screen(out), new KeyReader(input));
+
+  const running = app.run();
+  await send(input, '\r'); // start the job
+  await send(input, 'a', '\x1b[A'); // a char and an up arrow, mid-job
+
+  assert.deepEqual(
+    jobView.keys.map((key) => key.value ?? key.name),
+    ['a', 'up'],
+    'the running job view must receive every key pressed while it runs',
+  );
+  assert.deepEqual(
+    root.keys.map((key) => key.name),
+    ['enter'],
+    'the app dispatcher must not also see them',
+  );
+
+  release?.();
+  await tick(); // let runJob settle and swap in its press-any-key listener
+  await send(input, 'x'); // dismiss the settled job
+  await send(input, 'q'); // dispatch restored: the root view quits
+  await running;
+  assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
+});
+
+test('a key pressed while a job runs repaints, so a scroll or a cancel hint is visible immediately', async () => {
+  const out = new FakeStream();
+  const input = new FakeInput();
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const jobView = new ScriptedView('run');
+  const root = new ScriptedView('home', [{ type: 'run', label: 'run', view: jobView, run: () => held }, { type: 'quit' }]);
+  const app = new TuiApp(root, new Screen(out), new KeyReader(input));
+
+  const running = app.run();
+  await send(input, '\r');
+  const before = out.written.length;
+  await send(input, 'a');
+  assert.ok(out.written.length > before, 'handling a key mid-job must repaint the frame');
+
+  release?.();
+  await tick();
+  await send(input, 'x', 'q');
+  await running;
+});
+
 test('an error thrown by a run action is shown as the usual error banner, not a raw write, and clears once dismissed', async () => {
   const out = new FakeStream();
   const input = new FakeInput();
@@ -249,6 +308,18 @@ test('a view whose render throws still leaves a usable, restorable screen', asyn
   app.stop();
   await running;
   assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
+});
+
+test('copyToClipboard hands the text to the terminal as OSC 52, and only while the screen is live', () => {
+  const out = new FakeStream();
+  const screen = new Screen(out);
+  screen.copyToClipboard('https://example/pull/1');
+  assert.equal(out.written, '', 'nothing may be written before the alt screen is entered');
+  screen.start();
+  out.written = '';
+  screen.copyToClipboard('https://example/pull/1');
+  assert.equal(out.written, `\x1b]52;c;${Buffer.from('https://example/pull/1', 'utf8').toString('base64')}\x07`);
+  screen.stop();
 });
 
 test('a stopped screen ignores further paints, so nothing can draw after the terminal is restored', () => {

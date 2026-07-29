@@ -5,11 +5,19 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { shouldPreserveWorktreeOnInterrupt, resolveTargetBranch, findFollowUpMr } from '../src/workflow/orchestrate.js';
+import { shouldPreserveWorktreeOnInterrupt, resolveTargetBranch, findFollowUpMr, recordMrOnState } from '../src/workflow/orchestrate.js';
 import type { ForgeClient } from '../src/forge/types.js';
-import type { MergeRequest } from '../src/types.js';
+import type { MergeRequest, RunState } from '../src/types.js';
 
 const execFileAsync = promisify(execFile);
+
+test('recordMrOnState stores the forge web url next to the iid, so sessions can link to it later', () => {
+  const state: RunState = { branch: 'feat/x', targetBranch: 'main', worktreePath: '/tmp/wt', ciFixAttempt: 0, conflictAttempt: 0, phase: 'checks' };
+  recordMrOnState(state, { iid: 12, webUrl: 'https://self-hosted.example/g/app/-/merge_requests/12', sourceBranch: 'feat/x', targetBranch: 'main', state: 'open' });
+  assert.equal(state.mrIid, 12);
+  assert.equal(state.mrUrl, 'https://self-hosted.example/g/app/-/merge_requests/12');
+  assert.equal(state.phase, 'mr');
+});
 
 test('shouldPreserveWorktreeOnInterrupt keeps the worktree once an MR/PR is open (resume needs it)', () => {
   assert.equal(shouldPreserveWorktreeOnInterrupt('mr'), true);

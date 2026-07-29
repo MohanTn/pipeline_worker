@@ -64,6 +64,29 @@ test('pipeline-worker sessions lists a persisted run, and --branch shows its tim
     assert.match(detail, /Session: feature\/add-login/);
     assert.match(detail, /Created worktree/);
     assert.match(detail, /Pipeline failed; attempt 1\/3/);
+    assert.ok(!detail.includes('  url: '), 'a run with no mr/pr and no settings to rebuild one shows no url line');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pipeline-worker sessions --branch prints the recorded mr/pr url', () => {
+  const dir = tmpRepo();
+  try {
+    const state: RunState = {
+      branch: 'feature/links',
+      targetBranch: 'main',
+      worktreePath: '/tmp/wt',
+      ciFixAttempt: 0,
+      conflictAttempt: 0,
+      phase: 'watch',
+      mrIid: 12,
+      mrUrl: 'https://gitlab.example/group/app/-/merge_requests/12',
+    };
+    recordEvent(dir, state, 'Opened MR/PR');
+
+    const detail = execFileSync('node', [cliPath, 'sessions', '--branch', 'feature/links'], { cwd: dir, encoding: 'utf-8' });
+    assert.match(detail, /url: https:\/\/gitlab\.example\/group\/app\/-\/merge_requests\/12/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

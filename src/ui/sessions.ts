@@ -78,8 +78,13 @@ function formatHistoryEntry(entry: NonNullable<RunSession['state']['history']>[n
   return `  ${LEVEL_ICON[entry.level]} ${mocha('overlay1', formatTimestamp(entry.at))} ${mocha('overlay1', `[${entry.phase}]`)} ${message}${tokensPart}`;
 }
 
-/** `pipeline-worker sessions --branch <name>`: one run's metadata plus its full step-by-step history. */
-export function printSessionDetail(session: RunSession): void {
+/**
+ * `pipeline-worker sessions --branch <name>`: one run's metadata plus its full
+ * step-by-step history. `mrUrl` is passed in rather than read off the state so
+ * the caller decides whether to rebuild one for an older run (see ui/mrUrl.ts);
+ * the list output stays column-aligned and unwidened.
+ */
+export function printSessionDetail(session: RunSession, mrUrl?: string): void {
   const { state } = session;
   const { mrPart, pipelinePart } = formatOptionalMetaParts(state);
 
@@ -90,6 +95,7 @@ export function printSessionDetail(session: RunSession): void {
   console.log(
     mocha('overlay1', `  phase: ${state.phase}  ci-fix: ${state.ciFixAttempt}  conflict: ${state.conflictAttempt}${mrPart}${pipelinePart}${tokensPart}`),
   );
+  if (mrUrl) console.log(mocha('overlay1', `  url: ${mrUrl}`));
   console.log(mocha('overlay1', `  started: ${formatTimestamp(state.startedAt)}  updated: ${formatTimestamp(state.updatedAt)}`));
 
   const history = state.history ?? [];

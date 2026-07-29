@@ -312,10 +312,11 @@ function session(branch: string, overrides: Partial<RunSession['state']> = {}): 
   };
 }
 
-function fakeSessionsIo(sessions: RunSession[]): SessionsIo & { resumed: string[]; reviewed: string[] } {
+function fakeSessionsIo(sessions: RunSession[]): SessionsIo & { resumed: string[]; reviewed: string[]; copied: string[] } {
   const io = {
     resumed: [] as string[],
     reviewed: [] as string[],
+    copied: [] as string[],
     list: () => sessions,
     resume: async (branch: string) => {
       io.resumed.push(branch);
@@ -323,9 +324,15 @@ function fakeSessionsIo(sessions: RunSession[]): SessionsIo & { resumed: string[
     review: async (branch: string) => {
       io.reviewed.push(branch);
     },
+    mrUrl: (state: RunSession['state']) => state.mrUrl,
+    copy: (text: string) => {
+      io.copied.push(text);
+    },
   };
   return io;
 }
+
+const MR = { mrIid: 12, mrUrl: 'https://gitlab.example/group/app/-/merge_requests/12' };
 
 test('the sessions browser says so plainly when the repo has no runs', () => {
   const view = new SessionsView(fakeSessionsIo([]));
@@ -378,7 +385,7 @@ test('the timeline shows history entries and scrolls', () => {
     level: 'info' as const,
     message: `event ${i}`,
   }));
-  const view = new SessionDetailView(session('feat/a', { history }));
+  const view = new SessionDetailView(session('feat/a', { history }), fakeSessionsIo([]));
   const small = { columns: 90, rows: 12 };
   const first = view.render(small).body.map(plainText).join('\n');
   assert.ok(first.includes('event 0'));
@@ -387,6 +394,54 @@ test('the timeline shows history entries and scrolls', () => {
   const scrolled = view.render(small).body.map(plainText).join('\n');
   assert.ok(scrolled.includes('event 50'));
   assert.ok(!scrolled.includes('event 0\n'), 'the top of the timeline has scrolled away');
+});
+
+test('the timeline shows the mr/pr url, so the run ends somewhere the user can go', () => {
+  const view = new SessionDetailView(session('feat/a', MR), fakeSessionsIo([]));
+  assert.ok(textOf(view).join('\n').includes(MR.mrUrl));
+});
+
+test('a run recorded before mrUrl existed shows its iid and says no url was recorded', () => {
+  const view = new SessionDetailView(session('feat/a', { mrIid: 9 }), fakeSessionsIo([]));
+  const shown = textOf(view).join('\n');
+  assert.match(shown, /#9 \(no url recorded\)/);
+});
+
+test('a run with no mr/pr at all has no mr/pr row', () => {
+  const view = new SessionDetailView(session('feat/a'), fakeSessionsIo([]));
+  assert.ok(!textOf(view).some((line) => line.startsWith('mr/pr')));
+});
+
+test('y copies the focused run’s mr/pr url from the list and says so', () => {
+  const io = fakeSessionsIo([session('feat/a'), session('feat/b', MR)]);
+  const view = new SessionsView(io);
+  press(view, { name: 'down' });
+  press(view, { name: 'char', value: 'y' });
+  assert.deepEqual(io.copied, [MR.mrUrl]);
+  assert.ok(view.render(SIZE).hints.includes(MR.mrUrl), 'the url is shown as well, since a terminal may ignore OSC 52');
+});
+
+test('y copies from the timeline too', () => {
+  const io = fakeSessionsIo([]);
+  const view = new SessionDetailView(session('feat/a', MR), io);
+  press(view, { name: 'char', value: 'y' });
+  assert.deepEqual(io.copied, [MR.mrUrl]);
+});
+
+test('y on a run with no mr/pr copies nothing and explains why', () => {
+  const io = fakeSessionsIo([session('feat/a', { phase: 'checks' })]);
+  const view = new SessionsView(io);
+  press(view, { name: 'char', value: 'y' });
+  assert.deepEqual(io.copied, []);
+  assert.match(view.render(SIZE).hints, /no mr\/pr yet/);
+});
+
+test('the copy message clears on the next keypress, so it never lingers as the hint', () => {
+  const io = fakeSessionsIo([session('feat/a', MR)]);
+  const view = new SessionsView(io);
+  press(view, { name: 'char', value: 'y' });
+  press(view, { name: 'down' });
+  assert.ok(!view.render(SIZE).hints.includes('copied'));
 });
 
 test('the run launcher passes the typed ticket and target through, and omits empty ones', async () => {

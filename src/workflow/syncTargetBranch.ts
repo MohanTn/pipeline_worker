@@ -16,6 +16,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { currentBranch } from '../git/commit.js';
+import { cancellableSleep } from '../process/cancelScope.js';
 import { runStep, skipStep, updateStep, note, noteRisk } from '../ui/steps.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { PipelineWorkerConfig } from '../types.js';
@@ -36,9 +37,8 @@ export const DEFAULT_SYNC_TIMING: SyncTiming = { pollMs: 3000, timeoutMs: 60000,
 
 export type SyncOutcome = 'updated' | 'merge-timeout' | 'not-on-target-branch';
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+/** Aborts on a TUI cancel (see process/cancelScope.ts); a plain setTimeout everywhere else. */
+const sleep = cancellableSleep;
 
 /** Polls forge.isMrMerged until it confirms, or timing.timeoutMs elapses (false — the MR/PR never merged within the window). */
 async function waitForMerge(forge: ForgeClient, mrIid: number, timing: SyncTiming): Promise<boolean> {

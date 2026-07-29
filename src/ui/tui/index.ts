@@ -8,6 +8,7 @@
  */
 
 import { TuiApp } from './app.js';
+import { Screen } from './screen.js';
 import { seg, type Line } from './line.js';
 import { readSettingsFile, saveSettingsFile } from './configStore.js';
 import { MenuView, type MenuItem } from './views/menu.js';
@@ -21,6 +22,8 @@ import { listRunStates } from '../../state/runState.js';
 import { runWorkflow } from '../../workflow/orchestrate.js';
 import { resumeRun, reviewBranch } from '../../workflow/runCommands.js';
 import { agentDescription, repositoryUrl } from '../welcome.js';
+import { resolveMrUrl } from '../mrUrl.js';
+import type { PipelineWorkerConfig } from '../../types.js';
 import type { View } from './view.js';
 
 function settingsIo(repoRoot: string): SettingsIo {
@@ -31,7 +34,16 @@ function settingsIo(repoRoot: string): SettingsIo {
   };
 }
 
-function sessionsIo(repoRoot: string): SessionsIo {
+/** loadConfig is best-effort here: a repo whose settings cannot be read still browses its sessions, just without rebuilt MR/PR links. */
+function optionalConfig(repoRoot: string): PipelineWorkerConfig | undefined {
+  try {
+    return loadConfig(repoRoot);
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionsIo(repoRoot: string, screen: Screen): SessionsIo {
   return {
     list: () => listRunStates(repoRoot),
     resume: async (branch) => {
@@ -40,6 +52,9 @@ function sessionsIo(repoRoot: string): SessionsIo {
     review: async (branch) => {
       await reviewBranch(repoRoot, { branch });
     },
+    // Settings are only read for a run from before RunState.mrUrl existed.
+    mrUrl: (state) => state.mrUrl ?? (state.mrIid !== undefined ? resolveMrUrl(state, optionalConfig(repoRoot)) : undefined),
+    copy: (text) => screen.copyToClipboard(text),
   };
 }
 
@@ -65,7 +80,7 @@ export function homeHeader(repoRoot: string): Line[] {
   return [[seg(repoRoot, { bold: true })], ...summary, []];
 }
 
-export function buildHome(repoRoot: string): View {
+export function buildHome(repoRoot: string, screen: Screen): View {
   const items: MenuItem[] = [
     {
       label: 'Run workflow',
@@ -75,7 +90,7 @@ export function buildHome(repoRoot: string): View {
     {
       label: 'Sessions',
       description: "Browse this repo's runs; resume or review one",
-      onSelect: () => ({ type: 'push', view: new SessionsView(sessionsIo(repoRoot)) }),
+      onSelect: () => ({ type: 'push', view: new SessionsView(sessionsIo(repoRoot, screen)) }),
     },
     {
       label: 'Settings',
@@ -112,5 +127,8 @@ export function shouldOpenTui(argv: readonly string[], stdinIsTty: boolean, stdo
 
 /** Entry point for `pipeline-worker tui`. Resolves once the terminal has been restored. */
 export async function startTui(repoRoot: string): Promise<void> {
-  await new TuiApp(buildHome(repoRoot)).run();
+  // One Screen for both: the sessions browser's copy key writes OSC 52 to the
+  // same stream the app paints on, so it must not open a second one.
+  const screen = new Screen();
+  await new TuiApp(buildHome(repoRoot, screen), screen).run();
 }

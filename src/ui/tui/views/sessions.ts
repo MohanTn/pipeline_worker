@@ -41,13 +41,35 @@ export interface SessionsIo {
   list(): RunSession[];
   resume(branch: string): Promise<void>;
   review(branch: string): Promise<void>;
+  /** Web URL of this run's MR/PR, rebuilt from settings for state files that predate RunState.mrUrl (see ui/mrUrl.ts). */
+  mrUrl(state: RunSession['state']): string | undefined;
+  /** Puts text on the terminal's clipboard. Silent when the terminal refuses OSC 52, so the URL is always shown too. */
+  copy(text: string): void;
+}
+
+/**
+ * `y` on either screen: the MR/PR is what a run produces, and an escalated run
+ * is exactly the case where the user has to go look at it, so the URL is one
+ * key away rather than something to retype from the timeline. The message is
+ * returned instead of printed — a view never writes to the terminal itself.
+ */
+function copyMrUrl(io: SessionsIo, session: RunSession | undefined): string {
+  if (!session) return 'no run selected';
+  const url = io.mrUrl(session.state);
+  if (!url) return 'this run has no mr/pr yet';
+  io.copy(url);
+  return `copied ${url}`;
 }
 
 /** One run's full timeline, scrollable — the TUI form of `sessions --branch <name>`. */
 export class SessionDetailView implements View {
   private offset = 0;
+  private flash: string | undefined;
 
-  constructor(private readonly session: RunSession) {}
+  constructor(
+    private readonly session: RunSession,
+    private readonly io: SessionsIo,
+  ) {}
 
   private lines(): Line[] {
     const { state } = this.session;
@@ -61,6 +83,9 @@ export class SessionDetailView implements View {
         seg(state.mrIid !== undefined ? `  mr/pr #${state.mrIid}` : '', { role: 'overlay1' }),
         seg(state.totalTokens !== undefined ? `  ${formatTokens(state.totalTokens)}` : '', { role: 'overlay1' }),
       ],
+      ...(state.mrIid !== undefined
+        ? [[seg('mr/pr    ', { role: 'overlay1' }), seg(this.io.mrUrl(state) ?? `#${state.mrIid} (no url recorded)`)] satisfies Line]
+        : []),
       [seg('started  ', { role: 'overlay1' }), seg(timestamp(state.startedAt))],
       [seg('updated  ', { role: 'overlay1' }), seg(timestamp(state.updatedAt))],
       [],
@@ -89,13 +114,15 @@ export class SessionDetailView implements View {
     return {
       title: `session · ${this.session.state.branch}`,
       body: all.slice(this.offset, this.offset + inner.rows),
-      hints: '↑↓ scroll · q back',
+      hints: this.flash ?? '↑↓ scroll · y copy mr/pr url · q back',
     };
   }
 
   onKey(key: Key): Action {
     if (isBackKey(key)) return { type: 'pop' };
-    if (key.name === 'up') this.offset = Math.max(0, this.offset - 1);
+    this.flash = undefined;
+    if (key.name === 'char' && key.value === 'y') this.flash = copyMrUrl(this.io, this.session);
+    else if (key.name === 'up') this.offset = Math.max(0, this.offset - 1);
     else if (key.name === 'down') this.offset += 1;
     else if (key.name === 'pageup') this.offset = Math.max(0, this.offset - 10);
     else if (key.name === 'pagedown') this.offset += 10;
@@ -107,6 +134,7 @@ export class SessionsView implements View {
   private sessions: RunSession[];
   private index = 0;
   private windowStart = 0;
+  private flash: string | undefined;
 
   constructor(private readonly io: SessionsIo) {
     this.sessions = io.list();
@@ -145,16 +173,18 @@ export class SessionsView implements View {
     this.windowStart = start;
     const body: Line[] = [header];
     for (let i = start; i < end; i++) body.push(this.row(this.sessions[i], i === this.index));
-    return { title: 'sessions', body, hints: '↑↓ move · ⏎ timeline · r resume · v review · q back' };
+    return { title: 'sessions', body, hints: this.flash ?? '↑↓ move · ⏎ timeline · r resume · v review · y copy url · q back' };
   }
 
   // fallow-ignore-next-line complexity
   onKey(key: Key): Action {
     if (isBackKey(key)) return { type: 'pop' };
     const focused = this.focused();
+    this.flash = undefined;
     if (key.name === 'up') this.index = moveIndex(this.index, -1, this.sessions.length);
     else if (key.name === 'down') this.index = moveIndex(this.index, 1, this.sessions.length);
-    else if (key.name === 'enter' && focused) return { type: 'push', view: new SessionDetailView(focused) };
+    else if (key.name === 'enter' && focused) return { type: 'push', view: new SessionDetailView(focused, this.io) };
+    else if (key.name === 'char' && key.value === 'y') this.flash = copyMrUrl(this.io, focused);
     else if (key.name === 'char' && key.value === 'r' && focused) {
       const branch = focused.state.branch;
       return runInDashboard(`resume ${branch}`, () => this.io.resume(branch));

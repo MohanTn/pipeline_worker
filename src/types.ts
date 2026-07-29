@@ -146,6 +146,8 @@ export interface RunState {
   targetBranch: string;
   worktreePath: string;
   mrIid?: number;
+  /** Web URL of the MR/PR named by mrIid. Absent on state files written before this field existed — ui/mrUrl.ts rebuilds one from the settings file for those. */
+  mrUrl?: string;
   pipelineId?: number;
   /** Automated-fix attempts spent on a real CI failure (watchPipeline.ts's runCiFixAttempt); bounded by config.maxFixAttempts independently of conflictAttempt. */
   ciFixAttempt: number;

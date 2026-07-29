@@ -65,6 +65,17 @@ export class TuiApp {
   private async runJob(label: string, view: View, run: (ctx: { redraw(): void }) => Promise<void>): Promise<void> {
     this.stack.push(view);
     this.draw();
+    // Keys go straight to the job's own view for the duration. The app-level
+    // dispatcher would drop them (onKey's `busy` guard, held for this whole
+    // await), which is right for navigation — a job must not have a hundred
+    // pending pushes stacked behind it — but wrong for the job's own screen,
+    // which needs them to scroll and to be cancelled. Actions the view
+    // returns are deliberately discarded: only waitForAnyKey below may move
+    // the stack. Stop first, per KeyReader's single-listener contract.
+    this.keys.stop();
+    this.keys.start((key) => {
+      void Promise.resolve(view.onKey(key)).then(() => this.draw());
+    });
     try {
       await run({ redraw: () => this.draw() });
     } catch (error) {
