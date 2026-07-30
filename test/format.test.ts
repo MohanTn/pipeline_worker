@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCount, formatTokens, formatUsageInline, freshInputTokens, usageFooter } from '../src/ui/format.js';
+import { formatCount, formatRelative, formatTokens, formatUsageInline, freshInputTokens, usageFooter } from '../src/ui/format.js';
 
 test('formatTokens renders sub-thousand counts as plain integers', () => {
   assert.equal(formatTokens(0), '0 tok');
@@ -77,4 +77,33 @@ test('usageFooter omits cache segments a turn never reported and pads labels to 
 
 test('usageFooter is empty when no step reported a split — nothing to break down', () => {
   assert.deepEqual(usageFooter([], 4400), []);
+});
+
+const NOW = Date.parse('2026-07-30T12:00:00Z');
+
+/** `NOW` minus a number of seconds, as the ISO string a state file would hold. */
+function ago(seconds: number): string {
+  return new Date(NOW - seconds * 1000).toISOString();
+}
+
+test('formatRelative scales an age through seconds, minutes, hours, days, weeks and years', () => {
+  assert.equal(formatRelative(ago(5), NOW), '5s ago');
+  assert.equal(formatRelative(ago(4 * 60), NOW), '4m ago');
+  assert.equal(formatRelative(ago(2 * 3600), NOW), '2h ago');
+  assert.equal(formatRelative(ago(3 * 86_400), NOW), '3d ago');
+  assert.equal(formatRelative(ago(20 * 86_400), NOW), '2w ago');
+  assert.equal(formatRelative(ago(800 * 86_400), NOW), '2y ago');
+});
+
+test("formatRelative stays inside the sessions list's column budget at every scale", () => {
+  for (const seconds of [0, 59, 3599, 86_399, 604_799, 31_535_999, 10 * 31_536_000]) {
+    assert.ok(formatRelative(ago(seconds), NOW).length <= 7, `${seconds}s formatted too wide`);
+  }
+});
+
+test('formatRelative degrades rather than throwing on a missing, unparseable, or future timestamp', () => {
+  assert.equal(formatRelative(undefined, NOW), 'unknown');
+  assert.equal(formatRelative('not a date', NOW), 'unknown');
+  // A state file written by a machine with a fast clock must not read as '-30s ago'.
+  assert.equal(formatRelative(ago(-30), NOW), 'now');
 });

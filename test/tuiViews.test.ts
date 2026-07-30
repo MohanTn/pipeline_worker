@@ -23,6 +23,9 @@ import type { PipelineWorkerConfig } from '../src/types.js';
 
 const SIZE = { columns: 90, rows: 40 };
 
+/** The left half of chrome.ts's selection bar — how a rendered row says "the cursor is here". */
+const SELECTED = '▐';
+
 function textOf(view: View): string[] {
   return view.render(SIZE).body.map((line: Line) => plainText(line));
 }
@@ -93,7 +96,7 @@ function focusField(view: SettingsView, path: string): void {
   assert.ok(target >= 0, `no row for ${path}`);
   for (let i = 0; i < rows.length + 1; i++) {
     const rendered = view.render(SIZE).body.map(plainText);
-    if (rendered.some((line) => line.startsWith('❯') && line.includes((rows[target] as { field: { label: string } }).field.label))) return;
+    if (rendered.some((line) => line.startsWith(SELECTED) && line.includes((rows[target] as { field: { label: string } }).field.label))) return;
     press(view, { name: 'down' });
   }
   assert.fail(`could not focus ${path}`);
@@ -515,7 +518,176 @@ test('the menu marks exactly one row as selected', () => {
     { label: 'First', onSelect: () => ({ type: 'none' }) },
     { label: 'Second', onSelect: () => ({ type: 'none' }) },
   ]);
-  const marked = textOf(view).filter((line) => line.trimStart().startsWith('❯'));
+  const marked = textOf(view).filter((line) => line.startsWith(SELECTED));
   assert.equal(marked.length, 1);
   assert.ok(marked[0].includes('First'));
+});
+
+/** Two described items — enough to tell "only the focused description" from "all of them". */
+function describedMenu(): MenuView {
+  return new MenuView('home', [
+    { label: 'Run workflow', description: 'Capture the diff', onSelect: () => ({ type: 'none' }) },
+    { label: 'Sessions', description: 'Browse past runs', onSelect: () => ({ type: 'none' }) },
+  ]);
+}
+
+test('only the focused menu item shows its description, so the choices stay on one screen', () => {
+  const view = describedMenu();
+  const before = textOf(view).join('\n');
+  assert.ok(before.includes('Capture the diff'));
+  assert.ok(!before.includes('Browse past runs'));
+  press(view, { name: 'char', value: 'j' });
+  const after = textOf(view).join('\n');
+  assert.ok(after.includes('Browse past runs'));
+  assert.ok(!after.includes('Capture the diff'));
+});
+
+test('j and k move the menu cursor exactly like the arrow keys', () => {
+  const arrows = describedMenu();
+  const vim = describedMenu();
+  press(arrows, { name: 'down' });
+  press(vim, { name: 'char', value: 'j' });
+  assert.deepEqual(textOf(vim), textOf(arrows));
+  press(arrows, { name: 'up' });
+  press(vim, { name: 'char', value: 'k' });
+  assert.deepEqual(textOf(vim), textOf(arrows));
+});
+
+test('/ filters the menu to matching labels and selects the first survivor', () => {
+  const view = describedMenu();
+  press(view, { name: 'char', value: '/' });
+  type(view, 'sess');
+  const rows = textOf(view).join('\n');
+  assert.ok(rows.includes('Sessions'));
+  assert.ok(!rows.includes('Run workflow'));
+  // ⏎ closes the input; the query stays applied and ⏎ again picks the match.
+  press(view, { name: 'enter' });
+  assert.ok(view.render(SIZE).hints.includes('j/k move'));
+});
+
+test('a filter that matches nothing says so rather than rendering an empty screen', () => {
+  const view = describedMenu();
+  press(view, { name: 'char', value: '/' });
+  type(view, 'zzz');
+  assert.ok(textOf(view).join('\n').includes('no match for "zzz"'));
+  // ⏎ on nothing must not throw or navigate.
+  assert.deepEqual(press(view, { name: 'enter' }), { type: 'none' });
+});
+
+test('q clears a standing filter before it leaves the menu, so a subset is never a dead end', () => {
+  const view = describedMenu();
+  press(view, { name: 'char', value: '/' });
+  type(view, 'sess');
+  press(view, { name: 'enter' });
+  assert.deepEqual(press(view, { name: 'char', value: 'q' }), { type: 'none' });
+  assert.ok(textOf(view).join('\n').includes('Run workflow'));
+  // Filter gone, so the next q really does leave.
+  assert.deepEqual(press(view, { name: 'char', value: 'q' }), { type: 'pop' });
+});
+
+test('while typing a filter, q and j are query characters rather than commands', () => {
+  const view = describedMenu();
+  press(view, { name: 'char', value: '/' });
+  assert.deepEqual(press(view, { name: 'char', value: 'q' }), { type: 'none' });
+  press(view, { name: 'char', value: 'j' });
+  assert.ok(textOf(view).join('\n').includes('/qj'));
+});
+
+test('/ filters the sessions list by branch and reports how many of the runs survived', () => {
+  const io = fakeSessionsIo([session('feat/alpha'), session('fix/beta'), session('feat/gamma')]);
+  const view = new SessionsView(io);
+  press(view, { name: 'char', value: '/' });
+  type(view, 'feat');
+  press(view, { name: 'enter' });
+  const rows = textOf(view).join('\n');
+  assert.ok(rows.includes('feat/alpha'));
+  assert.ok(rows.includes('feat/gamma'));
+  assert.ok(!rows.includes('fix/beta'));
+  assert.ok(rows.includes('2 of 3'));
+});
+
+test('the sessions actions operate on the filtered cursor, not the unfiltered index underneath it', async () => {
+  const io = fakeSessionsIo([session('feat/alpha'), session('fix/beta'), session('feat/gamma')]);
+  const view = new SessionsView(io);
+  press(view, { name: 'char', value: '/' });
+  type(view, 'feat');
+  press(view, { name: 'enter' });
+  // Cursor is on the first match; j moves to the second match, not to fix/beta.
+  press(view, { name: 'char', value: 'j' });
+  const action = press(view, { name: 'char', value: 'r' });
+  assert.equal(action.type, 'run');
+  if (action.type === 'run') await action.run(NOOP_CTX);
+  assert.deepEqual(io.resumed, ['feat/gamma']);
+});
+
+test('the sessions list shows ages rather than absolute timestamps, keeping the branch column intact at 80 columns', () => {
+  const io = fakeSessionsIo([session('feat/a', { updatedAt: new Date(Date.now() - 4 * 60_000).toISOString() })]);
+  const view = new SessionsView(io);
+  const rows = view.render({ columns: 76, rows: 20 }).body.map((line: Line) => plainText(line));
+  const row = rows.find((line) => line.includes('feat/a'));
+  assert.ok(row, 'branch row missing');
+  assert.ok(row.includes('4m ago'), row);
+  assert.ok(!row.includes('2026'), 'an absolute date leaked into the list');
+});
+
+test('the sessions row keeps every column inside a narrow terminal instead of clipping the clock off', () => {
+  const io = fakeSessionsIo([session('feature/a-really-quite-long-branch-name-here', { mrIid: 42 })]);
+  const view = new SessionsView(io);
+  for (const columns of [56, 76, 120]) {
+    const rows = view.render({ columns, rows: 20 }).body.map((line: Line) => plainText(line));
+    const row = rows.find((line) => line.startsWith(SELECTED));
+    assert.ok(row, `no selected row at ${columns} columns`);
+    assert.ok(row.length <= columns, `row overflowed at ${columns} columns`);
+    assert.ok(row.includes('#42'), `mr column lost at ${columns} columns`);
+    assert.ok(row.includes('ago') || row.includes('unknown'), `updated column lost at ${columns} columns`);
+  }
+});
+
+test('every screen\'s hint strip fits an 80-column frame, which is where it lives', () => {
+  const size = { columns: 80, rows: 24 };
+  const inner = { columns: size.columns - 4, rows: size.rows - 2 };
+  const screens: Array<[string, View]> = [
+    ['sessions', new SessionsView(fakeSessionsIo([session('feat/a')]))],
+    ['settings', new SettingsView(fakeSettingsIo())],
+    ['run', new RunView({ start: async () => {} })],
+    ['menu', describedMenu()],
+    ['setup', new SetupView(fakeSettingsIo())],
+  ];
+  for (const [name, view] of screens) {
+    const strip = view.render(inner).hints;
+    // Two corners plus a space either side of the strip; overflowing costs the
+    // whole border row to truncation.
+    assert.ok(strip.length + 4 <= size.columns, `${name} hint strip is ${strip.length} chars: ${strip}`);
+  }
+});
+
+test('vim keys walk the settings editor over its group headings, the same as the arrows do', () => {
+  const arrows = new SettingsView(fakeSettingsIo());
+  const vim = new SettingsView(fakeSettingsIo());
+  press(arrows, { name: 'down' }, { name: 'down' });
+  press(vim, { name: 'char', value: 'j' }, { name: 'char', value: 'j' });
+  assert.deepEqual(textOf(vim), textOf(arrows));
+  // A heading is never left under the cursor.
+  const selected = textOf(vim).filter((line) => line.startsWith(SELECTED));
+  assert.equal(selected.length, 1);
+  assert.ok(!selected[0].includes('──'));
+});
+
+test('G jumps the settings cursor to the last field and g back to the first', () => {
+  const view = new SettingsView(fakeSettingsIo());
+  const first = textOf(view).filter((line) => line.startsWith(SELECTED))[0];
+  press(view, { name: 'char', value: 'G' });
+  const last = textOf(view).filter((line) => line.startsWith(SELECTED))[0];
+  assert.notEqual(last, first);
+  assert.ok(!last.includes('──'), 'G landed on a group heading');
+  press(view, { name: 'char', value: 'g' });
+  assert.equal(textOf(view).filter((line) => line.startsWith(SELECTED))[0], first);
+});
+
+test('d still resets a settings field, so the page keys did not steal it', () => {
+  const io = fakeSettingsIo({ agent: 'copilot' });
+  const view = new SettingsView(io);
+  focusField(view, 'agent');
+  press(view, { name: 'char', value: 'd' });
+  assert.equal(getAtPath(io.read(), 'agent'), undefined);
 });

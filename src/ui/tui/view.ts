@@ -44,3 +44,25 @@ export interface View {
 export function isBackKey(key: Key): boolean {
   return key.name === 'escape' || (key.name === 'char' && key.value === 'q') || (key.name === 'ctrl' && key.value === 'c');
 }
+
+/**
+ * The shared half of the hint strip. Only the phrasings that must not drift
+ * between screens live here — a screen's own verbs ('r resume', '⏎ start')
+ * stay local, because centralizing those would just be a second copy of each
+ * view's key table.
+ */
+export const HINT = {
+  move: 'j/k move',
+  scroll: 'j/k scroll',
+  filter: '/ filter',
+  help: '? help',
+  back: 'q back',
+  quit: 'q quit',
+  clear: 'ctrl-u clear',
+  filtering: '⏎ apply · esc clear',
+} as const;
+
+/** Joins hint fragments with the TUI's separator, dropping the ones a screen's current state does not offer. */
+export function hints(...parts: (string | false | undefined)[]): string {
+  return parts.filter((part): part is string => Boolean(part)).join(' · ');
+}

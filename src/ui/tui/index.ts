@@ -68,8 +68,8 @@ export function homeHeader(repoRoot: string): Line[] {
   try {
     const config = loadConfig(repoRoot);
     summary = [
-      [seg('agent   ', { role: 'overlay1' }), seg(agentDescription(config))],
-      [seg('forge   ', { role: 'overlay1' }), seg(config.forge), seg(`  ${repositoryUrl(config)}`, { role: 'overlay1' })],
+      [seg('agent   ', { role: 'overlay1' }), seg(agentDescription(config), { role: 'subtext0' })],
+      [seg('forge   ', { role: 'overlay1' }), seg(config.forge, { role: 'subtext0' }), seg(`  ${repositoryUrl(config)}`, { role: 'overlay1' })],
       [seg('config  ', { role: 'overlay1' }), seg(configFilePath(), { role: 'overlay1' })],
     ];
   } catch (error) {

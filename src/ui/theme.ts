@@ -10,12 +10,22 @@
  * https://github.com/catppuccin/catppuccin#-mocha
  */
 
+/**
+ * Roles are layered on purpose, so a screen reads in three planes: chrome
+ * (surface2) sits behind labels (subtext0/overlay1), which sit behind content
+ * (uncolored) and the accent (mauve). Status colors are reserved for status —
+ * `sky` means "running", never "selected", so a glance at a busy dashboard
+ * finds the live step instead of the cursor.
+ */
 const PALETTE = {
   green: '#a6e3a1', // done / success / low risk
   red: '#f38ba8', // failed / error / high risk
   yellow: '#f9e2af', // watch phase / medium risk
   sky: '#89dceb', // running / in-progress / checks / mr phase
+  mauve: '#cba6f7', // UI accent: frame titles, the selection bar, filter matches
+  subtext0: '#a6adc8', // secondary text that must stay readable (help paragraphs, notes)
   overlay1: '#7f849c', // muted/secondary text (replaces plain ANSI "dim")
+  surface2: '#585b70', // chrome only: borders and section rules
 } as const;
 
 export type MochaRole = keyof typeof PALETTE;

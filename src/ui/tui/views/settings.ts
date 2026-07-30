@@ -14,8 +14,8 @@
  */
 
 import { seg, wrap, type Line } from '../line.js';
-import { clampIndex, firstSelectable, moveToSelectable, viewportWindow } from '../list.js';
-import { sectionRow } from '../chrome.js';
+import { clampIndex, firstSelectable, moveToSelectable, navIntent, viewportWindow, type NavIntent } from '../list.js';
+import { sectionRow, selectionRow } from '../chrome.js';
 import { applyKey, createInput, renderInput, type InputState } from '../textInput.js';
 import { setAtPath, unsetAtPath } from '../configStore.js';
 import {
@@ -28,7 +28,7 @@ import {
   valueSource,
   type ConfigField,
 } from '../configSchema.js';
-import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
+import { HINT, NONE, hints, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { Key } from '../keys.js';
 import type { Size } from '../screen.js';
 import type { PipelineWorkerConfig } from '../../../types.js';
@@ -57,7 +57,17 @@ export function buildRows(fields: readonly ConfigField[] = CONFIG_FIELDS): Row[]
 
 const SOURCE_ROLE = { file: 'green', auto: 'sky', default: 'overlay1' } as const;
 const HELP_ROWS = 5;
-const VALUE_COLUMN = 26;
+const LABEL_MIN = 14;
+const LABEL_MAX = 30;
+
+/**
+ * Where the value column starts. Derived from the terminal rather than fixed at
+ * 26, so a narrow pane keeps the value visible instead of pushing it past the
+ * right edge, and a wide one does not strand the two columns an inch apart.
+ */
+function labelWidth(columns: number): number {
+  return Math.min(LABEL_MAX, Math.max(LABEL_MIN, Math.floor(columns * 0.34)));
+}
 
 export class SettingsView implements View {
   private readonly rows = buildRows();
@@ -97,21 +107,19 @@ export class SettingsView implements View {
   }
 
   private fieldRow(field: ConfigField, selected: boolean, width: number): Line {
+    // The selection bars own two columns; everything below lays out in the rest.
+    const room = Math.max(1, width - 2);
     const source = valueSource(field, this.settings, this.config);
     const value = displayValue(field, effectiveValue(field, this.config));
-    const label = `  ${field.label}`.padEnd(VALUE_COLUMN);
-    const valueRole = source === 'default' ? 'overlay1' : undefined;
-    const line: Line = [
-      seg(selected ? '❯' : ' ', { role: 'sky', bold: true }),
-      seg(label, { bold: selected }),
-      seg(value, { role: valueRole, bold: selected }),
-    ];
+    const label = ` ${field.label}`.padEnd(labelWidth(room));
+    const content: Line = [seg(' '), seg(label), seg(value, { role: source === 'default' ? 'overlay1' : undefined })];
     // The source tag is right-aligned into whatever room is left, and dropped
     // entirely on a terminal too narrow to hold it without eating the value.
-    const used = 1 + label.length + value.length;
-    const gap = width - used - source.length;
-    if (gap < 1) return line;
-    return [...line, seg(' '.repeat(gap)), seg(source, { role: SOURCE_ROLE[source] })];
+    // One column is held back so the tag never sits flush against the
+    // selection bar on the focused row.
+    const gap = room - 1 - (1 + label.length + value.length) - source.length;
+    const full = gap < 1 ? content : [...content, seg(' '.repeat(gap)), seg(source, { role: SOURCE_ROLE[source] })];
+    return selectionRow(full, width, selected);
   }
 
   private helpPanel(width: number): Line[] {
@@ -119,7 +127,7 @@ export class SettingsView implements View {
     if (!field) return [];
     const lines: Line[] = [sectionRow(field.path, width)];
     const doc = field.choices ? `${field.doc} Choices: ${field.choices.join(' / ')}.` : field.doc;
-    for (const text of wrap(doc, width).slice(0, HELP_ROWS - 1)) lines.push([seg(text, { role: 'overlay1' })]);
+    for (const text of wrap(doc, width).slice(0, HELP_ROWS - 1)) lines.push([seg(text, { role: 'subtext0' })]);
     return lines;
   }
 
@@ -152,9 +160,32 @@ export class SettingsView implements View {
 
     return {
       title: 'settings',
-      hints: this.editing ? '⏎ save · esc cancel · ctrl-u clear' : '↑↓ move · ⏎ edit/toggle · d default · ? help · q back',
+      hints: this.editing
+        ? hints('⏎ save', 'esc cancel', HINT.clear)
+        : hints(HINT.move, '⏎ edit/toggle', 'd default', HINT.help, HINT.back),
       body,
     };
+  }
+
+  /** Folds a navigation key onto the next *field*, stepping over the group headings the cursor may not land on. */
+  private navigate(intent: NavIntent): void {
+    const length = this.rows.length;
+    const selectable = (i: number): boolean => this.selectable(i);
+    if (intent.kind === 'first') {
+      this.index = firstSelectable(length, selectable);
+      return;
+    }
+    // Wrapping backwards off row 0 lands on the last selectable row.
+    if (intent.kind === 'last') {
+      this.index = moveToSelectable(0, -1, length, selectable);
+      return;
+    }
+    if (Math.abs(intent.delta) === 1) {
+      this.index = moveToSelectable(this.index, intent.delta, length, selectable);
+      return;
+    }
+    const target = clampIndex(this.index + intent.delta, length);
+    this.index = selectable(target) ? target : moveToSelectable(target, Math.sign(intent.delta), length, selectable);
   }
 
   private startEditing(field: ConfigField): void {
@@ -205,9 +236,12 @@ export class SettingsView implements View {
   onKey(key: Key): Action {
     if (this.editing) return this.onEditKey(key);
     if (isBackKey(key)) return { type: 'pop' };
-    if (key.name === 'up') this.index = moveToSelectable(this.index, -1, this.rows.length, (i) => this.selectable(i));
-    else if (key.name === 'down') this.index = moveToSelectable(this.index, 1, this.rows.length, (i) => this.selectable(i));
-    else if (key.name === 'enter') this.activateFocused();
+    const nav = navIntent(key);
+    if (nav) {
+      this.navigate(nav);
+      return NONE;
+    }
+    if (key.name === 'enter') this.activateFocused();
     else if (key.name === 'char' && key.value === '?') this.showHelp = !this.showHelp;
     else if (key.name === 'char' && key.value === 'd') {
       const field = this.focusedField();

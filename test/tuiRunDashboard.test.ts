@@ -112,7 +112,7 @@ test('stop() with status "running" is a no-op — only a terminal status settles
   dashboard.onEvent({ kind: 'header' }, tree);
   dashboard.stop('running', undefined, tree);
   // Still running, so the footer keeps offering the live keys rather than the settled press-any-key.
-  assert.equal(dashboard.render(SIZE).hints, '↑↓ scroll notes · ctrl-c stop');
+  assert.equal(dashboard.render(SIZE).hints, 'j/k scroll notes · G follow · ctrl-c stop');
 });
 
 test('onKey pops only once the run has finished', () => {
@@ -180,7 +180,7 @@ test('one ctrl-c arms the stop and explains itself; the second requests the canc
   const dispose = beginCancelScope();
   try {
     const dashboard = new RunDashboardView();
-    assert.equal(dashboard.render(SIZE).hints, '↑↓ scroll notes · ctrl-c stop');
+    assert.equal(dashboard.render(SIZE).hints, 'j/k scroll notes · G follow · ctrl-c stop');
 
     dashboard.onKey(CTRL_C);
     assert.equal(isCancelRequested(), false, 'a single press must never stop a run');

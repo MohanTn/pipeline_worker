@@ -9,9 +9,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseKeys } from '../src/ui/tui/keys.js';
 import { fitLine, plainText, renderLine, seg, wrap } from '../src/ui/tui/line.js';
-import { clampIndex, firstSelectable, moveIndex, moveToSelectable, viewportWindow } from '../src/ui/tui/list.js';
+import {
+  applyFilterKey,
+  applyNav,
+  clampIndex,
+  firstSelectable,
+  matchesFilter,
+  moveIndex,
+  moveToSelectable,
+  navIntent,
+  NO_FILTER,
+  viewportWindow,
+} from '../src/ui/tui/list.js';
 import { applyKey, createInput, renderInput } from '../src/ui/tui/textInput.js';
-import { frame, innerSize, FRAME_CHROME_ROWS } from '../src/ui/tui/chrome.js';
+import { frame, innerSize, selectionRow, FRAME_CHROME_ROWS } from '../src/ui/tui/chrome.js';
 
 test('parseKeys decodes the arrow keys from their CSI sequences', () => {
   assert.deepEqual(parseKeys('\x1b[A'), [{ name: 'up' }]);
@@ -186,4 +197,111 @@ test('frame survives a terminal too narrow for its own title, still producing ex
   const size = { columns: 8, rows: 4 };
   const rows = frame({ title: 'a very long title', body: [[seg('x')]], hints: 'a very long hint strip' }, size);
   for (const row of rows) assert.equal(plainText(row).length, size.columns);
+});
+
+test('an overlong hint strip is clipped but keeps the frame corners, rather than degrading to a bare rule', () => {
+  const size = { columns: 40, rows: 3 };
+  const rows = frame({ title: 'pipeline-worker · sessions', body: [], hints: 'j/k move · ⏎ open · r resume · v review · y url · / filter · q back' }, size);
+  const bottom = plainText(rows[rows.length - 1]);
+  assert.equal(bottom.length, size.columns);
+  assert.ok(bottom.startsWith('└'), bottom);
+  assert.ok(bottom.endsWith('┘'), bottom);
+  // The head of the strip survives; the tail is marked as clipped.
+  assert.ok(bottom.includes('j/k move'), bottom);
+  assert.ok(bottom.includes('…'), bottom);
+});
+
+test('a row occupies the same columns focused or not, so the list does not shift sideways under the cursor', () => {
+  const content = [seg(' branch-name')];
+  const selected = selectionRow(content, 20, true);
+  const plain = selectionRow(content, 20, false);
+  assert.equal(plainText(selected).length, 20);
+  assert.equal(plainText(plain).length, 20);
+  assert.ok(plainText(selected).startsWith('▐'));
+  assert.ok(plainText(selected).endsWith('▌'));
+  // Same text, different affordance — the bars replace the padding, never the content.
+  assert.equal(plainText(selected).slice(1, -1), plainText(plain).slice(1, -1));
+});
+
+test('the selected row bolds its content, including segments that carried their own color', () => {
+  // Only the caller's own segments — fitLine's padding is blank, so its style is moot.
+  const content = selectionRow([seg('a'), seg('b', { role: 'green' })], 10, true).filter((part) => part.text.trim() !== '');
+  assert.deepEqual(
+    content.map((part) => part.text),
+    ['▐', 'a', 'b', '▌'],
+  );
+  assert.ok(content.every((part) => part.bold));
+  assert.equal(content.find((part) => part.text === 'b')?.role, 'green', 'selection must not repaint a status color');
+  assert.equal(
+    selectionRow([seg('a')], 10, false).some((part) => part.bold),
+    false,
+  );
+});
+
+test('selectionRow truncates content that would overrun the row rather than pushing the closing bar out', () => {
+  const row = selectionRow([seg('an extremely long branch name')], 12, true);
+  assert.equal(plainText(row).length, 12);
+  assert.ok(plainText(row).endsWith('▌'));
+});
+
+test('navIntent accepts the vim set alongside the arrow set', () => {
+  assert.deepEqual(navIntent({ name: 'char', value: 'j' }), { kind: 'move', delta: 1 });
+  assert.deepEqual(navIntent({ name: 'down' }), { kind: 'move', delta: 1 });
+  assert.deepEqual(navIntent({ name: 'char', value: 'k' }), { kind: 'move', delta: -1 });
+  assert.deepEqual(navIntent({ name: 'up' }), { kind: 'move', delta: -1 });
+  assert.deepEqual(navIntent({ name: 'char', value: 'g' }), { kind: 'first' });
+  assert.deepEqual(navIntent({ name: 'char', value: 'G' }), { kind: 'last' });
+});
+
+test('ctrl-d and ctrl-u page by the caller\'s viewport, leaving plain d free for the settings editor', () => {
+  assert.deepEqual(navIntent({ name: 'ctrl', value: 'd' }, 7), { kind: 'move', delta: 7 });
+  assert.deepEqual(navIntent({ name: 'ctrl', value: 'u' }, 7), { kind: 'move', delta: -7 });
+  assert.equal(navIntent({ name: 'char', value: 'd' }), undefined);
+});
+
+test('navIntent ignores keys that are not navigation, so a view can bind them itself', () => {
+  assert.equal(navIntent({ name: 'char', value: 'r' }), undefined);
+  assert.equal(navIntent({ name: 'enter' }), undefined);
+  assert.equal(navIntent({ name: 'ctrl', value: 'c' }), undefined);
+});
+
+test('single steps wrap at the ends but page jumps clamp, so ctrl-d at the bottom stays at the bottom', () => {
+  assert.equal(applyNav({ kind: 'move', delta: 1 }, 4, 5), 0);
+  assert.equal(applyNav({ kind: 'move', delta: -1 }, 0, 5), 4);
+  assert.equal(applyNav({ kind: 'move', delta: 10 }, 4, 5), 4);
+  assert.equal(applyNav({ kind: 'move', delta: -10 }, 0, 5), 0);
+  assert.equal(applyNav({ kind: 'first' }, 3, 5), 0);
+  assert.equal(applyNav({ kind: 'last' }, 1, 5), 4);
+  assert.equal(applyNav({ kind: 'last' }, 0, 0), 0);
+});
+
+test('the filter opens on /, collects characters, and keeps its query after enter closes the input', () => {
+  const opened = applyFilterKey(NO_FILTER, { name: 'char', value: '/' });
+  assert.deepEqual(opened, { typing: true, query: '' });
+  const typed = applyFilterKey(opened!, { name: 'char', value: 'a' });
+  assert.deepEqual(typed, { typing: true, query: 'a' });
+  // ⏎ hands the keyboard back to the list without dropping the filter.
+  assert.deepEqual(applyFilterKey(typed!, { name: 'enter' }), { typing: false, query: 'a' });
+});
+
+test('escape abandons the filter entirely, and a second / is a literal character once typing', () => {
+  const typing = { typing: true, query: 'feat' };
+  assert.deepEqual(applyFilterKey(typing, { name: 'escape' }), NO_FILTER);
+  assert.deepEqual(applyFilterKey(typing, { name: 'char', value: '/' }), { typing: true, query: 'feat/' });
+  assert.deepEqual(applyFilterKey(typing, { name: 'backspace' }), { typing: true, query: 'fea' });
+  assert.deepEqual(applyFilterKey(typing, { name: 'ctrl', value: 'u' }), { typing: true, query: '' });
+});
+
+test('a closed filter passes non-/ keys back to the view instead of swallowing them', () => {
+  assert.equal(applyFilterKey(NO_FILTER, { name: 'char', value: 'r' }), undefined);
+  assert.equal(applyFilterKey(NO_FILTER, { name: 'down' }), undefined);
+  // 'r' would be a command on the sessions list, but while typing it is a query character.
+  assert.deepEqual(applyFilterKey({ typing: true, query: '' }, { name: 'char', value: 'r' }), { typing: true, query: 'r' });
+});
+
+test('filter matching is case-insensitive substring, and an empty query matches everything', () => {
+  assert.equal(matchesFilter('feat/Worktree-resume', 'worktree'), true);
+  assert.equal(matchesFilter('feat/worktree', 'WORK'), true);
+  assert.equal(matchesFilter('feat/worktree', 'ftw'), false);
+  assert.equal(matchesFilter('anything', ''), true);
 });

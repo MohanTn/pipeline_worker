@@ -15,11 +15,13 @@
 
 import { seg, wrap, type Line } from '../line.js';
 import { sectionRow } from '../chrome.js';
-import { NONE, type Action, type RenderedView, type View } from '../view.js';
+import { navIntent } from '../list.js';
+import { NONE, hints, type Action, type RenderedView, type View } from '../view.js';
 import { buildTreeLines } from '../../runTreeFormat.js';
 import { usageFooter } from '../../format.js';
 import { setRenderer } from '../../steps.js';
 import { beginCancelScope, requestCancel } from '../../../process/cancelScope.js';
+import type { MochaRole } from '../../theme.js';
 import type { Renderer } from '../../renderer.js';
 import type { RunStatus, RunTree, TreeEvent } from '../../runTree.js';
 import type { Key } from '../keys.js';
@@ -52,11 +54,18 @@ const CANCEL_ARM_MS = 2000;
  */
 const MR_URL = /https?:\/\/\S+?(?:\/-\/merge_requests\/|\/pull\/)\d+/;
 
-const FINAL_LINE: Record<Exclude<RunStatus, 'running'>, string> = {
-  done: '🎉 Done',
-  failed: '✗ Run failed',
-  escalated: '🚨 Stopped for human review',
-  interrupted: '⏹ Interrupted',
+/**
+ * The closing line, in the same glyph vocabulary the step tree uses (✓ ✗ ○ –,
+ * see runTreeFormat.ts's statusGlyph) rather than emoji. Two reasons: the run
+ * is being read alongside that tree, so a second symbol set is noise; and
+ * emoji are double-width in most terminals while fitLine measures in code
+ * units, which is exactly how a frame's right border ends up one column out.
+ */
+const FINAL_LINE: Record<Exclude<RunStatus, 'running'>, { glyph: string; label: string; role: MochaRole }> = {
+  done: { glyph: '✓', label: 'Done', role: 'green' },
+  failed: { glyph: '✗', label: 'Run failed', role: 'red' },
+  escalated: { glyph: '!', label: 'Stopped for human review', role: 'yellow' },
+  interrupted: { glyph: '■', label: 'Interrupted', role: 'overlay1' },
 };
 
 export class RunDashboardView implements View, Renderer {
@@ -135,7 +144,7 @@ export class RunDashboardView implements View, Renderer {
       const scrolled = this.noteOffset !== undefined;
       const label = scrolled ? `notes ${start + 1}-${Math.min(start + budget, this.notes.length)} of ${this.notes.length}` : 'notes';
       body.push(sectionRow(label, inner.columns));
-      for (const text of this.notes.slice(start, start + budget)) body.push([seg(text, { role: 'overlay1' })]);
+      for (const text of this.notes.slice(start, start + budget)) body.push([seg(text, { role: 'subtext0' })]);
       body.push([]);
     }
 
@@ -150,11 +159,12 @@ export class RunDashboardView implements View, Renderer {
     body.push(...(this.tree ? buildTreeLines(this.tree, this.status, this.frame, treeBudget, inner.columns) : [[seg('starting…', { role: 'overlay1' })]]));
 
     if (this.finished) {
+      const final = FINAL_LINE[this.finalStatus ?? 'done'];
       body.push([]);
       body.push(sectionRow('result', inner.columns));
-      body.push([seg(this.finalStatus ? FINAL_LINE[this.finalStatus] : 'Done', { bold: true })]);
-      if (this.detail) for (const text of wrap(this.detail, inner.columns)) body.push([seg(text, { role: 'overlay1' })]);
-      if (this.mrUrl) body.push([seg('mr/pr  ', { role: 'overlay1' }), seg(this.mrUrl)]);
+      body.push([seg(`${final.glyph} `, { role: final.role, bold: true }), seg(final.label, { bold: true })]);
+      if (this.detail) for (const text of wrap(this.detail, inner.columns)) body.push([seg(text, { role: 'subtext0' })]);
+      if (this.mrUrl) body.push([seg('mr/pr  ', { role: 'overlay1' }), seg(this.mrUrl, { role: 'mauve' })]);
     }
 
     return { title: this.tree?.header.title ?? 'run', body, hints: this.hints() };
@@ -196,19 +206,25 @@ export class RunDashboardView implements View, Renderer {
     if (this.finished) return 'press any key to continue';
     if (this.cancelRequested) return 'stopping after the current step…';
     if (this.cancelArmed()) return 'ctrl-c again to stop this run';
-    return '↑↓ scroll notes · ctrl-c stop';
+    return hints('j/k scroll notes', 'G follow', 'ctrl-c stop');
   }
 
-  // fallow-ignore-next-line complexity
   onKey(key: Key): Action {
     // Once settled, any key dismisses — TuiApp's waitForAnyKey owns that
     // handoff, so this is only reached when the app is still dispatching.
     if (this.finished) return { type: 'pop' };
-    if (key.name === 'ctrl' && key.value === 'c') this.armOrRequestCancel();
-    else if (key.name === 'up') this.scrollNotes(-1);
-    else if (key.name === 'down') this.scrollNotes(1);
-    else if (key.name === 'pageup') this.scrollNotes(-this.noteBudget);
-    else if (key.name === 'pagedown') this.scrollNotes(this.noteBudget);
+    if (key.name === 'ctrl' && key.value === 'c') {
+      this.armOrRequestCancel();
+      return NONE;
+    }
+    // Page keys move by whatever the last render had room for, so ctrl-d
+    // advances exactly one screen of notes rather than a guessed constant.
+    const nav = navIntent(key, this.noteBudget);
+    if (nav?.kind === 'move') this.scrollNotes(nav.delta);
+    else if (nav?.kind === 'first') this.noteOffset = 0;
+    // 'G' means "bottom", which on a live log is the tail — clearing the pin
+    // resumes following new notes rather than freezing on the current last row.
+    else if (nav?.kind === 'last') this.noteOffset = undefined;
     // Never a navigation action: a running job may not move the view stack.
     return NONE;
   }

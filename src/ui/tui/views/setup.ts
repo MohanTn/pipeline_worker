@@ -15,12 +15,12 @@
  */
 
 import { seg, wrap, type Line } from '../line.js';
-import { moveIndex } from '../list.js';
-import { sectionRow } from '../chrome.js';
+import { applyNav, navIntent } from '../list.js';
+import { sectionRow, selectionRow } from '../chrome.js';
 import { applyKey, createInput, renderInput, type InputState } from '../textInput.js';
 import { getAtPath, setAtPath, type ConfigValue } from '../configStore.js';
 import { CONFIG_FIELDS, type ConfigField } from '../configSchema.js';
-import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
+import { HINT, NONE, hints, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { SettingsIo } from './settings.js';
 import type { Key } from '../keys.js';
 import type { Size } from '../screen.js';
@@ -185,12 +185,12 @@ export class SetupView implements View {
   }
 
   private renderIntro(width: number): RenderedView {
-    const body: Line[] = [[seg('Set up pipeline-worker', { bold: true, role: 'sky' })], []];
+    const body: Line[] = [[seg('Set up pipeline-worker', { bold: true, role: 'mauve' })], []];
     for (const paragraph of INTRO) {
-      for (const text of wrap(paragraph, width)) body.push([seg(text, { role: 'overlay1' })]);
+      for (const text of wrap(paragraph, width)) body.push([seg(text, { role: 'subtext0' })]);
       body.push([]);
     }
-    return { title: 'setup guide', body, hints: '⏎ begin · q back' };
+    return { title: 'setup guide', body, hints: hints('⏎ begin', HINT.back) };
   }
 
   private renderStep(step: WizardStep, index: number, width: number): RenderedView {
@@ -200,18 +200,17 @@ export class SetupView implements View {
       [seg(step.question, { bold: true })],
       [],
     ];
-    for (const text of wrap(step.help, width)) body.push([seg(text, { role: 'overlay1' })]);
+    for (const text of wrap(step.help, width)) body.push([seg(text, { role: 'subtext0' })]);
     body.push([], sectionRow(step.path, width));
 
     if (this.isPicker(step)) {
       this.choicesFor(step).forEach((choice, i) => {
-        const selected = i === this.choiceIndex;
-        body.push([seg(selected ? ' ❯ ' : '   ', { role: 'sky', bold: true }), seg(choice, { bold: selected, role: selected ? 'sky' : undefined })]);
+        body.push(selectionRow([seg(' '), seg(choice)], width, i === this.choiceIndex));
       });
-      return { title: 'setup guide', body, hints: '↑↓ choose · ⏎ next · esc back · q quit' };
+      return { title: 'setup guide', body, hints: hints('j/k choose', '⏎ next', 'esc back', HINT.quit) };
     }
     body.push([seg('  '), ...renderInput(this.input, step.placeholder ?? '(leave empty to skip)')]);
-    return { title: 'setup guide', body, hints: '⏎ next · esc back · ctrl-u clear · q quit' };
+    return { title: 'setup guide', body, hints: hints('⏎ next', 'esc back', HINT.clear, HINT.quit) };
   }
 
   private renderSummary(width: number): RenderedView {
@@ -221,8 +220,8 @@ export class SetupView implements View {
       const shown = step.kind === 'secret' ? (value ? '••••••••' : '(unset)') : String(value ?? '') || '(unset)';
       body.push([seg(`  ${step.path.padEnd(22)}`, { role: 'overlay1' }), seg(shown)]);
     }
-    body.push([], ...wrap('Keys you were not asked about keep their current values.', width).map((text) => [seg(text, { role: 'overlay1' })]));
-    return { title: 'setup guide', body, hints: '⏎ save · esc back · q cancel' };
+    body.push([], ...wrap('Keys you were not asked about keep their current values.', width).map((text) => [seg(text, { role: 'subtext0' })]));
+    return { title: 'setup guide', body, hints: hints('⏎ save', 'esc back', 'q cancel') };
   }
 
   render(inner: Size): RenderedView {
@@ -247,8 +246,10 @@ export class SetupView implements View {
       return NONE;
     }
     if (this.isPicker(step)) {
-      if (key.name === 'up') this.choiceIndex = moveIndex(this.choiceIndex, -1, this.choicesFor(step).length);
-      else if (key.name === 'down') this.choiceIndex = moveIndex(this.choiceIndex, 1, this.choicesFor(step).length);
+      // Safe to take j/k here in a way a text step could not: a picker's keys
+      // are choices, not characters going into a value.
+      const nav = navIntent(key);
+      if (nav) this.choiceIndex = applyNav(nav, this.choiceIndex, this.choicesFor(step).length);
       else if (isBackKey(key)) return { type: 'pop' };
       return NONE;
     }
