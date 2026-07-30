@@ -6,7 +6,7 @@ import { createForge } from '../forge/index.js';
 import { selectAgent } from '../agent/index.js';
 import { captureDiff, resetRepo } from '../git/diff.js';
 import { buildBranchName } from '../git/branchName.js';
-import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, renameBranch, generateTempBranchName } from '../git/worktree.js';
+import { createWorktree, syncWithOrigin, applyDiffToWorktree, removeWorktree, renameBranch, resetWorktree, generateTempBranchName } from '../git/worktree.js';
 import { currentBranch, commit, stageAll, findUnresolvedConflictMarkers, forcePushWithLease, hasChanges, checkoutBranch } from '../git/commit.js';
 import { detectDefaultBranch, remoteBranchExists } from '../git/remote.js';
 import { squashCommitsSinceMergeBase } from '../git/squash.js';
@@ -17,11 +17,11 @@ import { openMergeRequest, appendToMergeRequest } from './openMergeRequest.js';
 import { maybeReviewMergeRequest } from './reviewMr.js';
 import { watchPipeline } from './watchPipeline.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
-import { recordEvent, recordAgentTokens } from '../state/runState.js';
+import { recordEvent, recordAgentTokens, deleteRunState } from '../state/runState.js';
 import { acquireLock } from '../state/lock.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
 import { RunCancelledError } from '../process/cancelScope.js';
-import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, note, noteRisk, reportAgentInvocation, setPlainOutput } from '../ui/steps.js';
+import { beginRun, endRun, runStep, skipStep, addDynamicStep, setRunHeader, seedRunTokens, note, noteRisk, reportAgentInvocation, setPlainOutput } from '../ui/steps.js';
 import { setCompletionSound } from '../ui/notify.js';
 import { freshRunSkeleton } from './runPlan.js';
 import { printWelcome } from '../ui/welcome.js';
@@ -35,19 +35,26 @@ function readPhase(state: RunState): RunPhase {
   return state.phase;
 }
 
-/** Phases from 'mr' onward have an open MR/PR that `resume` continues pushing fixes to. */
-const RESUMABLE_PHASES: RunPhase[] = ['mr', 'watch'];
+/**
+ * The stages in the order they run. A run records the phase each stage
+ * completed, so a resumed run skips everything at or before its stored phase
+ * and re-enters at the stage that failed. 'done'/'escalated' sit at the end
+ * because both mean every earlier stage finished.
+ */
+const PHASE_ORDER: RunPhase[] = ['diff', 'apply', 'checks', 'intent', 'commit', 'mr', 'watch', 'escalated', 'done'];
+
+/** True when `phase` says `target`'s stage already finished. Exported for unit testing. */
+export function phaseReached(phase: RunPhase, target: RunPhase): boolean {
+  return PHASE_ORDER.indexOf(phase) >= PHASE_ORDER.indexOf(target);
+}
 
 /**
- * True once the run has an open MR/PR — from that point, `pipeline-worker
- * resume` needs the worktree to still exist to keep pushing CI-fix/conflict
- * resolution commits, so an interrupt must leave it in place instead of
- * deleting it. Before that point (still capturing/applying/checking the
- * diff), there is no MR to resume against, so the worktree is safe — and
- * meant — to remove on interrupt. Exported for unit testing.
+ * A failed or interrupted run keeps its worktree — that is what makes the
+ * stage it died in re-enterable — so every exit that isn't a clean finish
+ * tells the user the one command that picks it back up.
  */
-export function shouldPreserveWorktreeOnInterrupt(phase: RunPhase): boolean {
-  return RESUMABLE_PHASES.includes(phase);
+export function resumeHint(state: RunState): string {
+  return `resume with: pipeline-worker resume --branch ${state.branch}`;
 }
 
 /** Same two-capability gate as watchPipeline.ts's conflict turn: read and write files, no shell. */
@@ -230,7 +237,13 @@ async function captureIntentAndBranch(
  * for reuse by adoptBranch.ts's "no PR/MR yet" path, which runs this exact
  * stage before opening a new PR/MR for a branch pipeline-worker never created.
  */
-export async function runAndReportChecks(config: PipelineWorkerConfig, worktreePath: string, state: RunState, repoRoot: string): Promise<CheckResult[] | null> {
+export async function runAndReportChecks(
+  config: PipelineWorkerConfig,
+  worktreePath: string,
+  state: RunState,
+  repoRoot: string,
+  failureHint?: string,
+): Promise<CheckResult[] | null> {
   const checks = await runStep(
     'checks',
     'build, lint, and test — whichever your repo has configured',
@@ -242,14 +255,28 @@ export async function runAndReportChecks(config: PipelineWorkerConfig, worktreeP
     console.error(
       `pipeline-worker: ${failedCheck.name} failed, aborting before opening a merge request.\n${failedCheck.stderr}`,
     );
+    state.failedStage = 'checks';
     recordEvent(repoRoot, state, `${failedCheck.name} check failed, aborted before opening a merge request`, 'error');
+    // Before endRun: once the run display settles, nothing more is painted.
+    if (failureHint) note(failureHint);
     endRun('failed', `${failedCheck.name} failed — aborted before opening a merge request`);
     process.exitCode = 1;
     return null;
   }
   state.phase = 'checks';
+  state.checks = summarizeChecks(checks);
+  state.failedStage = undefined;
   recordEvent(repoRoot, state, `Checks passed (${checks.map((c) => c.name).join(', ')})`);
   return checks;
+}
+
+/**
+ * What the state file keeps of a check run: only the name/verdict/duration
+ * ever reach an MR/PR description, and a full test log would bloat every
+ * `sessions` read of the file.
+ */
+function summarizeChecks(checks: CheckResult[]): CheckResult[] {
+  return checks.map(({ name, ok, durationMs }) => ({ name, ok, durationMs, stdout: '', stderr: '' }));
 }
 
 /**
@@ -281,65 +308,187 @@ export function recordMrOnState(state: RunState, mr: MergeRequest): void {
   state.mrIid = mr.iid;
   state.mrUrl = mr.webUrl;
   state.phase = 'mr';
-}
-
-/** Stage 9 + opening the MR/PR: commit everything staged so far, then open the merge request and record it on state. */
-async function commitAndOpenMr(
-  forge: ForgeClient,
-  worktreePath: string,
-  state: RunState,
-  targetBranch: string,
-  intent: CapturedIntent,
-  config: PipelineWorkerConfig,
-  checks: CheckResult[],
-  repoRoot: string,
-): Promise<MergeRequest> {
-  await runStep(
-    'commit',
-    `commit message: "${intent.commitMessage}"`,
-    // applyDiffToWorktree (and, if enabled, the changelog step above) left
-    // everything staged; without this commit the push would carry no
-    // changes and the MR would be empty.
-    () => commit(worktreePath, intent.commitMessage),
-  );
-
-  const mr = await openMergeRequest(forge, worktreePath, state.branch, targetBranch, intent, config.agent, checks, config.autoMergeOnGreen, config.mergeMethod);
-  recordMrOnState(state, mr);
-  recordEvent(repoRoot, state, `Opened MR/PR ${mr.webUrl}`);
-  return mr;
+  state.failedStage = undefined;
 }
 
 /**
- * Follow-up counterpart of commitAndOpenMr: commit this run's fix and add it
- * to the MR/PR that already exists for the branch the caller is on (the
- * "reviewer left a comment, I fixed it, run pipeline-worker again" case).
- * Nothing new is opened — the commit lands on the same branch and the
- * file-wise breakdown is appended to the same description.
+ * Everything the stages below need that doesn't change between them. Built
+ * once by `runWorkflow` for a fresh run and by `continueRun` for a resumed
+ * one — the stages themselves cannot tell the two apart, which is what keeps
+ * "resume from where it failed" from being a second implementation of the
+ * workflow.
  */
-async function commitOntoExistingMr(
-  forge: ForgeClient,
-  worktreePath: string,
-  state: RunState,
-  existingMr: MergeRequest,
-  intent: CapturedIntent,
-  config: PipelineWorkerConfig,
-  checks: CheckResult[],
-  repoRoot: string,
-): Promise<MergeRequest> {
-  await runStep('commit', `commit message: "${intent.commitMessage}"`, () => commit(worktreePath, intent.commitMessage));
-
-  await appendToMergeRequest(forge, worktreePath, existingMr, intent, config.agent, checks);
-
-  recordMrOnState(state, existingMr);
-  recordEvent(repoRoot, state, `Added a follow-up commit to existing MR/PR ${existingMr.webUrl}`);
-  return existingMr;
+interface PipelineContext {
+  config: PipelineWorkerConfig;
+  agent: AgentAdapter;
+  forge: ForgeClient;
+  repoRoot: string;
+  worktreePath: string;
+  options: RunWorkflowOptions;
+  targetBranch: string;
+  /** Branch the worktree rebases onto: the MR/PR's own branch for a follow-up, else the target branch. */
+  syncBranch: string;
+  followUpMr?: MergeRequest;
+  /** The diff a fresh run captured up front. Absent on a resumed run, which re-reads it only if it never got applied. */
+  diff?: CapturedDiff;
 }
 
-/** What stages 5-11 produced, whichever of the two paths ran: the state to carry forward, the captured intent, and the MR/PR the run now watches. */
-interface MrStageResult {
-  state: RunState;
-  intent: CapturedIntent;
-  mr: MergeRequest;
+/** Which stage is currently executing, so the failure handler can record where the run died without every stage having to report it. */
+interface StageCursor {
+  stage: string;
+}
+
+/**
+ * A resumed run whose original died before (or during) `apply` re-reads the
+ * caller's working tree: diff text runs to megabytes for a binary-heavy
+ * change, far too much to keep in the state file, and it is still sitting in
+ * repoRoot untouched precisely because a failed run no longer resets it.
+ */
+async function recaptureForResume(ctx: PipelineContext): Promise<CapturedDiff> {
+  const diff = await runStep(
+    'capture',
+    'reading your uncommitted edits again — the run being resumed never finished applying them',
+    () => captureDiff(ctx.repoRoot),
+  );
+  if (diff.diffText.trim().length === 0 && diff.untrackedFiles.length === 0) {
+    throw new Error(
+      'pipeline-worker: your working tree is clean, so there is no diff left to apply — the run being resumed never got past `apply`. Start a fresh `pipeline-worker run` instead.',
+    );
+  }
+  await runStep('worktree', 'discarding the partial apply left behind in the worktree', () => resetWorktree(ctx.worktreePath));
+  return diff;
+}
+
+/** Stages 3-4, or a skip announcement when the preserved worktree already holds the applied diff. */
+async function ensureAppliedDiff(ctx: PipelineContext, state: RunState, cursor: StageCursor): Promise<void> {
+  if (phaseReached(state.phase, 'apply')) {
+    skipStep('capture', 'the diff is already in the preserved worktree');
+    skipStep('worktree', `reusing ${state.worktreePath}`);
+    skipStep('sync', 'the run being resumed already rebased onto the target branch');
+    skipStep('apply', 'the run being resumed already replayed the diff');
+    return;
+  }
+  cursor.stage = 'apply';
+  const diff = ctx.diff ?? (await recaptureForResume(ctx));
+  await applyCapturedDiff(ctx.agent, ctx.repoRoot, state, ctx.worktreePath, ctx.syncBranch, diff.diffText, diff.untrackedFiles);
+  state.phase = 'apply';
+  state.changedFiles = diff.changedFiles;
+  state.untrackedFiles = diff.untrackedFiles;
+  state.failedStage = undefined;
+  recordEvent(ctx.repoRoot, state, `Applied the captured diff into ${ctx.worktreePath}`);
+}
+
+/** Stage 7, or the stored verdicts when the run being resumed already passed them. */
+async function ensureChecks(ctx: PipelineContext, state: RunState, cursor: StageCursor): Promise<CheckResult[] | null> {
+  if (phaseReached(state.phase, 'checks')) {
+    skipStep('checks', 'already passed in the run being resumed');
+    return state.checks ?? [];
+  }
+  cursor.stage = 'checks';
+  return runAndReportChecks(
+    ctx.config,
+    ctx.worktreePath,
+    state,
+    ctx.repoRoot,
+    `worktree kept at ${state.worktreePath} — fix it there, then ${resumeHint(state)}`,
+  );
+}
+
+/** Stages 5-6, or the intent the run being resumed already paid the agent for. */
+async function ensureIntent(ctx: PipelineContext, state: RunState, cursor: StageCursor): Promise<CapturedIntent> {
+  if (phaseReached(state.phase, 'intent') && state.intent) {
+    skipStep('intent', 'reusing the intent captured by the run being resumed');
+    skipStep('branch', `already on ${state.branch}`);
+    setRunHeader({ title: state.branch });
+    return state.intent;
+  }
+  cursor.stage = 'intent';
+  const changedFiles = state.changedFiles ?? [];
+  const untrackedFiles = state.untrackedFiles ?? [];
+  const previousBranch = state.branch;
+
+  let intent: CapturedIntent;
+  let intentTokens: number | undefined;
+  if (ctx.followUpMr) {
+    ({ intent, intentTokens } = await captureRunIntent(ctx.agent, ctx.config, ctx.worktreePath, changedFiles, untrackedFiles));
+    skipStep('branch', `this commit belongs on ${ctx.followUpMr.sourceBranch}, the branch of the open MR/PR — no new branch`);
+    setRunHeader({ title: ctx.followUpMr.sourceBranch });
+    state.branch = ctx.followUpMr.sourceBranch;
+  } else {
+    const captured = await captureIntentAndBranch(ctx.agent, ctx.config, ctx.options, ctx.worktreePath, changedFiles, untrackedFiles);
+    intent = captured.intent;
+    intentTokens = captured.intentTokens;
+    state.branch = captured.actualBranchName;
+  }
+
+  state.intent = intent;
+  state.phase = 'intent';
+  state.failedStage = undefined;
+  const headline = ctx.followUpMr ? `Captured intent for a follow-up commit on ${state.branch}` : `Captured intent; renamed to feature branch ${state.branch}`;
+  recordEvent(ctx.repoRoot, state, headline, 'info', intentTokens);
+  // State is keyed by branch, so the rename above wrote a second file; drop
+  // the temp-branch one rather than leave `sessions`/`resume` a stale entry
+  // pointing at a worktree that has since moved on.
+  if (state.branch !== previousBranch) deleteRunState(ctx.repoRoot, previousBranch);
+  return intent;
+}
+
+/** Stages 8-9, or a skip announcement when the run being resumed already committed. */
+async function ensureCommit(ctx: PipelineContext, state: RunState, intent: CapturedIntent, cursor: StageCursor): Promise<void> {
+  if (phaseReached(state.phase, 'commit')) {
+    skipStep('changelog', 'already written by the run being resumed');
+    skipStep('commit', 'the run being resumed already committed this change');
+    return;
+  }
+  cursor.stage = 'commit';
+  await maybeUpdateChangelog(ctx.config, ctx.worktreePath, intent);
+  await runStep('commit', `commit message: "${intent.commitMessage}"`, async () => {
+    // applyDiffToWorktree (and, if enabled, the changelog step) already left
+    // everything staged; staging again costs nothing and picks up whatever a
+    // resumed run's user fixed by hand in the worktree. Without the commit
+    // the push would carry no changes and the MR would be empty.
+    await stageAll(ctx.worktreePath);
+    await commit(ctx.worktreePath, intent.commitMessage);
+  });
+  state.phase = 'commit';
+  state.failedStage = undefined;
+  recordEvent(ctx.repoRoot, state, `Committed "${intent.commitMessage}"`);
+}
+
+/**
+ * Stages 10-11: push and either open a new MR/PR or append this commit to the
+ * one already open for the branch (the "reviewer left a comment, I fixed it,
+ * ran pipeline-worker again" case — nothing new is opened, the file-wise
+ * breakdown is appended to the same description).
+ */
+async function ensureMergeRequest(
+  ctx: PipelineContext,
+  state: RunState,
+  intent: CapturedIntent,
+  checks: CheckResult[],
+  cursor: StageCursor,
+): Promise<MergeRequest> {
+  cursor.stage = 'mr';
+  if (ctx.followUpMr) {
+    await appendToMergeRequest(ctx.forge, ctx.worktreePath, ctx.followUpMr, intent, ctx.config.agent, checks);
+    recordMrOnState(state, ctx.followUpMr);
+    recordEvent(ctx.repoRoot, state, `Added a follow-up commit to existing MR/PR ${ctx.followUpMr.webUrl}`);
+    return ctx.followUpMr;
+  }
+  const mr = await openMergeRequest(
+    ctx.forge,
+    ctx.worktreePath,
+    state.branch,
+    ctx.targetBranch,
+    intent,
+    ctx.config.agent,
+    checks,
+    ctx.config.autoMergeOnGreen,
+    ctx.config.mergeMethod,
+  );
+  recordMrOnState(state, mr);
+  recordEvent(ctx.repoRoot, state, `Opened MR/PR ${mr.webUrl}`);
+  return mr;
 }
 
 /**
@@ -353,56 +502,6 @@ export async function findFollowUpMr(forge: ForgeClient, repoRoot: string): Prom
   const branch = await currentBranch(repoRoot);
   if (branch === 'HEAD') return undefined;
   return forge.findExistingMr(branch);
-}
-
-/** Stages 5-11, follow-up path: capture intent, commit, and add both to the MR/PR already open for this branch. */
-async function runFollowUpMrStage(
-  agent: AgentAdapter,
-  config: PipelineWorkerConfig,
-  forge: ForgeClient,
-  worktreePath: string,
-  state: RunState,
-  repoRoot: string,
-  changedFiles: string[],
-  untrackedFiles: string[],
-  checks: CheckResult[],
-  followUpMr: MergeRequest,
-): Promise<MrStageResult> {
-  const { intent, intentTokens } = await captureRunIntent(agent, config, worktreePath, changedFiles, untrackedFiles);
-
-  skipStep('branch', `this commit belongs on ${followUpMr.sourceBranch}, the branch of the open MR/PR — no new branch`);
-  setRunHeader({ title: followUpMr.sourceBranch });
-
-  const nextState: RunState = { ...state, branch: followUpMr.sourceBranch, phase: 'intent' };
-  recordEvent(repoRoot, nextState, `Captured intent for a follow-up commit on ${followUpMr.sourceBranch}`, 'info', intentTokens);
-
-  await maybeUpdateChangelog(config, worktreePath, intent);
-  const mr = await commitOntoExistingMr(forge, worktreePath, nextState, followUpMr, intent, config, checks, repoRoot);
-  return { state: nextState, intent, mr };
-}
-
-/** Stages 5-11, normal path: capture intent, move onto a fresh feature branch, commit, and open the MR/PR. */
-async function runFreshMrStage(
-  agent: AgentAdapter,
-  config: PipelineWorkerConfig,
-  options: RunWorkflowOptions,
-  forge: ForgeClient,
-  worktreePath: string,
-  state: RunState,
-  repoRoot: string,
-  changedFiles: string[],
-  untrackedFiles: string[],
-  checks: CheckResult[],
-  targetBranch: string,
-): Promise<MrStageResult> {
-  const { intent, intentTokens, actualBranchName } = await captureIntentAndBranch(agent, config, options, worktreePath, changedFiles, untrackedFiles);
-
-  const nextState: RunState = { ...state, branch: actualBranchName, phase: 'intent' };
-  recordEvent(repoRoot, nextState, `Captured intent; renamed to feature branch ${actualBranchName}`, 'info', intentTokens);
-
-  await maybeUpdateChangelog(config, worktreePath, intent);
-  const mr = await commitAndOpenMr(forge, worktreePath, nextState, targetBranch, intent, config, checks, repoRoot);
-  return { state: nextState, intent, mr };
 }
 
 /**
@@ -494,18 +593,15 @@ export async function maybeSwitchToFeatureBranch(
 // fallow-ignore-next-line complexity
 async function finalizeRun(
   finalPhase: RunPhase,
-  forge: ForgeClient,
-  config: PipelineWorkerConfig,
+  ctx: PipelineContext,
   mr: MergeRequest,
   state: RunState,
-  repoRoot: string,
-  untrackedFiles: string[],
-  worktreePath: string,
-  targetBranch: string,
   intent: CapturedIntent,
-  isFollowUp: boolean,
   cleanup: () => Promise<void>,
 ): Promise<void> {
+  const { config, forge, repoRoot, worktreePath, targetBranch } = ctx;
+  const untrackedFiles = state.untrackedFiles ?? [];
+  const isFollowUp = ctx.followUpMr !== undefined;
   if (finalPhase === 'done') {
     if (isFollowUp) {
       // Squashing here would rewrite an MR/PR a human is already reviewing,
@@ -546,6 +642,7 @@ async function finalizeRun(
     const detail = state.pipelineId !== undefined ? `MR ${mr.webUrl} passed CI` : `MR ${mr.webUrl} opened — no CI pipeline found, nothing to watch`;
     endRun('done', detail);
   } else if (finalPhase === 'escalated') {
+    note(`worktree kept at ${worktreePath} — ${resumeHint(state)}`);
     endRun('escalated', `see ${mr.webUrl} for what was tried and why`);
     process.exitCode = 1;
   }
@@ -553,18 +650,119 @@ async function finalizeRun(
 
 /**
  * Settles a run stopped from the TUI's dashboard. Applies exactly the policy
- * the SIGINT handler below applies — a phase that `resume` can pick up keeps
- * its worktree, anything earlier has it removed — minus the process.exit,
- * since the TUI must survive and paint the settled dashboard. `markDone`
- * satisfies the caller's idempotent cleanup without running it, so the
- * outer `finally { cleanup() }` becomes a no-op for a preserved worktree and
- * still removes it otherwise. Exported for unit testing.
+ * the SIGINT handler below applies — the worktree is kept whatever phase the
+ * run reached, because every phase is now a stage `resume` can re-enter —
+ * minus the process.exit, since the TUI must survive and paint the settled
+ * dashboard. `markDone` satisfies the caller's idempotent cleanup without
+ * running it, so nothing removes the worktree on the way out. Exported for
+ * unit testing.
  */
 export function settleCancelledRun(repoRoot: string, state: RunState, markDone: () => void): void {
-  const preserve = shouldPreserveWorktreeOnInterrupt(state.phase);
+  state.failedStage ??= state.phase;
   recordEvent(repoRoot, state, 'Run cancelled from the TUI', 'error');
-  endRun('interrupted', preserve ? `resume with: pipeline-worker resume --branch ${state.branch}` : undefined);
-  if (preserve) markDone();
+  endRun('interrupted', resumeHint(state));
+  markDone();
+}
+
+/**
+ * Runs every stage from wherever `state.phase` says the pipeline is, through
+ * the CI watch and the finalize tail. Each stage records the phase it
+ * completed before the next one starts, which is what lets a failed run be
+ * picked up at exactly the stage that failed rather than from the top.
+ */
+// fallow-ignore-next-line complexity
+async function runPipeline(
+  ctx: PipelineContext,
+  state: RunState,
+  cursor: StageCursor,
+  cleanup: () => Promise<void>,
+  releaseLock: () => void,
+): Promise<void> {
+  await ensureAppliedDiff(ctx, state, cursor);
+
+  const checks = await ensureChecks(ctx, state, cursor);
+  if (!checks) return; // check failure is already narrated, and the worktree is kept for a resume
+
+  const intent = await ensureIntent(ctx, state, cursor);
+  await ensureCommit(ctx, state, intent, cursor);
+  const mr = await ensureMergeRequest(ctx, state, intent, checks, cursor);
+
+  // Line-anchored review of what this run is about to ask CI (and a human) to
+  // accept. A follow-up run is scoped to the files it just touched: the rest
+  // of the branch has already been through review.
+  cursor.stage = 'review';
+  const posted = await maybeReviewMergeRequest(
+    ctx.forge,
+    ctx.config,
+    ctx.agent,
+    ctx.worktreePath,
+    ctx.targetBranch,
+    mr.iid,
+    ctx.followUpMr ? state.changedFiles : undefined,
+  );
+  if (posted > 0) recordEvent(ctx.repoRoot, state, `Posted ${posted} review comment(s) on MR/PR #${mr.iid}`);
+
+  // This runs before stage 12 (watching the pipeline) even though it's
+  // numbered 13 — it's the same stage 13 that would otherwise run after
+  // stage 12 finishes, just moved earlier by config.cleanupEarly.
+  cursor.stage = 'cleanup';
+  await maybeCleanupEarly(ctx.config, ctx.repoRoot, state.untrackedFiles ?? [], state.branch, releaseLock);
+
+  cursor.stage = 'ci-watch';
+  await watchPipeline(ctx.forge, ctx.config, ctx.agent, ctx.worktreePath, state.branch, ctx.targetBranch, mr.iid, state, ctx.repoRoot);
+
+  // watchPipeline mutates state.phase in place; go through a function
+  // boundary so TS uses the declared RunPhase return type instead of the
+  // 'mr' literal it narrowed state.phase to just before the call.
+  const finalPhase = readPhase(state);
+  cursor.stage = 'finalize';
+  await finalizeRun(finalPhase, ctx, mr, state, intent, cleanup);
+
+  // The one exit that removes the worktree: the run finished. Anything else
+  // (a failure, an escalation, an interrupt) leaves it on disk so `resume`
+  // can re-enter the stage that stopped it.
+  if (finalPhase === 'done') await cleanup();
+}
+
+/**
+ * Wraps runPipeline in the worktree/lock lifecycle both entry points share:
+ * signal handling, the cancel path, and the failure path that records which
+ * stage died and tells the user how to pick it up.
+ */
+async function drivePipeline(ctx: PipelineContext, state: RunState, releaseLock: () => void): Promise<void> {
+  const { cleanup, markDone } = makeIdempotentCleanup(() => removeWorktree(ctx.repoRoot, ctx.worktreePath));
+  const cursor: StageCursor = { stage: state.phase };
+
+  registerExitSignals((exitCode) => {
+    // Settle the run display first so the terminal is left readable (and,
+    // under the live TTY renderer, the cursor is restored).
+    endRun('interrupted', resumeHint(state));
+    // The worktree always survives an interrupt now: `resume` re-enters at
+    // whatever stage the run had reached. process.exit() below terminates
+    // immediately without unwinding the suspended call stack, so the outer
+    // `finally { releaseLock() }` never runs — release it explicitly here.
+    markDone();
+    releaseLock();
+    process.exit(exitCode);
+  });
+
+  try {
+    await runPipeline(ctx, state, cursor, cleanup, releaseLock);
+  } catch (error) {
+    // A cancel is a deliberate stop, not a failure: settle the display and
+    // return normally so the TUI stays up (the CLI's SIGINT path exits the
+    // process instead).
+    if (error instanceof RunCancelledError) {
+      settleCancelledRun(ctx.repoRoot, state, markDone);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    state.failedStage = cursor.stage;
+    recordEvent(ctx.repoRoot, state, `Run failed in the ${cursor.stage} stage: ${message}`, 'error');
+    note(`worktree kept at ${ctx.worktreePath} — ${resumeHint(state)}`);
+    endRun('failed', message);
+    throw error;
+  }
 }
 
 // fallow-ignore-next-line complexity
@@ -590,9 +788,6 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     // MR/PR already decided what it merges into.
     const followUpMr = await findFollowUpMr(forge, repoRoot);
     const targetBranch = followUpMr ? followUpMr.targetBranch : await resolveTargetBranch(repoRoot, options.target);
-    // A follow-up run rebases onto the MR/PR's own branch, so a commit pushed
-    // there since (a reviewer's fixup, another run) is never clobbered.
-    const syncBranch = followUpMr ? followUpMr.sourceBranch : targetBranch;
     beginRun(freshRunSkeleton(targetBranch, config.agent), { title: basename(repoRoot) });
     if (followUpMr) {
       note(`${followUpMr.sourceBranch} already has an open MR/PR (${followUpMr.webUrl}) — adding this change to it instead of opening a new one`);
@@ -603,7 +798,6 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
       endRun('done', 'no changes to process — your working tree is clean');
       return;
     }
-    const { diffText, changedFiles, untrackedFiles } = diff;
 
     const tempBranch = generateTempBranchName();
     const worktreePath = await runStep(
@@ -615,85 +809,83 @@ export async function runWorkflow(repoRoot: string, options: RunWorkflowOptions 
     // worktree identifier (the mock's 'worktree a91f').
     setRunHeader({ worktreeShortId: tempBranch.slice(-4) });
 
-    let state: RunState = { branch: tempBranch, targetBranch, worktreePath, ciFixAttempt: 0, conflictAttempt: 0, phase: 'diff' };
+    const state: RunState = {
+      branch: tempBranch,
+      targetBranch,
+      worktreePath,
+      ciFixAttempt: 0,
+      conflictAttempt: 0,
+      phase: 'diff',
+      changedFiles: diff.changedFiles,
+      untrackedFiles: diff.untrackedFiles,
+      followUpMrIid: followUpMr?.iid,
+    };
     recordEvent(repoRoot, state, `Created worktree at ${worktreePath} (temp branch ${tempBranch})`);
 
-    const { cleanup, markDone } = makeIdempotentCleanup(() => removeWorktree(repoRoot, worktreePath));
-    registerExitSignals((exitCode) => {
-      // Settle the run display first so the terminal is left readable (and,
-      // under the live TTY renderer, the cursor is restored).
-      endRun('interrupted', shouldPreserveWorktreeOnInterrupt(state.phase) ? `resume with: pipeline-worker resume --branch ${state.branch}` : undefined);
-      // process.exit() below terminates immediately without unwinding the
-      // suspended runWorkflow() call stack, so the outer `finally { releaseLock() }`
-      // never runs — release it explicitly here first in both branches.
-      if (shouldPreserveWorktreeOnInterrupt(state.phase)) {
-        // MR is already open — leave the worktree so `pipeline-worker resume`
-        // can keep pushing CI-fix/conflict-resolution commits to it instead
-        // of finding a dead path.
-        markDone();
-        releaseLock();
-        process.exit(exitCode);
-        return;
-      }
-      void cleanup().then(() => {
-        releaseLock();
-        process.exit(exitCode);
-      });
-    });
-
-    try {
-      await applyCapturedDiff(agent, repoRoot, state, worktreePath, syncBranch, diffText, untrackedFiles);
-
-      const checks = await runAndReportChecks(config, worktreePath, state, repoRoot);
-      if (!checks) return;
-
-      const staged = followUpMr
-        ? await runFollowUpMrStage(agent, config, forge, worktreePath, state, repoRoot, changedFiles, untrackedFiles, checks, followUpMr)
-        : await runFreshMrStage(agent, config, options, forge, worktreePath, state, repoRoot, changedFiles, untrackedFiles, checks, targetBranch);
-      state = staged.state;
-      const { intent, mr } = staged;
-
-      // Line-anchored review of what this run is about to ask CI (and a
-      // human) to accept. A follow-up run is scoped to the files it just
-      // touched: the rest of the branch has already been through review.
-      const posted = await maybeReviewMergeRequest(
-        forge,
+    await drivePipeline(
+      {
         config,
         agent,
+        forge,
+        repoRoot,
         worktreePath,
+        options,
         targetBranch,
-        mr.iid,
-        followUpMr ? changedFiles : undefined,
-      );
-      if (posted > 0) recordEvent(repoRoot, state, `Posted ${posted} review comment(s) on MR/PR #${mr.iid}`);
+        // A follow-up run rebases onto the MR/PR's own branch, so a commit
+        // pushed there since (a reviewer's fixup, another run) is never clobbered.
+        syncBranch: followUpMr ? followUpMr.sourceBranch : targetBranch,
+        followUpMr,
+        diff,
+      },
+      state,
+      releaseLock,
+    );
+  } finally {
+    releaseLock();
+  }
+}
 
-      // This runs before stage 12 (watching the pipeline) even though it's
-      // numbered 13 — it's the same stage 13 that would otherwise run after
-      // stage 12 finishes, just moved earlier by config.cleanupEarly.
-      await maybeCleanupEarly(config, repoRoot, untrackedFiles, state.branch, releaseLock);
+/**
+ * `pipeline-worker resume` for a run that failed before its MR/PR existed:
+ * re-enters the same pipeline with the stored state, so every stage the run
+ * already completed is skipped and the one it died in runs again. The
+ * worktree is the failed run's own — kept precisely for this — so the applied
+ * diff, the rebase onto the target branch, and any fix made by hand inside it
+ * are all still there.
+ */
+export async function continueRun(repoRoot: string, state: RunState, options: RunWorkflowOptions = {}): Promise<RunPhase> {
+  const config = loadConfig(repoRoot);
+  setCompletionSound(config.completionSound);
+  setPlainOutput(config.plainOutput);
+  const releaseLock = acquireLock(repoRoot);
+  try {
+    const forge = createForge(config);
+    const agent = selectAgent(config);
+    // Re-read the MR/PR a follow-up run was adding to: only its iid is
+    // persisted, and the stages need the whole record (source branch, url).
+    const followUpMr = state.followUpMrIid !== undefined ? await forge.findExistingMr(state.branch) : undefined;
 
-      await watchPipeline(forge, config, agent, worktreePath, state.branch, targetBranch, mr.iid, state, repoRoot);
+    beginRun(freshRunSkeleton(state.targetBranch, config.agent), { title: state.branch, worktreeShortId: state.worktreePath.slice(-4) });
+    if (state.totalTokens !== undefined) seedRunTokens(state.totalTokens);
+    note(`picking up the ${state.failedStage ?? state.phase} stage of the run in ${state.worktreePath}`);
 
-      // watchPipeline mutates state.phase in place; go through a function
-      // boundary so TS uses the declared RunPhase return type instead of the
-      // 'mr' literal it narrowed state.phase to just before the call.
-      const finalPhase = readPhase(state);
-      await finalizeRun(finalPhase, forge, config, mr, state, repoRoot, untrackedFiles, worktreePath, targetBranch, intent, followUpMr !== undefined, cleanup);
-    } catch (error) {
-      // A cancel is a deliberate stop, not a failure: settle the display,
-      // let the finally below apply the worktree policy, and return normally
-      // so the TUI stays up (the CLI's SIGINT path exits the process instead).
-      if (error instanceof RunCancelledError) {
-        settleCancelledRun(repoRoot, state, markDone);
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      recordEvent(repoRoot, state, `Run failed: ${message}`, 'error');
-      endRun('failed', message);
-      throw error;
-    } finally {
-      await cleanup();
-    }
+    await drivePipeline(
+      {
+        config,
+        agent,
+        forge,
+        repoRoot,
+        worktreePath: state.worktreePath,
+        options,
+        targetBranch: state.targetBranch,
+        syncBranch: followUpMr ? followUpMr.sourceBranch : state.targetBranch,
+        followUpMr,
+        diff: undefined,
+      },
+      state,
+      releaseLock,
+    );
+    return state.phase;
   } finally {
     releaseLock();
   }

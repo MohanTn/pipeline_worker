@@ -84,10 +84,18 @@ export function insertChangelogEntry(content: string, category: string, entry: s
   return insertUnderCategory(lines, unreleasedIdx, sectionEnd, category, entry).join('\n');
 }
 
-/** Writes the updated CHANGELOG.md into the worktree; callers stage it afterwards so it rides along in the same commit as the rest of the change. */
+/**
+ * Writes the updated CHANGELOG.md into the worktree; callers stage it
+ * afterwards so it rides along in the same commit as the rest of the change.
+ *
+ * A no-op when this exact bullet is already there: a run resumed after a
+ * failed commit re-enters this stage, and a second identical bullet is a
+ * defect, not an update.
+ */
 export function updateChangelog(worktreePath: string, intent: CapturedIntent): void {
   const path = join(worktreePath, CHANGELOG_FILENAME);
   const existing = existsSync(path) ? readFileSync(path, 'utf-8') : NEW_CHANGELOG_HEADER;
+  if (existing.split('\n').some((line) => line.trim() === `- ${intent.summary}`)) return;
   const category = CATEGORY_BY_CHANGE_TYPE[intent.changeType];
   writeFileSync(path, insertChangelogEntry(existing, category, intent.summary));
 }

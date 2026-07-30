@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { shouldPreserveWorktreeOnInterrupt, resolveTargetBranch, findFollowUpMr, recordMrOnState } from '../src/workflow/orchestrate.js';
+import { phaseReached, resumeHint, resolveTargetBranch, findFollowUpMr, recordMrOnState } from '../src/workflow/orchestrate.js';
 import type { ForgeClient } from '../src/forge/types.js';
 import type { MergeRequest, RunState } from '../src/types.js';
 
@@ -19,20 +19,37 @@ test('recordMrOnState stores the forge web url next to the iid, so sessions can 
   assert.equal(state.phase, 'mr');
 });
 
-test('shouldPreserveWorktreeOnInterrupt keeps the worktree once an MR/PR is open (resume needs it)', () => {
-  assert.equal(shouldPreserveWorktreeOnInterrupt('mr'), true);
-  assert.equal(shouldPreserveWorktreeOnInterrupt('watch'), true);
+test('recordMrOnState clears the failed stage, so a state file that failed earlier no longer reads as stuck', () => {
+  const state: RunState = { branch: 'feat/x', targetBranch: 'main', worktreePath: '/tmp/wt', ciFixAttempt: 0, conflictAttempt: 0, phase: 'commit', failedStage: 'mr' };
+  recordMrOnState(state, { iid: 3, webUrl: 'https://example.test/mr/3', sourceBranch: 'feat/x', targetBranch: 'main', state: 'open' });
+  assert.equal(state.failedStage, undefined);
 });
 
-test('shouldPreserveWorktreeOnInterrupt removes the worktree before any MR/PR exists', () => {
-  assert.equal(shouldPreserveWorktreeOnInterrupt('diff'), false);
-  assert.equal(shouldPreserveWorktreeOnInterrupt('intent'), false);
-  assert.equal(shouldPreserveWorktreeOnInterrupt('checks'), false);
+test('phaseReached says a stage already ran when the stored phase is at or past it', () => {
+  assert.equal(phaseReached('commit', 'checks'), true);
+  assert.equal(phaseReached('commit', 'intent'), true);
+  assert.equal(phaseReached('commit', 'commit'), true);
 });
 
-test('shouldPreserveWorktreeOnInterrupt removes the worktree once the run reached a terminal phase', () => {
-  assert.equal(shouldPreserveWorktreeOnInterrupt('done'), false);
-  assert.equal(shouldPreserveWorktreeOnInterrupt('escalated'), false);
+test('phaseReached says a stage still has to run when the stored phase is earlier — the resume entry point', () => {
+  // A run that died committing stored phase 'intent': commit re-runs, everything before it does not.
+  assert.equal(phaseReached('intent', 'commit'), false);
+  assert.equal(phaseReached('intent', 'apply'), true);
+  assert.equal(phaseReached('intent', 'checks'), true);
+});
+
+test('phaseReached treats both terminal phases as past every stage', () => {
+  for (const target of ['apply', 'checks', 'intent', 'commit', 'mr'] as const) {
+    assert.equal(phaseReached('done', target), true, `done vs ${target}`);
+    assert.equal(phaseReached('escalated', target), true, `escalated vs ${target}`);
+  }
+});
+
+test('resumeHint names the branch the user has to pass back', () => {
+  assert.equal(
+    resumeHint({ branch: 'feat/login', targetBranch: 'main', worktreePath: '/tmp/wt', ciFixAttempt: 0, conflictAttempt: 0, phase: 'commit' }),
+    'resume with: pipeline-worker resume --branch feat/login',
+  );
 });
 
 /** A repo on `branch`, pushed to a bare origin whose default branch is `defaultBranch`. */

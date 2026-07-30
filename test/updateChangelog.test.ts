@@ -78,6 +78,18 @@ test('updateChangelog maps changeType to the Keep a Changelog category (feature/
   });
 });
 
+test('updateChangelog is a no-op when the bullet is already there, so a resumed run does not duplicate it', () => {
+  withTempDir((dir) => {
+    const intent = makeIntent({ changeType: 'feature', summary: 'Add login' });
+    updateChangelog(dir, intent);
+    updateChangelog(dir, intent);
+    const bullets = readFileSync(join(dir, 'CHANGELOG.md'), 'utf-8')
+      .split('\n')
+      .filter((line) => line.trim() === '- Add login');
+    assert.equal(bullets.length, 1);
+  });
+});
+
 test('updateChangelog inserts into an existing CHANGELOG.md instead of overwriting it', () => {
   withTempDir((dir) => {
     writeFileSync(join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Prior entry\n');
