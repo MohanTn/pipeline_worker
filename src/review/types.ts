@@ -20,6 +20,13 @@ export interface DiffChunk {
    * rejected by the forge after the agent already paid to produce it.
    */
   commentableLines: number[];
+  /**
+   * Each commentable line's own text (the added line without its `+`), keyed by
+   * the same new-file number. The anchor check in findings.ts compares it with
+   * the line the agent quoted, which is what turns "a number that is legal
+   * somewhere in this file" into "the line this finding is actually about".
+   */
+  commentableText: Record<number, string>;
 }
 
 export interface ReviewFinding {
@@ -29,4 +36,11 @@ export interface ReviewFinding {
   severity: ReviewSeverity;
   /** Markdown body, possibly carrying a ```suggestion block. */
   comment: string;
+  /**
+   * The flagged added line, quoted verbatim by the agent. Optional: an agent
+   * that omits it is gated exactly as before, but when it is present findings.ts
+   * trusts the code over the number and re-anchors the comment to the line that
+   * really holds it.
+   */
+  code?: string;
 }

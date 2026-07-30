@@ -95,7 +95,14 @@ export interface PipelineWorkerConfig {
    * a version bump switches on. Best-effort — never fails the run.
    */
   review: boolean;
-  /** Model for the review turns; '' uses the adapter's default (deliberately stronger than intentModel — finding real bugs is not the cheap-model job). */
+  /**
+   * Model for the review turns, always passed to the agent CLI as-is. Defaults
+   * to a named model (`sonnet` on claude/copilot) rather than to '': an empty
+   * value sends no model flag and lets the CLI pick its own newest default,
+   * which an OAuth/subscription sign-in may have no access to. Deliberately
+   * stronger than intentModel — finding real bugs is not the cheap-model job.
+   * Set it to '' to hand the choice back to the agent CLI.
+   */
   reviewModel: string;
   /** Findings below this severity are never posted — the anti-alert-fatigue gate. */
   reviewMinSeverity: ReviewSeverity;

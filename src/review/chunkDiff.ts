@@ -125,11 +125,15 @@ function packRows(path: string, rows: Row[], maxChars: number): DiffChunk[] {
 
   const flush = (): void => {
     if (!current.some((row) => !row.isHunkHeader)) return; // header-only remainder carries no code to review
+    const commentable = current.filter((row) => row.commentable);
     chunks.push({
       path,
       language,
       body: current.map(renderRow).join('\n'),
-      commentableLines: current.filter((row) => row.commentable).map((row) => row.line as number),
+      commentableLines: commentable.map((row) => row.line as number),
+      // `slice(1)` drops the diff's own '+' marker: what is stored is the line
+      // as it reads in the new file, which is what the agent quotes back.
+      commentableText: Object.fromEntries(commentable.map((row) => [row.line as number, row.text.slice(1)])),
     });
   };
 

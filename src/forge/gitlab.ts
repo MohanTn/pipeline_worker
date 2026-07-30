@@ -138,6 +138,34 @@ async function apiWrite(exec: GlabExecutor, auth: GlabAuth, label: string, metho
   return stdout ? JSON.parse(stdout) : undefined;
 }
 
+/**
+ * The `position[...]` half of a diff-comment POST, as query parameters.
+ *
+ * It cannot go through apiWrite's fields: `glab api --field 'position[new_line]=42'`
+ * keeps the bracketed key *literal* in the JSON body it builds
+ * (`{"position[new_line]": 42}`), which is not the nested `position` hash the
+ * API declares — GitLab ignores it and files the comment as an ordinary
+ * MR-level thread instead of on the line. Bracketed *query* parameters are
+ * parsed into that nested hash, and query parameters are merged with the JSON
+ * body, so the position rides in the URL while the body stays a field.
+ */
+function positionQuery(refs: { base_sha: string; start_sha: string; head_sha: string }, comment: InlineComment): string {
+  const params: Record<string, string | number> = {
+    'position[position_type]': 'text',
+    'position[base_sha]': refs.base_sha,
+    'position[start_sha]': refs.start_sha,
+    'position[head_sha]': refs.head_sha,
+    'position[new_path]': comment.path,
+    // old_path is required even for an added line; for a file that was not
+    // renamed it is simply the same path.
+    'position[old_path]': comment.path,
+    'position[new_line]': comment.line,
+  };
+  return Object.entries(params)
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&');
+}
+
 function toMergeRequest(raw: any): MergeRequest {
   return {
     iid: raw.iid,
@@ -220,26 +248,29 @@ export function createGitlabForge(config: PipelineWorkerConfig, executor?: GlabE
       // than guessed from the local worktree — a stale triple is rejected.
       const mr = await apiGet(exec, auth, `GitLab API GET merge_requests/${mrIid}`, projectPath(auth, `/merge_requests/${mrIid}`));
       const refs = mr.diff_refs ?? {};
+      if (!refs.base_sha || !refs.start_sha || !refs.head_sha) {
+        throw new Error(`GitLab MR !${mrIid} reports no diff_refs, so ${comment.path}:${comment.line} has no position to anchor to.`);
+      }
       const raw = await apiWrite(
         exec,
         auth,
         `GitLab API POST merge_requests/${mrIid}/discussions`,
         'POST',
-        projectPath(auth, `/merge_requests/${mrIid}/discussions`),
-        {
-          body: comment.body,
-          'position[position_type]': 'text',
-          'position[base_sha]': refs.base_sha,
-          'position[start_sha]': refs.start_sha,
-          'position[head_sha]': refs.head_sha,
-          'position[new_path]': comment.path,
-          // old_path is required even for an added line; for a file that was
-          // not renamed it is simply the same path.
-          'position[old_path]': comment.path,
-          'position[new_line]': comment.line,
-        },
+        `${projectPath(auth, `/merge_requests/${mrIid}/discussions`)}?${positionQuery(refs, comment)}`,
+        // Only the body stays a field: it is arbitrarily long (a suggestion
+        // block can run to kilobytes) and belongs nowhere near a URL.
+        { body: comment.body },
       );
-      return { id: raw.id };
+      // GitLab accepts a discussion whose position it did not understand and
+      // silently files it as an ordinary MR-level thread — the exact failure
+      // this whole feature exists to avoid — so an unanchored note is reported
+      // as a rejection rather than counted as a posted comment.
+      const posted = Array.isArray(raw.notes) ? raw.notes[0] : undefined;
+      if (!posted?.position) {
+        throw new Error(`GitLab created the comment without a diff position, so it would not appear on ${comment.path}:${comment.line}.`);
+      }
+      // The discussion's own id is a hash string; the note id is the numeric one.
+      return { id: posted.id };
     },
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {

@@ -228,6 +228,37 @@ test('loadConfig defaults intentModel to haiku, runLintAndTest to true, plainOut
   });
 });
 
+// An empty reviewModel sends no model flag, leaving the agent CLI to pick its
+// own newest default — which an OAuth/subscription sign-in may not be able to
+// reach, so the review step failed outright until this key was set by hand.
+test('loadConfig names a reviewModel by default, so review never rides on the agent CLI\'s own default', () => {
+  withTempDir((dir) => {
+    assert.equal(loadConfig(dir).reviewModel, 'sonnet');
+    writeSettings({ agent: 'copilot' });
+    assert.equal(loadConfig(dir).reviewModel, 'sonnet', 'copilot translates the alias, so it gets the same default');
+  });
+});
+
+// pi and little-coder take `provider/id`, so an alias would name a model their
+// runtime has never heard of — they keep the adapter default instead.
+test('loadConfig leaves reviewModel empty for the agents whose CLI takes a provider/id, not an alias', () => {
+  withTempDir((dir) => {
+    for (const agent of ['pi', 'little-coder']) {
+      writeSettings({ agent });
+      assert.equal(loadConfig(dir).reviewModel, '', `expected ${agent} to keep its adapter default`);
+    }
+  });
+});
+
+test('an explicit reviewModel wins, and an explicit "" still means "let the agent CLI pick"', () => {
+  withTempDir((dir) => {
+    writeSettings({ reviewModel: 'opus' });
+    assert.equal(loadConfig(dir).reviewModel, 'opus');
+    writeSettings({ reviewModel: '' });
+    assert.equal(loadConfig(dir).reviewModel, '', 'the documented escape hatch must not fall through to the named default');
+  });
+});
+
 test('"runLintAndTest": false overrides the default', () => {
   withTempDir((dir) => {
     writeSettings({ runLintAndTest: false });
@@ -491,7 +522,7 @@ test('review config defaults to off, MAJOR-only, 10 comments', () => {
   withTempDir((dir) => {
     const config = loadConfig(dir);
     assert.equal(config.review, false); // opt-in: it spends tokens and writes where humans read
-    assert.equal(config.reviewModel, ''); // '' = the adapter's default (stronger) model
+    assert.equal(config.reviewModel, 'sonnet'); // named, so the review turn never inherits the agent CLI's own newest default
     assert.equal(config.reviewMinSeverity, 'MAJOR');
     assert.equal(config.reviewMaxComments, 10);
     assert.equal(config.reviewChunkChars, 200_000);

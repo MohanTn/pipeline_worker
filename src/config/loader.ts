@@ -71,7 +71,13 @@ export const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test
   squashOnMerge: false,
   completionSound: true,
   review: false,
-  reviewModel: '',
+  // Named rather than left empty on purpose: an empty model sends no --model
+  // flag at all, which hands the choice to the agent CLI's own default. That
+  // default now tracks the newest, most expensive model (Fable-class), which an
+  // OAuth/subscription sign-in cannot reach — so the review step failed outright
+  // for anyone who had not set this key. Sonnet is reachable on every tier and
+  // still well clear of intentModel's haiku, which is the point of the setting.
+  reviewModel: 'sonnet',
   reviewMinSeverity: 'MAJOR',
   reviewMaxComments: 10,
   // ~200k chars (~50k tokens) of diff in one turn: enough that a normal MR/PR
@@ -160,6 +166,19 @@ function boolean(name: string, value: unknown, fallback: boolean): boolean {
  */
 function stringOr(value: string | undefined, fallback: string): string {
   return value !== undefined ? value : fallback;
+}
+
+/**
+ * Agents whose CLI understands the bare `haiku`/`sonnet`/`opus` aliases —
+ * claude natively, copilot by translation (see agent/copilot.ts). pi and
+ * little-coder take a `provider/id` instead, so handing them an alias would
+ * name a model their runtime has never heard of.
+ */
+const ALIAS_MODEL_AGENTS: readonly AgentName[] = ['claude', 'copilot'];
+
+/** The reviewModel default for this agent: the named default where an alias means something, the adapter's own default where it does not. */
+function defaultReviewModel(agent: AgentName): string {
+  return ALIAS_MODEL_AGENTS.includes(agent) ? DEFAULT_CONFIG.reviewModel : '';
 }
 
 /** GitLab project ids are either numeric or a 'group/subgroup/project' path; numeric strings are coerced, everything else is kept as-is. */
@@ -318,7 +337,9 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     squashOnMerge,
     completionSound: boolean('completionSound', settings.completionSound, DEFAULT_CONFIG.completionSound),
     review: boolean('review', settings.review, DEFAULT_CONFIG.review),
-    reviewModel: str(settings.reviewModel) || DEFAULT_CONFIG.reviewModel,
+    // stringOr, not `||`: an explicit "" is the documented escape hatch for
+    // "let the agent CLI pick", and must not fall through to the named default.
+    reviewModel: stringOr(str(settings.reviewModel), defaultReviewModel(agent)),
     reviewMinSeverity: pickSeverity(settings.reviewMinSeverity, DEFAULT_CONFIG.reviewMinSeverity),
     reviewMaxComments: positiveNumber(settings.reviewMaxComments, DEFAULT_CONFIG.reviewMaxComments),
     reviewChunkChars: positiveNumber(settings.reviewChunkChars, DEFAULT_CONFIG.reviewChunkChars),
