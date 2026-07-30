@@ -25,6 +25,35 @@ export function formatTokens(tokens: number): string {
   return `${formatCount(tokens)} tok`;
 }
 
+const RELATIVE_UNITS: readonly (readonly [limit: number, seconds: number, suffix: string])[] = [
+  [60, 1, 's'],
+  [3600, 60, 'm'],
+  [86_400, 3600, 'h'],
+  [604_800, 86_400, 'd'],
+  [31_536_000, 604_800, 'w'],
+];
+
+/**
+ * An age, not a date: `4m ago`, `2h ago`, `13d ago`. Session rows are scanned
+ * for "which run is the one I just left", a question an absolute timestamp
+ * makes the reader answer by subtraction — and `toLocaleString()` spends
+ * ~22 locale-dependent columns doing it, enough to push a branch name off an
+ * 80-column terminal. Caps at 7 characters (`52w ago`).
+ */
+export function formatRelative(iso: string | undefined, now: number = Date.now()): string {
+  if (!iso) return 'unknown';
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return 'unknown';
+  const seconds = Math.round((now - then) / 1000);
+  // A state file written by a machine with a fast clock reads as the future;
+  // that is not worth a special vocabulary, so it collapses to the present.
+  if (seconds < 1) return 'now';
+  for (const [limit, divisor, suffix] of RELATIVE_UNITS) {
+    if (seconds < limit) return `${Math.floor(seconds / divisor)}${suffix} ago`;
+  }
+  return `${Math.floor(seconds / 31_536_000)}y ago`;
+}
+
 /**
  * The prompt tokens a turn actually processed fresh: inputTokens minus the
  * cache-read and cache-write shares folded into it. Undefined when the

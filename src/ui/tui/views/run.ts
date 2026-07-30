@@ -11,10 +11,10 @@
 
 import { seg, wrap, type Line } from '../line.js';
 import { moveIndex } from '../list.js';
-import { sectionRow } from '../chrome.js';
+import { sectionRow, selectionRow } from '../chrome.js';
 import { applyKey, createInput, renderInput, type InputState } from '../textInput.js';
 import { runInDashboard } from './runDashboard.js';
-import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
+import { HINT, NONE, hints, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { Key } from '../keys.js';
 import type { Size } from '../screen.js';
 
@@ -61,29 +61,22 @@ export class RunView implements View {
 
   render(inner: Size): RenderedView {
     const body: Line[] = [
-      [seg('Capture your current diff and drive it to a green merge request.', { role: 'overlay1' })],
+      [seg('Capture your current diff and drive it to a green merge request.', { role: 'subtext0' })],
       [],
     ];
     FIELDS.forEach((spec, i) => {
-      const selected = i === this.index;
-      body.push([
-        seg(selected ? ' ❯ ' : '   ', { role: 'sky', bold: true }),
-        seg(spec.label.padEnd(15), { bold: selected }),
-        ...renderInput(this.inputs[spec.key], spec.placeholder),
-      ]);
+      const content: Line = [seg(' '), seg(spec.label.padEnd(15)), ...renderInput(this.inputs[spec.key], spec.placeholder)];
+      body.push(selectionRow(content, inner.columns, i === this.index));
     });
     body.push([]);
     const startSelected = this.index === START_ROW;
-    body.push([
-      seg(startSelected ? ' ❯ ' : '   ', { role: 'sky', bold: true }),
-      seg(' Start run ', { invert: startSelected, bold: true, role: startSelected ? undefined : 'overlay1' }),
-    ]);
+    body.push(selectionRow([seg(' Start run', { role: startSelected ? 'green' : 'overlay1' })], inner.columns, startSelected));
 
     const help = FIELDS[this.index]?.help ?? 'Opens the run dashboard until the run settles, then comes back here.';
-    body.push([], sectionRow('about this field', inner.columns));
-    for (const text of wrap(help, inner.columns)) body.push([seg(text, { role: 'overlay1' })]);
+    body.push([], sectionRow(this.index === START_ROW ? 'what happens next' : 'about this field', inner.columns));
+    for (const text of wrap(help, inner.columns)) body.push([seg(text, { role: 'subtext0' })]);
 
-    return { title: 'run', body, hints: '↑↓ move · ⏎ start · esc back' };
+    return { title: 'run', body, hints: hints(HINT.move, '⏎ start', 'esc back') };
   }
 
   // fallow-ignore-next-line complexity

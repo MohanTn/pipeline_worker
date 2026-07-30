@@ -10,10 +10,20 @@
  */
 
 import { seg, type Line } from '../line.js';
-import { clampIndex, moveIndex, viewportWindow } from '../list.js';
-import { formatTokens } from '../../format.js';
+import { selectionRow } from '../chrome.js';
+import {
+  applyFilterKey,
+  applyNav,
+  clampIndex,
+  matchesFilter,
+  navIntent,
+  NO_FILTER,
+  viewportWindow,
+  type FilterState,
+} from '../list.js';
+import { formatRelative, formatTokens } from '../../format.js';
 import { runInDashboard } from './runDashboard.js';
-import { NONE, isBackKey, type Action, type RenderedView, type View } from '../view.js';
+import { HINT, NONE, hints, isBackKey, type Action, type RenderedView, type View } from '../view.js';
 import type { RunSession } from '../../../state/runState.js';
 import type { RunPhase } from '../../../types.js';
 import type { MochaRole } from '../../theme.js';
@@ -36,7 +46,24 @@ function timestamp(iso: string | undefined): string {
   return iso ? new Date(iso).toLocaleString() : 'unknown';
 }
 
-const BRANCH_COLUMN = 34;
+/** Fixed right-hand columns; 'escalated' is the longest phase and '52w ago' the longest age. */
+const PHASE_WIDTH = 10;
+const MR_WIDTH = 7;
+const UPDATED_WIDTH = 7;
+/** Below this the branch is unreadable anyway, so the row is allowed to overflow and be truncated by the frame. */
+const MIN_BRANCH_WIDTH = 12;
+
+/** The branch column takes whatever the fixed columns leave, rather than a constant that clips the clock off an 80-column terminal. */
+function branchWidth(columns: number): number {
+  // Selection bars (2), the row's leading space (1), the gap after the branch
+  // (1), then the three fixed right-hand columns.
+  const fixed = 2 + 1 + 1 + PHASE_WIDTH + MR_WIDTH + UPDATED_WIDTH;
+  return Math.max(MIN_BRANCH_WIDTH, columns - fixed);
+}
+
+function fitColumn(text: string, width: number): string {
+  return text.length > width ? `${text.slice(0, width - 1)}…` : text.padEnd(width);
+}
 
 /** What the browser needs from the outside world — injected so tests supply sessions without a repo on disk. */
 export interface SessionsIo {
@@ -101,9 +128,11 @@ export class SessionDetailView implements View {
     for (const entry of history) {
       rows.push([
         seg(entry.level === 'error' ? ' ✗ ' : ' · ', { role: entry.level === 'error' ? 'red' : 'overlay1' }),
-        seg(`${timestamp(entry.at)} `, { role: 'overlay1' }),
+        // Relative, not absolute: a timeline is read for the gaps between its
+        // steps, and 40 rows of identical date prefixes bury the messages.
+        seg(`${formatRelative(entry.at).padEnd(UPDATED_WIDTH)} `, { role: 'overlay1' }),
         seg(`[${entry.phase}] `, { role: 'overlay1' }),
-        seg(entry.message, { role: entry.level === 'error' ? 'red' : undefined }),
+        seg(entry.message, { role: entry.level === 'error' ? 'red' : 'subtext0' }),
         seg(entry.tokens !== undefined ? ` · ${formatTokens(entry.tokens)}` : '', { role: 'overlay1' }),
       ]);
     }
@@ -116,18 +145,25 @@ export class SessionDetailView implements View {
     return {
       title: `session · ${this.session.state.branch}`,
       body: all.slice(this.offset, this.offset + inner.rows),
-      hints: this.flash ?? '↑↓ scroll · y copy mr/pr url · q back',
+      hints: this.flash ?? hints(HINT.scroll, 'y copy mr/pr url', HINT.back),
     };
   }
 
   onKey(key: Key): Action {
     if (isBackKey(key)) return { type: 'pop' };
     this.flash = undefined;
-    if (key.name === 'char' && key.value === 'y') this.flash = copyMrUrl(this.io, this.session);
-    else if (key.name === 'up') this.offset = Math.max(0, this.offset - 1);
-    else if (key.name === 'down') this.offset += 1;
-    else if (key.name === 'pageup') this.offset = Math.max(0, this.offset - 10);
-    else if (key.name === 'pagedown') this.offset += 10;
+    if (key.name === 'char' && key.value === 'y') {
+      this.flash = copyMrUrl(this.io, this.session);
+      return NONE;
+    }
+    const nav = navIntent(key);
+    // A scroll offset is a cursor over rows, but it must not wrap — 'G' at the
+    // end of a long timeline is asking for the bottom, not the top.
+    if (nav) {
+      if (nav.kind === 'first') this.offset = 0;
+      else if (nav.kind === 'last') this.offset = Number.MAX_SAFE_INTEGER;
+      else this.offset = Math.max(0, this.offset + nav.delta);
+    }
     return NONE;
   }
 }
@@ -137,25 +173,45 @@ export class SessionsView implements View {
   private index = 0;
   private windowStart = 0;
   private flash: string | undefined;
+  private filter: FilterState = NO_FILTER;
 
   constructor(private readonly io: SessionsIo) {
     this.sessions = io.list();
   }
 
-  private focused(): RunSession | undefined {
-    return this.sessions[clampIndex(this.index, this.sessions.length)];
+  /** The rows the filter lets through — what the cursor indexes and what the actions operate on. */
+  private visible(): RunSession[] {
+    if (this.filter.query === '') return this.sessions;
+    return this.sessions.filter((session) => matchesFilter(session.state.branch, this.filter.query));
   }
 
-  private row(session: RunSession, selected: boolean): Line {
+  private focused(): RunSession | undefined {
+    const visible = this.visible();
+    return visible[clampIndex(this.index, visible.length)];
+  }
+
+  private row(session: RunSession, selected: boolean, columns: number): Line {
     const { state } = session;
-    const branch = state.branch.length > BRANCH_COLUMN ? `${state.branch.slice(0, BRANCH_COLUMN - 1)}…` : state.branch.padEnd(BRANCH_COLUMN);
-    return [
-      seg(selected ? '❯ ' : '  ', { role: 'sky', bold: true }),
-      seg(`${branch} `, { bold: selected }),
-      seg(state.phase.padEnd(10), { role: PHASE_ROLE[state.phase] }),
-      seg(`${state.mrIid !== undefined ? `#${state.mrIid}` : '-'}`.padEnd(8), { role: 'overlay1' }),
-      seg(timestamp(state.updatedAt), { role: 'overlay1' }),
+    const content: Line = [
+      seg(' '),
+      seg(`${fitColumn(state.branch, branchWidth(columns))} `),
+      seg(state.phase.padEnd(PHASE_WIDTH), { role: PHASE_ROLE[state.phase] }),
+      seg(`${state.mrIid !== undefined ? `#${state.mrIid}` : '-'}`.padEnd(MR_WIDTH), { role: 'overlay1' }),
+      seg(formatRelative(state.updatedAt), { role: 'overlay1' }),
     ];
+    return selectionRow(content, columns, selected);
+  }
+
+  private headerRow(columns: number): Line {
+    const text = ` ${'BRANCH'.padEnd(branchWidth(columns))} ${'PHASE'.padEnd(PHASE_WIDTH)}${'MR/PR'.padEnd(MR_WIDTH)}UPDATED`;
+    return [seg(' '), seg(text, { role: 'overlay1' })];
+  }
+
+  /** The '/' input line, or the standing filter once ⏎ has closed the input. */
+  private filterRow(): Line | undefined {
+    if (this.filter.typing) return [seg('/', { role: 'mauve', bold: true }), seg(this.filter.query), seg(' ', { invert: true })];
+    if (this.filter.query === '') return undefined;
+    return [seg('/', { role: 'mauve' }), seg(this.filter.query, { role: 'mauve' }), seg(`  ${this.visible().length} of ${this.sessions.length}`, { role: 'overlay1' })];
   }
 
   render(inner: Size): RenderedView {
@@ -163,36 +219,62 @@ export class SessionsView implements View {
       return {
         title: 'sessions',
         body: [[seg('No runs recorded in this repo yet (.pipeline-worker/state/ is empty).', { role: 'overlay1' })]],
-        hints: 'q back',
+        hints: HINT.back,
       };
     }
-    const header: Line = [
-      seg('  '),
-      seg(`${'BRANCH'.padEnd(BRANCH_COLUMN)} ${'PHASE'.padEnd(10)}${'MR/PR'.padEnd(8)}UPDATED`, { bold: true, role: 'overlay1' }),
-    ];
-    const listRows = Math.max(1, inner.rows - 1);
-    const { start, end } = viewportWindow(this.index, this.sessions.length, listRows, this.windowStart);
+    const visible = this.visible();
+    this.index = clampIndex(this.index, visible.length);
+    const filterRow = this.filterRow();
+    const listRows = Math.max(1, inner.rows - 1 - (filterRow ? 2 : 0));
+    const { start, end } = viewportWindow(this.index, visible.length, listRows, this.windowStart);
     this.windowStart = start;
-    const body: Line[] = [header];
-    for (let i = start; i < end; i++) body.push(this.row(this.sessions[i], i === this.index));
-    return { title: 'sessions', body, hints: this.flash ?? '↑↓ move · ⏎ timeline · r resume · v review · y copy url · q back' };
+
+    const body: Line[] = [this.headerRow(inner.columns)];
+    if (visible.length === 0) body.push([seg(` no branch matches "${this.filter.query}"`, { role: 'overlay1' })]);
+    for (let i = start; i < end; i++) body.push(this.row(visible[i], i === this.index, inner.columns));
+    if (filterRow) body.push([], filterRow);
+
+    return { title: 'sessions', body, hints: this.hints() };
+  }
+
+  private hints(): string {
+    if (this.filter.typing) return hints(HINT.filtering, HINT.clear);
+    // Kept short enough to survive an 80-column frame: the strip lives in the
+    // bottom border, and a strip that overflows costs the whole border row.
+    return this.flash ?? hints(HINT.move, '⏎ open', 'r resume', 'v review', 'y url', HINT.filter, HINT.back);
   }
 
   // fallow-ignore-next-line complexity
   onKey(key: Key): Action {
-    if (isBackKey(key)) return { type: 'pop' };
-    const focused = this.focused();
+    const filtered = applyFilterKey(this.filter, key);
+    if (filtered) {
+      this.filter = filtered;
+      this.index = 0;
+      return NONE;
+    }
+    // While typing, r/v/y/q are query characters, not commands.
+    if (this.filter.typing) return NONE;
+    // Cleared before anything else handles the key: a copy message has been
+    // read by the time the next keystroke arrives, and leaving it pinned would
+    // hide the real hints.
     this.flash = undefined;
-    if (key.name === 'up') this.index = moveIndex(this.index, -1, this.sessions.length);
-    else if (key.name === 'down') this.index = moveIndex(this.index, 1, this.sessions.length);
-    else if (key.name === 'enter' && focused) return { type: 'push', view: new SessionDetailView(focused, this.io) };
-    else if (key.name === 'char' && key.value === 'y') this.flash = copyMrUrl(this.io, focused);
+    const nav = navIntent(key);
+    if (nav) {
+      this.index = applyNav(nav, this.index, this.visible().length);
+      return NONE;
+    }
+    const focused = this.focused();
+    if (key.name === 'enter' && focused) return { type: 'push', view: new SessionDetailView(focused, this.io) };
+    if (key.name === 'char' && key.value === 'y') this.flash = copyMrUrl(this.io, focused);
     else if (key.name === 'char' && key.value === 'r' && focused) {
       const branch = focused.state.branch;
       return runInDashboard(`resume ${branch}`, () => this.io.resume(branch));
     } else if (key.name === 'char' && key.value === 'v' && focused) {
       const branch = focused.state.branch;
       return runInDashboard(`review ${branch}`, () => this.io.review(branch));
+    } else if (isBackKey(key)) {
+      if (this.filter.query === '') return { type: 'pop' };
+      this.filter = NO_FILTER;
     }
     return NONE;
   }

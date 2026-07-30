@@ -40,8 +40,39 @@ export async function stageAll(worktreePath: string): Promise<void> {
   await execGit(['add', '-A'], { cwd: worktreePath });
 }
 
+/**
+ * Commits staged changes. Retries once if a pre-commit hook (husky running
+ * `dotnet format`, lint-staged, etc.) auto-fixes files as a side effect and
+ * then fails the hook itself — that aborts the first `git commit` with the
+ * fixed files left unstaged, which otherwise surfaces as a spurious "failed
+ * to commit" even though nothing actually needs a human. Detected by
+ * snapshotting `git status --porcelain` before the attempt: if it differs
+ * afterward, the hook touched the tree, so this re-stages and commits again.
+ * A hook failure that leaves the tree untouched (a real lint/test/build
+ * failure) is not retried and surfaces as-is.
+ */
 export async function commit(worktreePath: string, message: string): Promise<void> {
-  await execGit(['commit', '-m', message], { cwd: worktreePath });
+  const before = await gitStatus(worktreePath);
+  try {
+    await execGit(['commit', '-m', message], { cwd: worktreePath });
+  } catch (error) {
+    const after = await gitStatus(worktreePath);
+    if (after === before) throw error;
+    await stageAll(worktreePath);
+    try {
+      await execGit(['commit', '-m', message], { cwd: worktreePath });
+    } catch (retryError) {
+      if (retryError instanceof Error) {
+        retryError.message = `${retryError.message.trim()}\n(retried once after a pre-commit hook modified files; still failing)`;
+      }
+      throw retryError;
+    }
+  }
+}
+
+async function gitStatus(worktreePath: string): Promise<string> {
+  const { stdout } = await execGit(['status', '--porcelain'], { cwd: worktreePath });
+  return stdout;
 }
 
 /**

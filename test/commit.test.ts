@@ -164,6 +164,74 @@ test('execGit leaves the error message alone when stderr already has content', a
   }
 });
 
+/** Installs a pre-commit hook that mimics `husky` running an auto-formatter (e.g. `dotnet format`): it rewrites the file and fails until the file is already formatted. */
+function installFormatOnCommitHook(dir: string): void {
+  const hookPath = join(dir, '.git', 'hooks', 'pre-commit');
+  writeFileSync(
+    hookPath,
+    '#!/bin/sh\nif grep -q formatted f.txt; then\n  exit 0\nelse\n  echo formatted >> f.txt\n  exit 1\nfi\n',
+    { mode: 0o755 },
+  );
+}
+
+/** Installs a pre-commit hook that always fails without touching the working tree, like a real build/test failure. */
+function installAlwaysFailingHook(dir: string): void {
+  const hookPath = join(dir, '.git', 'hooks', 'pre-commit');
+  writeFileSync(hookPath, '#!/bin/sh\necho "build failed" >&2\nexit 1\n', { mode: 0o755 });
+}
+
+test('commit retries once and succeeds when a pre-commit hook auto-fixes files (husky/dotnet format style)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-commit-hookfix-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+    writeFileSync(join(dir, 'f.txt'), 'line1\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+
+    installFormatOnCommitHook(dir);
+    writeFileSync(join(dir, 'f.txt'), 'line1\nline2\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+
+    await commit(dir, 'add line2');
+
+    const { stdout: log } = await execFileAsync('git', ['log', '--oneline'], { cwd: dir });
+    assert.equal(log.trim().split('\n').length, 2);
+    const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], { cwd: dir });
+    assert.equal(status.trim(), ''); // the hook's own fix landed in the retried commit, tree is clean
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('commit does not retry, and rethrows, when a pre-commit hook fails without touching the tree', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-commit-hookfail-'));
+  try {
+    await execFileAsync('git', ['init', '-q'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 't@example.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'T'], { cwd: dir });
+    writeFileSync(join(dir, 'f.txt'), 'line1\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+
+    installAlwaysFailingHook(dir);
+    writeFileSync(join(dir, 'f.txt'), 'line1\nline2\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+
+    await assert.rejects(commit(dir, 'add line2'), (error: Error) => {
+      assert.match(error.message, /build failed/);
+      assert.doesNotMatch(error.message, /retried once/);
+      return true;
+    });
+
+    const { stdout: log } = await execFileAsync('git', ['log', '--oneline'], { cwd: dir });
+    assert.equal(log.trim().split('\n').length, 1); // no commit was created
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('getGitUser returns empty strings instead of throwing when config is unset', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-worker-gitconfig-'));
   // getGitUser's child process inherits process.env, so isolate from this
