@@ -9,6 +9,7 @@
 
 import { watchPipeline } from './watchPipeline.js';
 import { adoptBranch, resolveResumeMode } from './adoptBranch.js';
+import { continueRun, resumeHint } from './orchestrate.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { maybeReviewMergeRequest } from './reviewMr.js';
 import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './runPlan.js';
@@ -16,14 +17,14 @@ import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
 import { selectAgent } from '../agent/index.js';
 import { loadRunState, recordEvent } from '../state/runState.js';
-import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree } from '../git/worktree.js';
+import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree, worktreeExists } from '../git/worktree.js';
 import { remoteBranchExists } from '../git/remote.js';
-import { beginRun, endRun, runStep, seedRunTokens, setPlainOutput } from '../ui/steps.js';
+import { beginRun, endRun, note, runStep, seedRunTokens, setPlainOutput } from '../ui/steps.js';
 import { setCompletionSound } from '../ui/notify.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
 import type { ForgeClient } from '../forge/types.js';
 import type { AgentAdapter } from '../agent/types.js';
-import type { PipelineWorkerConfig, ResumableRunState, RunPhase } from '../types.js';
+import type { PipelineWorkerConfig, ResumableRunState, RunPhase, RunState } from '../types.js';
 
 /**
  * Adoption works off the branch as origin has it (see
@@ -41,10 +42,10 @@ async function requirePushedBranch(repoRoot: string, branch: string): Promise<vo
 }
 
 /**
- * The worktree from the crashed run is almost always already gone by this
- * point (orchestrate.ts's `finally` removes it on any exception, and on
- * SIGINT/SIGTERM) — reuse it only in the narrow case it survived (e.g. a
- * SIGKILL), otherwise recreate it from the branch's current state on origin.
+ * A failed run keeps its worktree (see orchestrate.ts), so this normally
+ * reattaches to the very worktree the crashed run was using. It is recreated
+ * from the branch's current state on origin only when that worktree is gone
+ * or has since moved to another branch.
  */
 async function resolveResumeWorktree(repoRoot: string, state: ResumableRunState): Promise<string> {
   const worktreePath = (await isWorktreeOnBranch(state.worktreePath, state.branch))
@@ -73,22 +74,43 @@ async function runResumeWatch(
     // local target branch so it doesn't sit stale after the run ends.
     if (state.phase === 'done') {
       await maybeSyncTargetBranch(forge, config, repoRoot, state.targetBranch, state.mrIid);
+      // The only outcome that removes the worktree: everything finished.
+      await cleanup();
       endRun('done', `MR/PR #${state.mrIid} finished green`);
     } else if (state.phase === 'escalated') {
+      note(`worktree kept at ${worktreePath} — ${resumeHint(state)}`);
       endRun('escalated', 'see the MR/PR comment for what was tried and why');
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    state.failedStage = 'ci-watch';
     recordEvent(repoRoot, state, `Resume failed: ${message}`, 'error');
+    // Deliberately no cleanup: the worktree is what the next resume re-enters.
+    note(`worktree kept at ${worktreePath} — ${resumeHint(state)}`);
     endRun('failed', message);
     throw error;
-  } finally {
-    await cleanup();
   }
+}
+
+/**
+ * A run that failed before its MR/PR existed is picked up from the stage it
+ * died in (orchestrate.ts's continueRun) rather than adopted from origin —
+ * but only while its worktree is still on disk, since that worktree holds the
+ * applied diff, the rebase, and any fix made by hand in it. Without it there
+ * is nothing to re-enter, and adoption (which works off origin) is the only
+ * recovery left. Exported for unit testing.
+ */
+export async function findContinuableRun(repoRoot: string, branch: string): Promise<RunState | undefined> {
+  const stored = loadRunState(repoRoot, branch);
+  if (!stored || stored.mrIid !== undefined) return undefined;
+  return (await worktreeExists(stored.worktreePath)) ? stored : undefined;
 }
 
 /** Resumes a crashed run, or adopts a pushed branch that has no run state, and watches its CI through to a verdict. Returns the phase it settled in. */
 export async function resumeRun(repoRoot: string, opts: { branch: string; target?: string }): Promise<RunPhase> {
+  const continuable = await findContinuableRun(repoRoot, opts.branch);
+  if (continuable) return continueRun(repoRoot, continuable, { target: opts.target });
+
   const config = loadConfig(repoRoot);
   setCompletionSound(config.completionSound);
   setPlainOutput(config.plainOutput);

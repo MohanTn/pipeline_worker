@@ -85,7 +85,7 @@ test('a run cancelled once its MR/PR exists keeps the worktree and prints the re
     assert.equal(markedDone, 1, 'the worktree must be preserved for `resume` by satisfying the cleanup without running it');
   }));
 
-test('a run cancelled before an MR/PR exists leaves the worktree to the caller cleanup, with no resume hint', () =>
+test('a run cancelled before an MR/PR exists also keeps its worktree — that stage is resumable too', () =>
   withTempDir(async (dir) => {
     const { settled, restore } = captureSettle();
     let markedDone = 0;
@@ -96,8 +96,21 @@ test('a run cancelled before an MR/PR exists leaves the worktree to the caller c
     } finally {
       restore();
     }
-    assert.deepEqual(settled, [{ status: 'interrupted', detail: undefined }]);
-    assert.equal(markedDone, 0, 'nothing to resume, so the outer finally must remove the worktree');
+    assert.deepEqual(settled, [{ status: 'interrupted', detail: 'resume with: pipeline-worker resume --branch pipeline-worker/add-login' }]);
+    assert.equal(markedDone, 1, 'the worktree holds the applied diff the next resume re-enters');
+  }));
+
+test('a cancelled run records the stage it stopped in, so resume knows where to pick up', () =>
+  withTempDir(async (dir) => {
+    const { restore } = captureSettle();
+    try {
+      settleCancelledRun(dir, stateInPhase('commit'), () => {});
+    } finally {
+      restore();
+    }
+    const path = join(dir, '.pipeline-worker', 'state', 'pipeline-worker_add-login.json');
+    const state = JSON.parse(readFileSync(path, 'utf-8')) as RunState;
+    assert.equal(state.failedStage, 'commit');
   }));
 
 test('a cancelled run is narrated in its session history, so `sessions` shows why it stopped', () =>

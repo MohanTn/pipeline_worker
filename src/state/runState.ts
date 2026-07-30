@@ -5,7 +5,7 @@
  * state (the forge client's findExistingMr is the real idempotency guard).
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { RunHistoryEntry, RunState } from '../types.js';
@@ -39,6 +39,22 @@ export function saveRunState(repoRoot: string, state: RunState): void {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Warning: failed to persist run state for branch ${state.branch}: ${message}`);
+  }
+}
+
+/**
+ * Drops a run's state file. Used when a run renames its temp branch to the
+ * feature branch: the state then lives under the new name, and leaving the
+ * temp-branch file behind would offer `sessions`/`resume` a stale entry
+ * pointing at a worktree that has since moved to another branch. Never
+ * throws — a state file that cannot be deleted is noise, not a failure.
+ */
+export function deleteRunState(repoRoot: string, branch: string): void {
+  try {
+    rmSync(statePath(repoRoot, branch), { force: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Warning: failed to remove stale run state for branch ${branch}: ${message}`);
   }
 }
 

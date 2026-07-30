@@ -197,6 +197,12 @@ A follow-up run reviews only the files *that* run touched. `pipeline-worker revi
 
 Resolved in order: `--target` (validated against origin first), `refs/remotes/origin/HEAD`, the remote's HEAD symref, then whichever of `main`/`master` origin has (closest merge-base wins if both). Only if origin can't answer does it fall back to your current branch.
 
+### Resuming a failed run
+
+A run that fails keeps its worktree — nothing is deleted until a run finishes cleanly — and records the stage it died in. `pipeline-worker resume --branch <name>` (the branch is in the failure message) re-enters that same worktree at that same stage: everything already done is skipped, so a run that failed committing commits and carries on, and a run that failed on `build` re-runs the checks against whatever you fixed inside the worktree. Your own repo is left exactly as it was, uncommitted changes included, so nothing is lost either way.
+
+Once the worktree is gone (you removed it, or the run finished), `resume` falls back to the origin-based recovery below.
+
 ### Adopting a branch
 
 `pipeline-worker resume --branch <name>` also handles a branch with no resumable run — one you pushed by hand, or one whose run died before the PR/MR existed. It checks the branch out as origin has it and asks the forge:

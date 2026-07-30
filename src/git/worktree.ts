@@ -75,9 +75,25 @@ export async function isWorktreeOnBranch(worktreePath: string, branch: string): 
 }
 
 /**
+ * True when `worktreePath` is still a usable git worktree, whatever branch it
+ * is on. `resume` asks this (rather than isWorktreeOnBranch) before picking a
+ * failed run up mid-pipeline: a follow-up run's worktree legitimately sits on
+ * the disposable temp branch while the run's state is keyed by the MR/PR's
+ * branch, so matching on branch name would reject a perfectly good worktree.
+ */
+export async function worktreeExists(worktreePath: string): Promise<boolean> {
+  if (!existsSync(worktreePath)) return false;
+  try {
+    await execGit(['rev-parse', '--is-inside-work-tree'], { cwd: worktreePath });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Checks out a branch that already exists on origin (used by `pipeline-worker
- * resume`, where the original worktree from the crashed run is normally
- * already gone — see orchestrate.ts's unconditional cleanup). Fetches first
+ * resume` when the run's own worktree is gone). Fetches first
  * and resets the local branch to match origin/branch with `-B` rather than
  * reusing whatever local ref might already exist, so the worktree reflects
  * the branch's actual current state on the forge (what CI is really running
@@ -207,6 +223,18 @@ export async function renameBranch(worktreePath: string, newBranchName: string):
   }
   // Unreachable: the loop above always returns or throws.
   throw new Error(`pipeline-worker: could not rename branch to a variant of "${newBranchName}"`);
+}
+
+/**
+ * Throws away everything in the worktree that isn't committed: the half
+ * applied patch, conflict markers, and copied untracked files a failed `apply`
+ * stage left behind. Only ever called on pipeline-worker's own disposable
+ * worktree, whose entire content is re-derivable from the caller's repo, so
+ * `--hard` + `clean -fd` discards nothing that isn't about to be replayed.
+ */
+export async function resetWorktree(worktreePath: string): Promise<void> {
+  await execGit(['reset', '--hard', 'HEAD'], { cwd: worktreePath });
+  await execGit(['clean', '-fd'], { cwd: worktreePath });
 }
 
 /**

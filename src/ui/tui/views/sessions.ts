@@ -22,7 +22,9 @@ import type { Size } from '../screen.js';
 
 const PHASE_ROLE: Record<RunPhase, MochaRole> = {
   diff: 'overlay1',
+  apply: 'overlay1',
   intent: 'overlay1',
+  commit: 'sky',
   checks: 'sky',
   mr: 'sky',
   watch: 'yellow',

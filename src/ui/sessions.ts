@@ -12,7 +12,9 @@ import { mocha, type MochaRole } from './theme.js';
 
 const PHASE_COLOR: Record<RunPhase, MochaRole> = {
   diff: 'overlay1',
+  apply: 'overlay1',
   intent: 'overlay1',
+  commit: 'sky',
   checks: 'sky',
   mr: 'sky',
   watch: 'yellow',

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { saveRunState, loadRunState, recordEvent, recordAgentTokens, listRunStates } from '../src/state/runState.js';
+import { saveRunState, loadRunState, deleteRunState, recordEvent, recordAgentTokens, listRunStates } from '../src/state/runState.js';
 import type { RunState } from '../src/types.js';
 
 function baseState(overrides: Partial<RunState> = {}): RunState {
@@ -178,6 +178,18 @@ test('recordAgentTokens records only when the adapter reported usage — silence
     assert.equal(state.totalTokens, 1234);
     assert.equal(state.history?.length, 1);
     assert.match(state.history![0].message, /Agent turn \(resolve merge conflicts\)/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deleteRunState drops the file a renamed branch left behind, and tolerates one that is already gone', () => {
+  const dir = tmpRepo();
+  try {
+    saveRunState(dir, baseState({ branch: 'pipeline-worker/tmp-abc' }));
+    deleteRunState(dir, 'pipeline-worker/tmp-abc');
+    assert.equal(loadRunState(dir, 'pipeline-worker/tmp-abc'), undefined);
+    deleteRunState(dir, 'pipeline-worker/tmp-abc'); // a second call must not throw
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

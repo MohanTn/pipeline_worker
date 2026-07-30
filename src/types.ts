@@ -136,7 +136,13 @@ export interface PipelineWorkerConfig {
   plainOutput: boolean;
 }
 
-export type RunPhase = 'diff' | 'intent' | 'checks' | 'mr' | 'watch' | 'done' | 'escalated';
+/**
+ * Where a run got to, in the order the stages run. Every value before 'mr' is
+ * a stage boundary `pipeline-worker resume` can re-enter at: a failed run
+ * keeps its worktree, and the pipeline skips whatever this phase says already
+ * finished (see workflow/orchestrate.ts's PHASE_ORDER).
+ */
+export type RunPhase = 'diff' | 'apply' | 'checks' | 'intent' | 'commit' | 'mr' | 'watch' | 'done' | 'escalated';
 
 /** One entry in RunState.history — a timestamped narration of what happened during the run, for `pipeline-worker sessions`. */
 export interface RunHistoryEntry {
@@ -169,6 +175,18 @@ export interface RunState {
   updatedAt?: string;
   /** Chronological log of phase transitions, escalations, and errors. Absent on state files written before this field existed. */
   history?: RunHistoryEntry[];
+  /** The captured intent, persisted so a resumed run commits/describes with exactly what the agent inferred the first time instead of paying for a second capture. */
+  intent?: CapturedIntent;
+  /** Local check results, with stdout/stderr stripped (only name/ok/duration reach the MR/PR description) so the state file stays small. */
+  checks?: CheckResult[];
+  /** captureDiff's changed-file list, persisted for a resumed run's review scoping. */
+  changedFiles?: string[];
+  /** captureDiff's untracked-file list — the exact set cleanup deletes from repoRoot once the change is safely pushed. */
+  untrackedFiles?: string[];
+  /** iid of the MR/PR this run is adding a follow-up commit to, so a resumed run knows it must append rather than open a new one. */
+  followUpMrIid?: number;
+  /** The stage the run died in, for `sessions` and for the resume banner. Cleared once that stage completes. */
+  failedStage?: string;
 }
 
 /** RunState with mrIid narrowed to present — the shape `pipeline-worker resume` operates on, once an MR/PR is known to exist. */

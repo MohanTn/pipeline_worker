@@ -14,6 +14,8 @@ import {
   renameBranch,
   isWorktreeOnBranch,
   checkoutExistingBranch,
+  resetWorktree,
+  worktreeExists,
 } from '../src/git/worktree.js';
 
 const execFileAsync = promisify(execFile);
@@ -388,6 +390,43 @@ test('checkoutExistingBranch links node_modules so checks can run in the adopted
   } finally {
     rmSync(repoRoot, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('resetWorktree discards a half-applied patch and its copied untracked files, so the apply stage can be re-entered', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-reset-test');
+    try {
+      writeFileSync(join(worktreePath, 'package.json'), '{ "broken": true }');
+      writeFileSync(join(worktreePath, 'left-over.txt'), 'from a failed apply\n');
+
+      await resetWorktree(worktreePath);
+
+      assert.match(readFileSync(join(worktreePath, 'package.json'), 'utf-8'), /1\.0\.0/);
+      assert.equal(existsSync(join(worktreePath, 'left-over.txt')), false);
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('worktreeExists accepts a live worktree whatever branch it is on, and rejects a removed one', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-exists-test');
+    assert.equal(await worktreeExists(worktreePath), true);
+    // A follow-up run's worktree stays on the temp branch while its state is
+    // keyed by the MR/PR's branch, so branch identity must not decide this.
+    await renameBranch(worktreePath, 'feature/renamed');
+    assert.equal(await worktreeExists(worktreePath), true);
+
+    await removeWorktree(repoRoot, worktreePath);
+    assert.equal(await worktreeExists(worktreePath), false);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
   }
 });
 
