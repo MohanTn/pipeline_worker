@@ -103,32 +103,74 @@ test('getMrDescription reads the description off GET merge_requests/{iid}, treat
   assert.ok(!calls[0].args.includes('-X'));
 });
 
+/** A discussion GitLab anchored to the diff, as the API returns it: a hash id plus one DiffNote carrying the position back. */
+function anchoredDiscussion(noteId: number, path: string, line: number): string {
+  return JSON.stringify({
+    id: 'a1b2c3',
+    notes: [{ id: noteId, type: 'DiffNote', position: { position_type: 'text', new_path: path, new_line: line } }],
+  });
+}
+
 // A GitLab discussion only lands on the diff when its position carries the
 // MR's own base/start/head shas — a missing or stale triple is rejected, or
 // (worse) silently posted as an ordinary MR-level note.
-test('createInlineComment reads diff_refs off the MR, then POSTs a text position on the new side', async () => {
+//
+// The position must reach GitLab as a nested `position` hash, which rules out
+// glab's fields: `--field 'position[new_line]=42'` puts the bracketed key
+// verbatim into the JSON body glab builds, the API sees no position at all, and
+// the comment silently becomes an MR-level thread. Bracketed query parameters
+// are parsed into the nested hash, so the position belongs in the URL.
+test('createInlineComment reads diff_refs off the MR, then POSTs the text position as nested query params', async () => {
   const { exec, calls } = fakeExecutor([
     () => JSON.stringify({ iid: 7, diff_refs: { base_sha: 'base1', start_sha: 'start1', head_sha: 'head1' } }),
-    () => JSON.stringify({ id: 99 }),
+    () => anchoredDiscussion(99, 'src/app.ts', 42),
   ]);
   const forge = createGitlabForge(gitlabConfig(), exec);
   const note = await forge.createInlineComment(7, { path: 'src/app.ts', line: 42, body: 'Hard-coded secret.' });
 
+  // The numeric note id, not the discussion's hash id.
   assert.deepEqual(note, { id: 99 });
   assert.deepEqual(calls[0].args.slice(0, 2), ['api', 'projects/1/merge_requests/7']);
-  assert.deepEqual(calls[1].args.slice(0, 2), ['api', 'projects/1/merge_requests/7/discussions']);
   assert.ok(calls[1].args.includes('-X') && calls[1].args.includes('POST'));
-  assert.deepEqual(fieldPairs(calls[1].args), [
-    '--raw-field body=Hard-coded secret.',
-    '--raw-field position[position_type]=text',
-    '--raw-field position[base_sha]=base1',
-    '--raw-field position[start_sha]=start1',
-    '--raw-field position[head_sha]=head1',
-    '--raw-field position[new_path]=src/app.ts',
-    '--raw-field position[old_path]=src/app.ts',
-    // `--field` so glab sends the line as a JSON number, not the string "42".
-    '--field position[new_line]=42',
+
+  const [endpoint, query] = calls[1].args[1].split('?');
+  assert.equal(endpoint, 'projects/1/merge_requests/7/discussions');
+  const position = new URLSearchParams(query);
+  assert.deepEqual(
+    [...position.entries()],
+    [
+      ['position[position_type]', 'text'],
+      ['position[base_sha]', 'base1'],
+      ['position[start_sha]', 'start1'],
+      ['position[head_sha]', 'head1'],
+      ['position[new_path]', 'src/app.ts'],
+      ['position[old_path]', 'src/app.ts'],
+      ['position[new_line]', '42'],
+    ],
+  );
+  // Only the body stays a field — it is arbitrarily long and belongs nowhere near a URL.
+  assert.deepEqual(fieldPairs(calls[1].args), ['--raw-field body=Hard-coded secret.']);
+});
+
+// Counting an unanchored note as posted is what produced a wall of MR-level
+// comments instead of line comments: the run must hear about it.
+test('createInlineComment rejects a discussion GitLab created without a diff position', async () => {
+  const { exec } = fakeExecutor([
+    () => JSON.stringify({ iid: 7, diff_refs: { base_sha: 'base1', start_sha: 'start1', head_sha: 'head1' } }),
+    () => JSON.stringify({ id: 'a1b2c3', notes: [{ id: 99, type: 'DiscussionNote', position: null }] }),
   ]);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  await assert.rejects(
+    () => forge.createInlineComment(7, { path: 'src/app.ts', line: 42, body: 'Hard-coded secret.' }),
+    /without a diff position/,
+  );
+});
+
+test('createInlineComment refuses to post at all when the MR reports no diff_refs to anchor to', async () => {
+  const { exec, calls } = fakeExecutor([() => JSON.stringify({ iid: 7 })]);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  await assert.rejects(() => forge.createInlineComment(7, { path: 'src/app.ts', line: 42, body: 'x' }), /no diff_refs/);
+  assert.equal(calls.length, 1, 'nothing is posted when the position cannot be built');
 });
 
 test('createGitlabForge transparently retries a call that fails with a transient 500', async () => {

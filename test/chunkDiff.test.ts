@@ -65,6 +65,9 @@ test('numbers new-file lines across multiple hunks, counting added and context l
   assert.match(alpha.body, /^\s+22 \| \+added21$/m);
   // Removed lines are present for context but carry no number.
   assert.match(alpha.body, /^\s+- \| -const b = 2;$/m);
+  // Each commentable line's own text, '+' stripped: the anchor check compares
+  // it with the line the agent quoted back.
+  assert.deepEqual(alpha.commentableText, { 2: 'const b = 3;', 3: 'const c = 4;', 22: 'added21' });
 });
 
 test('bundles the file name and language of a new file, numbering from the hunk header', () => {

@@ -247,8 +247,8 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     label: 'reviewModel',
     group: 'Review',
     kind: 'string',
-    placeholder: "(adapter's default)",
-    doc: 'Model for review turns. Leave empty for the adapter default — finding real bugs is deliberately not the cheap-model job, so this should be stronger than intentModel.',
+    placeholder: 'sonnet',
+    doc: 'Model for review turns, passed to the agent CLI as-is. Defaults to sonnet on claude/copilot — finding real bugs is deliberately not the cheap-model job, so this should be stronger than intentModel. Empty means "let the agent CLI pick", which is what pi and little-coder get (they take a provider/id, not an alias); note the CLI picks its newest model, which an OAuth sign-in may not be able to reach.',
   },
   {
     path: 'reviewMinSeverity',

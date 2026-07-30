@@ -319,8 +319,8 @@ test('an explicit reviewFilesPerTurn wins for both agents', () => {
 
 test('scopeChunks narrows a follow-up run to the files that run touched', () => {
   const chunks: DiffChunk[] = [
-    { path: 'app.ts', language: 'TypeScript', body: '', commentableLines: [1] },
-    { path: 'old.ts', language: 'TypeScript', body: '', commentableLines: [4] },
+    { path: 'app.ts', language: 'TypeScript', body: '', commentableLines: [1], commentableText: { 1: 'const a = 1;' } },
+    { path: 'old.ts', language: 'TypeScript', body: '', commentableLines: [4], commentableText: { 4: 'const b = 2;' } },
   ];
   assert.deepEqual(scopeChunks(chunks, ['app.ts']).map((chunk) => chunk.path), ['app.ts']);
   assert.equal(scopeChunks(chunks, undefined).length, 2, 'a fresh run reviews the whole branch diff');

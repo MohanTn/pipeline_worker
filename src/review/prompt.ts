@@ -46,10 +46,11 @@ export const REVIEW_SCHEMA = {
         properties: {
           file: { type: 'string', description: 'The file path exactly as given in the chunk header.' },
           line: { type: 'number', description: 'A line number taken verbatim from the left-hand gutter of an added (+) line.' },
+          code: { type: 'string', description: 'That same line\'s code, copied verbatim without the gutter and without the leading "+". Used to verify the anchor.' },
           severity: { type: 'string', enum: ['CRITICAL', 'MAJOR', 'MINOR'], description: 'CRITICAL: data loss, security hole, or guaranteed crash. MAJOR: a real bug or serious performance/design defect. MINOR: everything else.' },
           comment: { type: 'string', description: 'Markdown: a "### Title" line, the explanation and its impact, then an optional suggestion block with the corrected line(s).' },
         },
-        required: ['file', 'line', 'severity', 'comment'],
+        required: ['file', 'line', 'code', 'severity', 'comment'],
       },
     },
   },
@@ -91,7 +92,9 @@ export function buildReviewPrompt(chunks: DiffChunk[], fence: string): string {
     '1. Only point out actionable, valid issues. If the code is good, return an empty findings list.\n' +
     `2. Every finding must set "file" to ${anchor} and "line" to a number copied verbatim from the gutter of an ` +
     'added (+) line in that same section. Lines with a "-" gutter (removed lines) and unchanged context lines cannot ' +
-    'be commented on.\n' +
+    'be commented on. Also set "code" to that line\'s own text, copied verbatim without the gutter and without the ' +
+    'leading "+": the comment is anchored to the line whose code matches, so a "code" that does not belong to the ' +
+    '"line" you named moves or discards the comment.\n' +
     '3. Explain the problem and its impact, then — when a concrete fix fits on the flagged line(s) — append a ' +
     `suggestion block:\n${fence}\n<corrected code>\n\`\`\`\n` +
     '4. Do not review generated or vendored content (lock files, build output, snapshots): return no findings for it.\n' +

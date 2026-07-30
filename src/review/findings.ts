@@ -18,6 +18,9 @@ const FindingShape = z.object({
   line: z.number().int().positive(),
   severity: z.enum(['CRITICAL', 'MAJOR', 'MINOR']),
   comment: z.string().min(1),
+  // Optional so an agent that ignores the field is still gated on the number
+  // alone, exactly as before it existed.
+  code: z.string().optional(),
 });
 
 const PayloadShape = z.union([z.object({ findings: z.array(FindingShape) }), z.array(FindingShape)]);
@@ -53,6 +56,35 @@ function normalizePath(path: string): string {
   return path.replace(/^[ab]\//, '').replace(/^\.\//, '').trim();
 }
 
+/** Compares a quoted line with a diff line ignoring indentation only — a re-indented quote is the same line, a different statement is not. */
+function sameLine(quoted: string, actual: string): boolean {
+  return quoted.trim() === actual.trim();
+}
+
+/**
+ * Where this finding really belongs, or undefined when it belongs nowhere.
+ *
+ * The number alone is weak evidence: within one file every added line's number
+ * is "legal", and a multi-file turn gives a model many chances to copy a number
+ * out of the wrong section — a mistake the old check could not see, because the
+ * number it landed on was commentable too. So when the agent also quoted the
+ * line, the *code* decides: a quote matching some other added line re-anchors
+ * the comment there (nearest such line, when the same code appears more than
+ * once), and a quote matching nothing leaves the claimed number to be judged on
+ * its own as before.
+ */
+function resolveAnchor(text: Record<number, string>, claimed: number, code: string | undefined): number | undefined {
+  const claimedText = text[claimed];
+  if (code === undefined) return claimedText === undefined ? undefined : claimed;
+  if (claimedText !== undefined && sameLine(code, claimedText)) return claimed;
+
+  const matches = Object.keys(text)
+    .map(Number)
+    .filter((line) => sameLine(code, text[line]));
+  if (matches.length > 0) return matches.reduce((best, line) => (Math.abs(line - claimed) < Math.abs(best - claimed) ? line : best));
+  return claimedText === undefined ? undefined : claimed;
+}
+
 /**
  * Applies the whole gate. `chunks` is the authority on where a comment may
  * land: an anchor outside chunk.commentableLines is a hallucinated (or
@@ -60,11 +92,11 @@ function normalizePath(path: string): string {
  * comment on unrelated code at worst.
  */
 export function gatekeep(findings: ReviewFinding[], chunks: DiffChunk[], minSeverity: ReviewSeverity, maxComments: number): ReviewFinding[] {
-  const commentable = new Map<string, Set<number>>();
+  const commentable = new Map<string, Record<number, string>>();
   for (const chunk of chunks) {
-    const lines = commentable.get(chunk.path) ?? new Set<number>();
-    for (const line of chunk.commentableLines) lines.add(line);
-    commentable.set(chunk.path, lines);
+    const text = commentable.get(chunk.path) ?? {};
+    for (const line of chunk.commentableLines) text[line] = chunk.commentableText?.[line] ?? '';
+    commentable.set(chunk.path, text);
   }
 
   const floor = SEVERITY_RANK[minSeverity];
@@ -72,12 +104,15 @@ export function gatekeep(findings: ReviewFinding[], chunks: DiffChunk[], minSeve
   const kept: ReviewFinding[] = [];
   for (const finding of findings) {
     const file = normalizePath(finding.file);
-    const key = `${file}:${finding.line}`;
+    const text = commentable.get(file);
     if (SEVERITY_RANK[finding.severity] < floor) continue;
-    if (!commentable.get(file)?.has(finding.line)) continue;
+    if (!text) continue;
+    const line = resolveAnchor(text, finding.line, finding.code);
+    if (line === undefined) continue;
+    const key = `${file}:${line}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    kept.push({ ...finding, file });
+    kept.push({ ...finding, file, line });
   }
 
   return kept.sort((a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]).slice(0, Math.max(0, maxComments));
