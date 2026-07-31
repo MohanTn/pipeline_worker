@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { listConflictedFiles, execGit } from './commit.js';
+import { prepareCommitHooks } from './prepareHooks.js';
 
 export function generateTempBranchName(): string {
   return `pipeline-worker/tmp-${randomUUID().slice(0, 8)}`;
@@ -114,6 +115,7 @@ export async function checkoutExistingBranch(repoRoot: string, branch: string): 
   } catch (error) {
     console.error(`Warning: failed to link node_modules into ${worktreePath}: ${error instanceof Error ? error.message : String(error)}`);
   }
+  await prepareCommitHooks(worktreePath);
   return worktreePath;
 }
 
@@ -195,6 +197,7 @@ export async function applyDiffToWorktree(
   copyUntrackedFiles(repoRoot, worktreePath, untrackedFiles);
   await stageUntrackedIfNeeded(worktreePath, untrackedFiles, conflictedFiles);
   linkNodeModules(repoRoot, worktreePath);
+  await prepareCommitHooks(worktreePath);
   return { conflicted: conflictedFiles.length > 0, conflictedFiles };
 }
 
