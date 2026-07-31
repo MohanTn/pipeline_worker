@@ -15,6 +15,12 @@ Takes the uncommitted diff in your repo and drives it — unattended — to a me
 
 Polling costs zero agent tokens; the agent runs only when a pipeline actually fails. On a terminal the run renders as a live step tree — inside the TUI's own screen when started from there, or as a scrollback dashboard from the plain CLI; piped output falls back to append-only narration (or set `plainOutput`).
 
+## Demo
+
+| Home | Settings | Live run |
+| --- | --- | --- |
+| ![TUI home menu](images/tui-home.png) | ![TUI settings editor](images/tui-settings.png) | ![TUI live run dashboard](images/tui-run.png) |
+
 ## Requirements
 
 - Node.js >= 20.12 and git
