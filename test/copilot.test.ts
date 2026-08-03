@@ -139,3 +139,54 @@ test('copilotAdapter appends the JSON schema to the piped prompt when jsonSchema
     rmSync(topDir, { recursive: true, force: true });
   }
 });
+
+test('copilotAdapter clips a string field that overruns its schema maxLength, instead of leaving it for downstream validation to reject', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeCopilot = join(binDir, 'copilot');
+  writeFileSync(
+    fakeCopilot,
+    `#!/bin/sh\ncat > /dev/null\necho '{"commitMessage":"this conventional-commit subject is deliberately far too long to fit","other":"kept"}'\n`,
+  );
+  chmodSync(fakeCopilot, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    const schema = {
+      type: 'object',
+      properties: {
+        commitMessage: { type: 'string', maxLength: 20 },
+        other: { type: 'string' },
+      },
+    };
+    const result = await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir, jsonSchema: schema });
+    const parsed = JSON.parse(result.text);
+    assert.equal(parsed.commitMessage, 'this conventional-co');
+    assert.equal(parsed.commitMessage.length, 20);
+    assert.equal(parsed.other, 'kept');
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});
+
+test('copilotAdapter leaves unparsable JSON untouched when jsonSchema is set, so the caller reports the real parse error', { skip: process.platform === 'win32' }, async () => {
+  const topDir = mkdtempSync(join(tmpdir(), 'pw-copilot-fake-'));
+  const binDir = join(topDir, 'bin');
+  mkdirSync(binDir, { recursive: true });
+  const fakeCopilot = join(binDir, 'copilot');
+  writeFileSync(fakeCopilot, `#!/bin/sh\ncat > /dev/null\necho '{not valid json}'\n`);
+  chmodSync(fakeCopilot, 0o755);
+
+  const origPath = process.env.PATH;
+  process.env.PATH = binDir + (origPath ? ':' + origPath : '');
+  try {
+    const result = await copilotAdapter.invoke({ prompt: 'hi', cwd: binDir, jsonSchema: { type: 'object' } });
+    assert.equal(result.text, '{not valid json}');
+  } finally {
+    process.env.PATH = origPath;
+    rmSync(topDir, { recursive: true, force: true });
+  }
+});

@@ -44,11 +44,52 @@ import { composePrompt } from './promptText.js';
 
 const execFileAsync = promisify(execFile);
 
-/** Pulls the outermost JSON object out of a text answer that may have prose around it. */
-function extractJsonObject(text: string): string {
+/**
+ * Fallback for the missing `--json-schema` flag (see module comment): copilot
+ * only ever sees a schema's constraints as prose folded into the prompt (see
+ * promptText.ts), so nothing stops it from answering with, say, a string a
+ * few characters over its `maxLength`. Rather than let that turn into a
+ * downstream Zod "too_big" failure (e.g. captureIntent.ts's 72-char commit
+ * subject), walk the parsed answer against the schema it was asked to match
+ * and clip any oversize string to fit — a shortened field beats failing the
+ * whole run over one miscounted constraint.
+ */
+function clipToSchema(value: unknown, schema: unknown): unknown {
+  if (schema === null || typeof schema !== 'object') return value;
+  const s = schema as { maxLength?: number; items?: unknown; properties?: Record<string, unknown> };
+  if (typeof value === 'string' && typeof s.maxLength === 'number' && value.length > s.maxLength) {
+    return value.slice(0, s.maxLength);
+  }
+  if (Array.isArray(value) && s.items) {
+    return value.map((item) => clipToSchema(item, s.items));
+  }
+  if (value !== null && typeof value === 'object' && s.properties) {
+    const clipped: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+    for (const [key, propSchema] of Object.entries(s.properties)) {
+      if (key in clipped) clipped[key] = clipToSchema(clipped[key], propSchema);
+    }
+    return clipped;
+  }
+  return value;
+}
+
+/**
+ * Pulls the outermost JSON object out of a text answer that may have prose
+ * around it, then clips any field the schema bounds with `maxLength` (see
+ * clipToSchema). Clipping is best-effort: unparsable JSON is returned as-is
+ * and left for the caller's own schema validation to reject with the real
+ * parse error.
+ */
+function extractJsonObject(text: string, schema?: object): string {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  return start !== -1 && end > start ? text.slice(start, end + 1) : text;
+  const jsonText = start !== -1 && end > start ? text.slice(start, end + 1) : text;
+  if (!schema) return jsonText;
+  try {
+    return JSON.stringify(clipToSchema(JSON.parse(jsonText), schema));
+  } catch {
+    return jsonText;
+  }
 }
 
 /** Copilot's `--model` takes its own model names, not the Claude CLI aliases config defaults to (see module comment). */
@@ -85,7 +126,7 @@ export const copilotAdapter: AgentAdapter = {
     const { stdout } = await invocation;
 
     return {
-      text: opts.jsonSchema ? extractJsonObject(stdout) : stdout.trim(),
+      text: opts.jsonSchema ? extractJsonObject(stdout, opts.jsonSchema) : stdout.trim(),
       sessionId: sessionName,
       durationMs: Date.now() - start,
     };
