@@ -53,7 +53,8 @@ const INTENT_SCHEMA = {
       type: 'string',
       maxLength: COMMIT_MESSAGE_MAX_LENGTH,
       description:
-        `A single-line conventional-commit subject (e.g. "fix: handle empty diff"), max ${COMMIT_MESSAGE_MAX_LENGTH} characters. ` +
+        `A single-line conventional-commit subject (e.g. "fix: handle empty diff"). HARD LIMIT: ${COMMIT_MESSAGE_MAX_LENGTH} characters, ` +
+        `count them before answering — if you are close to ${COMMIT_MESSAGE_MAX_LENGTH}, shorten the wording rather than risk going over. ` +
         'Used verbatim as both the git commit message and the MR/PR title — no body, bullet list, or line breaks.',
     },
     fileChanges: {
@@ -203,7 +204,8 @@ export async function captureIntent(agent: AgentAdapter, files: string[], worktr
     'Respond with a JSON object matching the given schema: why this change exists, a short summary of what changed, ' +
     `the kind of change (${CHANGE_TYPES.join('/')}), a short kebab-case branch slug describing the change ` +
     '(no prefix, path, or ticket id — those are added separately), a short single-line conventional-commit ' +
-    `subject (max ${COMMIT_MESSAGE_MAX_LENGTH} characters, no body or bullet list, used verbatim as the MR/PR title), ` +
+    `subject (HARD LIMIT ${COMMIT_MESSAGE_MAX_LENGTH} characters — count before answering, no body or bullet list, ` +
+    'used verbatim as the MR/PR title), ' +
     'a one-line summary per changed file, a risk level with a one-line justification ' +
     `(${RISK_CRITERIA}), and the concrete test scenarios a reviewer should check before merging.`;
 
