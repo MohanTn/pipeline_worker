@@ -640,6 +640,17 @@ export async function watchPipeline(
   mrIid: number,
   state: RunState,
   repoRoot: string,
+  /**
+   * The id of whatever pipeline the forge already reported as latest for
+   * this MR/PR *before* the caller's push (see openMergeRequest.ts's
+   * appendToMergeRequest). Without this, the very first poll below can see
+   * that pre-existing, already-terminal pipeline as "latest" — the forge
+   * takes a beat to register a new one after a push — and mistake it for the
+   * pipeline this run's own push triggers, reporting a stale result instead
+   * of waiting for the real one. Undefined for a brand new MR/PR, which has
+   * no pipeline history to be confused with.
+   */
+  initialPreviousPipelineId?: number,
 ): Promise<void> {
   const intervalMs = config.pollIntervalSeconds * 1000;
   const ciConfigured = await hasCiConfig(worktreePath, forge, config.forge);
@@ -647,7 +658,7 @@ export async function watchPipeline(
   recordEvent(repoRoot, state, 'Started watching pipeline');
   startStep('ci-watch', { detail: `poll CI every ${config.pollIntervalSeconds}s` });
 
-  let previousPipelineId: number | undefined;
+  let previousPipelineId: number | undefined = initialPreviousPipelineId;
   let waitCount = 0;
   for (;;) {
     // Each poll cycle is its own child row, so a run that needed three

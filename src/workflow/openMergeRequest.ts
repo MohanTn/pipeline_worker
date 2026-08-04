@@ -73,6 +73,15 @@ export function appendSection(existingDescription: string, section: string): str
  * Deliberately does not touch auto-merge or the title: both may have been
  * changed by a human since the MR/PR was opened, and a follow-up commit is no
  * reason to overrule them.
+ *
+ * Returns the id of whatever pipeline the forge reports as latest for this
+ * MR/PR *before* the push below — the caller (ensureMergeRequest) threads it
+ * into watchPipeline as the id to treat as stale. GitLab/GitHub both take a
+ * beat to register a new pipeline after a push; without this, the CI-watch
+ * loop's very first poll can see that pre-existing (already terminal)
+ * pipeline as "latest" and mistake it for the one this push triggers,
+ * reporting a stale pass/fail instead of waiting for the real one.
+ * `undefined` when the MR/PR has no pipeline at all yet.
  */
 export async function appendToMergeRequest(
   forge: ForgeClient,
@@ -81,7 +90,10 @@ export async function appendToMergeRequest(
   intent: CapturedIntent,
   agentName: string,
   checks: CheckResult[],
-): Promise<void> {
+): Promise<number | undefined> {
+  const pipelinesBeforePush = await forge.getMrPipelines(mr.iid);
+  const priorPipelineId = pipelinesBeforePush[0]?.id;
+
   await runStep('push', `push this commit onto ${mr.sourceBranch}, the branch of ${mr.webUrl}`, () => push(worktreePath, 'origin', mr.sourceBranch));
 
   await runStep('mr', `appending the file-wise breakdown to ${mr.webUrl}'s description`, async () => {
@@ -100,6 +112,7 @@ export async function appendToMergeRequest(
     }
   });
   note(mr.webUrl);
+  return priorPipelineId;
 }
 
 /**
