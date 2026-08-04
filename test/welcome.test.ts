@@ -55,3 +55,8 @@ test('agentDescription names the configured agent, not a hardcoded fallback — 
   assert.match(line, /^little-coder/);
   assert.match(line, /llamacpp\/qwen3-30b/);
 });
+
+test('agentDescription names "agent default" for pi when no model was entered manually, instead of an empty pair of parens', () => {
+  const line = agentDescription(baseConfig({ agent: 'pi', intentModel: '' }));
+  assert.equal(line, 'pi (agent default for intent capture and CI fixes)');
+});

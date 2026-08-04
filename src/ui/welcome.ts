@@ -20,7 +20,10 @@ export function agentDescription(config: PipelineWorkerConfig): string {
   // is the only one whose line can't name a model. Every other agent — and
   // any added later — reports the intent model it was configured with.
   if (config.agent === "copilot") return "copilot";
-  return `${config.agent} (${config.intentModel} for intent capture, default model for CI fixes)`;
+  // intentModel defaults to '' on pi/little-coder (see config/loader.ts) —
+  // named as "agent default" rather than printing an empty pair of parens.
+  const model = config.intentModel || "agent default";
+  return `${config.agent} (${model} for intent capture and CI fixes)`;
 }
 
 export async function printWelcome(

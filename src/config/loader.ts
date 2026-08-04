@@ -52,6 +52,10 @@ export const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test
   branchPattern: 'pipeline-worker/{name}',
   cleanupOnSuccess: true,
   cleanupEarly: false,
+  // The claude/copilot alias default; agents whose CLI takes a provider/id
+  // instead (pi, little-coder) never see this literal — loadConfig resolves
+  // their default to '' via defaultAliasModel, so the model has to be
+  // entered manually in the settings file.
   intentModel: 'haiku',
   bareAgentMode: true,
   littleCoder: {
@@ -176,9 +180,17 @@ function stringOr(value: string | undefined, fallback: string): string {
  */
 const ALIAS_MODEL_AGENTS: readonly AgentName[] = ['claude', 'copilot'];
 
-/** The reviewModel default for this agent: the named default where an alias means something, the adapter's own default where it does not. */
-function defaultReviewModel(agent: AgentName): string {
-  return ALIAS_MODEL_AGENTS.includes(agent) ? DEFAULT_CONFIG.reviewModel : '';
+/**
+ * The default for a model-selection setting (`intentModel`, `reviewModel`) on
+ * this agent: the named alias where the CLI understands one, empty — leaving
+ * the choice to the agent CLI's own default, or to whatever the user types in
+ * — where it does not. pi always runs against `--provider github-copilot`
+ * (see agent/pi.ts) but that provider's own model ids don't map onto any
+ * alias here, so pi (and little-coder) never gets a hardcoded guess and the
+ * model has to be entered manually.
+ */
+function defaultAliasModel(agent: AgentName, aliasDefault: string): string {
+  return ALIAS_MODEL_AGENTS.includes(agent) ? aliasDefault : '';
 }
 
 /** GitLab project ids are either numeric or a 'group/subgroup/project' path; numeric strings are coerced, everything else is kept as-is. */
@@ -327,7 +339,9 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     branchPattern: str(settings.branchPattern) || DEFAULT_CONFIG.branchPattern,
     cleanupOnSuccess: boolean('cleanupOnSuccess', settings.cleanupOnSuccess, DEFAULT_CONFIG.cleanupOnSuccess),
     cleanupEarly: boolean('cleanupEarly', settings.cleanupEarly, DEFAULT_CONFIG.cleanupEarly),
-    intentModel: str(settings.intentModel) || DEFAULT_CONFIG.intentModel,
+    // stringOr, not `||`: an explicit "" is the documented escape hatch for
+    // "let the agent CLI pick", same as reviewModel below.
+    intentModel: stringOr(str(settings.intentModel), defaultAliasModel(agent, DEFAULT_CONFIG.intentModel)),
     bareAgentMode,
     littleCoder: buildLittleCoderSection(section(settings, 'littleCoder')),
     runLintAndTest: boolean('runLintAndTest', settings.runLintAndTest, DEFAULT_CONFIG.runLintAndTest),
@@ -339,7 +353,7 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     review: boolean('review', settings.review, DEFAULT_CONFIG.review),
     // stringOr, not `||`: an explicit "" is the documented escape hatch for
     // "let the agent CLI pick", and must not fall through to the named default.
-    reviewModel: stringOr(str(settings.reviewModel), defaultReviewModel(agent)),
+    reviewModel: stringOr(str(settings.reviewModel), defaultAliasModel(agent, DEFAULT_CONFIG.reviewModel)),
     reviewMinSeverity: pickSeverity(settings.reviewMinSeverity, DEFAULT_CONFIG.reviewMinSeverity),
     reviewMaxComments: positiveNumber(settings.reviewMaxComments, DEFAULT_CONFIG.reviewMaxComments),
     reviewChunkChars: positiveNumber(settings.reviewChunkChars, DEFAULT_CONFIG.reviewChunkChars),

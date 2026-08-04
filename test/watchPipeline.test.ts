@@ -286,6 +286,31 @@ test('runCiFixAttempt: fix passes local checks on the first try — 1 agent call
   }
 });
 
+test('runCiFixAttempt: passes config.intentModel to the fix turn, not a hardcoded alias — pi/little-coder rely on this to avoid getting a name their CLI has never heard of', async () => {
+  const { worktreePath, originDir, stateRoot } = await makeRepoOnBranch('fix/model-passthrough');
+  try {
+    const modelsSeen: (string | undefined)[] = [];
+    const agent: AgentAdapter = {
+      invoke: async (opts) => {
+        modelsSeen.push(opts.model);
+        writeFileSync(join(opts.cwd, 'FIXED'), 'x');
+        return { text: 'fixed it' };
+      },
+    };
+    const state = fixLoopState('fix/model-passthrough');
+    state.worktreePath = worktreePath;
+    const forge = fixLoopForge();
+
+    await runCiFixAttempt(forge, fixLoopConfig({ intentModel: 'github-copilot/gpt-4.1' }), agent, worktreePath, 'fix/model-passthrough', 1, FAILED_PIPELINE, state, stateRoot);
+
+    assert.deepEqual(modelsSeen, ['github-copilot/gpt-4.1']);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(stateRoot, { recursive: true, force: true });
+  }
+});
+
 test('runCiFixAttempt: fix fails locally once, passes on retry — 2 agent calls, exactly 1 push', async () => {
   const { worktreePath, originDir, stateRoot } = await makeRepoOnBranch('fix/retry-once');
   try {
@@ -400,9 +425,11 @@ test('tryResolveConflicts: clean merge, local check fails once, then passes — 
     // so the local check fails exactly once on that first, agent-less iteration; the
     // agent's single call (loop-back iteration) fixes it immediately.
     let calls = 0;
+    const modelsSeen: (string | undefined)[] = [];
     const agent: AgentAdapter = {
       invoke: async (opts) => {
         calls += 1;
+        modelsSeen.push(opts.model);
         writeFileSync(join(opts.cwd, 'FIXED'), 'x');
         return { text: `attempt ${calls}` };
       },
@@ -411,10 +438,22 @@ test('tryResolveConflicts: clean merge, local check fails once, then passes — 
     state.worktreePath = worktreePath;
     const forge = fixLoopForge();
 
-    const resolved = await tryResolveConflicts(forge, agent, fixLoopConfig(), worktreePath, 'conflict/clean-merge-retry', 'main', 1, state, stateRoot);
+    const resolved = await tryResolveConflicts(
+      forge,
+      agent,
+      fixLoopConfig({ intentModel: 'github-copilot/gpt-4.1' }),
+      worktreePath,
+      'conflict/clean-merge-retry',
+      'main',
+      1,
+      state,
+      stateRoot,
+    );
 
     assert.equal(resolved, true);
     assert.equal(calls, 1); // the merge itself needed no agent help; only the post-merge local-check failure did
+    // config.intentModel, not a hardcoded 'haiku' — pi/little-coder rely on this being the configured model, not an alias their CLI has never heard of.
+    assert.deepEqual(modelsSeen, ['github-copilot/gpt-4.1']);
     assert.equal(state.conflictAttempt, 2);
     assert.equal(await commitCountOn(originDir, 'conflict/clean-merge-retry'), await commitCountOn(worktreePath)); // fully pushed, local and origin match
   } finally {

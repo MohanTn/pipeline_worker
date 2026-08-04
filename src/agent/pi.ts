@@ -5,11 +5,17 @@
  * for session labelling.
  *
  * Pi supports any model from its extensive provider list: Anthropic, OpenAI,
- * Google Gemini, DeepSeek, Groq, OpenRouter, etc. Users configure their
- * provider/api-key via pi's own setup (`/login`) or env vars; this adapter
- * passes through `opts.model` (e.g. the configured
- * `PIPELINE_WORKER_INTENT_MODEL`) so each invocation can use a different
- * model.
+ * Google Gemini, DeepSeek, Groq, OpenRouter, etc. This adapter always runs pi
+ * against the `github-copilot` provider (`--provider github-copilot`), so the
+ * only credential pi needs is whatever `copilot`/`gh` auth is already on the
+ * machine. There is no default model for that provider baked in here — pi's
+ * own model ids under `github-copilot` (e.g. `gpt-4.1`, `claude-sonnet-4.5`)
+ * don't line up with the `haiku`/`sonnet` aliases the config's other agents
+ * use, so naming one here would just be a different wrong guess. Set
+ * `intentModel`/`reviewModel` to a model id pi recognizes for this provider;
+ * left unset, no `--model` flag is sent and pi's own default for the
+ * provider is used. This adapter passes through `opts.model` as-is so each
+ * invocation can use a different model.
  *
  * Known gaps vs the Claude adapter, handled here:
  *  - no structured-output/JSON-schema flag -> the schema is embedded in the
@@ -74,7 +80,7 @@ function extractJsonObject(text: string): string {
 
 export const piAdapter: AgentAdapter = {
   async invoke(opts: AgentInvokeOptions): Promise<AgentInvokeResult> {
-    const args: string[] = ['-p'];
+    const args: string[] = ['-p', '--provider', 'github-copilot'];
 
     if (opts.model) {
       args.push('--model', opts.model);

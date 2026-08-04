@@ -228,6 +228,26 @@ test('loadConfig defaults intentModel to haiku, runLintAndTest to true, plainOut
   });
 });
 
+// pi (always run with --provider github-copilot, see agent/pi.ts) and
+// little-coder take a provider/id, so the claude/copilot `haiku` alias would
+// name a model neither runtime has ever heard of — they keep no default and
+// the user has to enter a model id manually, same treatment as reviewModel.
+test('loadConfig leaves intentModel empty for the agents whose CLI takes a provider/id, not an alias', () => {
+  withTempDir((dir) => {
+    for (const agent of ['pi', 'little-coder']) {
+      writeSettings({ agent });
+      assert.equal(loadConfig(dir).intentModel, '', `expected ${agent} to keep its adapter default`);
+    }
+  });
+});
+
+test('an explicit intentModel in the settings file always wins, even for pi/little-coder', () => {
+  withTempDir((dir) => {
+    writeSettings({ agent: 'pi', intentModel: 'github-copilot/gpt-4.1' });
+    assert.equal(loadConfig(dir).intentModel, 'github-copilot/gpt-4.1');
+  });
+});
+
 // An empty reviewModel sends no model flag, leaving the agent CLI to pick its
 // own newest default — which an OAuth/subscription sign-in may not be able to
 // reach, so the review step failed outright until this key was set by hand.

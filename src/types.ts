@@ -32,7 +32,15 @@ export interface PipelineWorkerConfig {
   test: string;
   maxFixAttempts: number;
   pollIntervalSeconds: number;
-  /** Model passed to the agent for the intent-capture step (see captureIntent.ts). Ignored by adapters with no per-invocation model selection (e.g. copilot). */
+  /**
+   * Model passed to the agent for the intent-capture step (see
+   * captureIntent.ts) and reused for CI/local-check fix turns (see
+   * watchPipeline.ts) — the "cheap, fast" model slot. Defaults to a named
+   * alias (`haiku`) on claude/copilot; empty on pi/little-coder, which take a
+   * provider/id rather than an alias, so there is no safe default to guess —
+   * enter a model id those CLIs recognize, or leave it empty to let the CLI
+   * pick its own default.
+   */
   intentModel: string;
   /**
    * Run every agent turn as lean as the CLI allows: for `claude`, `--bare`
