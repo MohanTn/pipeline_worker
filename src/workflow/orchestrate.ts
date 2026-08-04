@@ -461,19 +461,26 @@ async function ensureCommit(ctx: PipelineContext, state: RunState, intent: Captu
  * ran pipeline-worker again" case — nothing new is opened, the file-wise
  * breakdown is appended to the same description).
  */
+/**
+ * `priorPipelineId` is the id of whatever pipeline the forge already reports
+ * as latest for this MR/PR *before* this stage's push (undefined for a brand
+ * new MR/PR, which has no pipeline history to be confused with) — the caller
+ * threads it into watchPipeline so the CI-watch loop's first poll never mistakes
+ * that pre-existing pipeline for the one this run's push triggers.
+ */
 async function ensureMergeRequest(
   ctx: PipelineContext,
   state: RunState,
   intent: CapturedIntent,
   checks: CheckResult[],
   cursor: StageCursor,
-): Promise<MergeRequest> {
+): Promise<{ mr: MergeRequest; priorPipelineId: number | undefined }> {
   cursor.stage = 'mr';
   if (ctx.followUpMr) {
-    await appendToMergeRequest(ctx.forge, ctx.worktreePath, ctx.followUpMr, intent, ctx.config.agent, checks);
+    const priorPipelineId = await appendToMergeRequest(ctx.forge, ctx.worktreePath, ctx.followUpMr, intent, ctx.config.agent, checks);
     recordMrOnState(state, ctx.followUpMr);
     recordEvent(ctx.repoRoot, state, `Added a follow-up commit to existing MR/PR ${ctx.followUpMr.webUrl}`);
-    return ctx.followUpMr;
+    return { mr: ctx.followUpMr, priorPipelineId };
   }
   const mr = await openMergeRequest(
     ctx.forge,
@@ -488,7 +495,7 @@ async function ensureMergeRequest(
   );
   recordMrOnState(state, mr);
   recordEvent(ctx.repoRoot, state, `Opened MR/PR ${mr.webUrl}`);
-  return mr;
+  return { mr, priorPipelineId: undefined };
 }
 
 /**
@@ -685,7 +692,7 @@ async function runPipeline(
 
   const intent = await ensureIntent(ctx, state, cursor);
   await ensureCommit(ctx, state, intent, cursor);
-  const mr = await ensureMergeRequest(ctx, state, intent, checks, cursor);
+  const { mr, priorPipelineId } = await ensureMergeRequest(ctx, state, intent, checks, cursor);
 
   // Line-anchored review of what this run is about to ask CI (and a human) to
   // accept. A follow-up run is scoped to the files it just touched: the rest
@@ -709,7 +716,7 @@ async function runPipeline(
   await maybeCleanupEarly(ctx.config, ctx.repoRoot, state.untrackedFiles ?? [], state.branch, releaseLock);
 
   cursor.stage = 'ci-watch';
-  await watchPipeline(ctx.forge, ctx.config, ctx.agent, ctx.worktreePath, state.branch, ctx.targetBranch, mr.iid, state, ctx.repoRoot);
+  await watchPipeline(ctx.forge, ctx.config, ctx.agent, ctx.worktreePath, state.branch, ctx.targetBranch, mr.iid, state, ctx.repoRoot, priorPipelineId);
 
   // watchPipeline mutates state.phase in place; go through a function
   // boundary so TS uses the declared RunPhase return type instead of the

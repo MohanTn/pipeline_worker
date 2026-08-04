@@ -211,13 +211,38 @@ test("appendToMergeRequest pushes the worktree's HEAD onto the MR/PR's branch an
       },
     });
 
-    await appendToMergeRequest(forge, worktreePath, mr, INTENT, 'claude', CHECKS);
+    const priorPipelineId = await appendToMergeRequest(forge, worktreePath, mr, INTENT, 'claude', CHECKS);
 
     const { stdout: pushedSha } = await execFileAsync('git', ['rev-parse', 'feature/reviewed'], { cwd: originDir });
     assert.equal(pushedSha.trim(), localSha.trim(), "the MR/PR's branch on origin should now point at this run's commit");
     assert.equal(updated?.mrIid, 12);
     assert.match(updated!.description, /^Original description\.\n\n---\n\n### 🔁 Follow-up: feat: add login page/);
     assert.match(updated!.description, /- `src\/login\.ts`: Adds the login form component\./);
+    assert.equal(priorPipelineId, undefined, 'no pipeline existed for this MR/PR before the push');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('appendToMergeRequest returns whatever pipeline was latest for the MR/PR before its push, so the caller can tell watchPipeline not to mistake it for the one this push triggers', async () => {
+  const { worktreePath, originDir } = await makeRepoOnBranch('feature/reviewed-2');
+  try {
+    await execFileAsync('git', ['checkout', '-q', '-b', 'pipeline-worker/tmp-def5678'], { cwd: worktreePath });
+    writeFileSync(join(worktreePath, 'file.txt'), 'reviewer asked for this too\n');
+    await execFileAsync('git', ['commit', '-q', '-am', 'fix: address another review comment'], { cwd: worktreePath });
+
+    const mr: MergeRequest = { iid: 13, webUrl: 'http://example/mr/13', sourceBranch: 'feature/reviewed-2', targetBranch: 'main', state: 'open' };
+    const staleePipeline = { id: 42, status: 'success' as const, webUrl: 'http://example/pipelines/42' };
+    const forge = mrForgeStub({
+      getMrPipelines: async () => [staleePipeline],
+      getMrDescription: async () => ({ text: 'Original description.' }),
+      updateMrDescription: async () => {},
+    });
+
+    const priorPipelineId = await appendToMergeRequest(forge, worktreePath, mr, INTENT, 'claude', CHECKS);
+
+    assert.equal(priorPipelineId, 42, "the pipeline that already existed before this push must be reported so it isn't mistaken for the push's own pipeline");
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
