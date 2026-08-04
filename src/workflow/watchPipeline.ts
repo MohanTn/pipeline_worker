@@ -422,8 +422,10 @@ export async function tryResolveConflicts(
         `asking the agent to fix the ${lastLocalFailure.name} failure the merge introduced`,
         // No allowedTools: unlike a conflict edit, fixing a broken build
         // legitimately needs to run the failing command to see it pass.
-        // model: 'haiku' — pipeline fix turns run on the cheaper model.
-        () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: 'haiku' }),
+        // model: config.intentModel — fix turns reuse the cheap intent-capture
+        // model rather than a hardcoded alias, so pi/little-coder (which take
+        // a provider/id, not an alias) never get handed a name they've never heard of.
+        () => agent.invoke({ prompt: buildLocalCheckFixPrompt(lastLocalFailure!), systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: config.intentModel }),
       );
       reportAgentInvocation(agentResult, worktreePath);
       recordAgentTokens(repoRoot, state, 'fix local check failure after merge', agentResult.usage);
@@ -540,8 +542,8 @@ export async function runCiFixAttempt(
         : `asking the agent to diagnose and fix ${pipeline.webUrl} — pulling the failed job logs first`,
       // No allowedTools here either: this turn needs shell access for the
       // forge CLI (glab/gh, as a fallback) plus edit tools to apply the fix.
-      // model: 'haiku' — pipeline fix turns run on the cheaper model.
-      () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: 'haiku' }),
+      // model: config.intentModel — see the matching comment in tryResolveConflicts above.
+      () => agent.invoke({ prompt, systemPrompt: FIX_SYSTEM, cwd: worktreePath, permissionMode: 'acceptEdits', model: config.intentModel }),
     );
     reportAgentInvocation(agentResult, worktreePath);
     recordAgentTokens(repoRoot, state, 'fix CI failure', agentResult.usage);

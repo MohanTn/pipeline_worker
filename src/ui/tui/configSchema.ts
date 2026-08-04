@@ -59,7 +59,7 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     label: 'intentModel',
     group: 'Agent & forge',
     kind: 'string',
-    doc: 'Model used for the cheap intent-capture turn that summarizes your diff and names the branch. A small/fast model is the right choice here. Ignored by copilot, which has no per-invocation model selection.',
+    doc: 'Model used for the cheap intent-capture turn that summarizes your diff and names the branch, and reused for CI/local-check fix turns. A small/fast model is the right choice here. Defaults to "haiku" on claude/copilot; empty on pi and little-coder (they take a provider/id, not an alias — e.g. pi always runs with --provider github-copilot, so enter a model id that provider recognizes, or leave it empty for the CLI\'s own default).',
   },
   {
     path: 'bareAgentMode',
