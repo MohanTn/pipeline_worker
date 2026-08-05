@@ -96,6 +96,94 @@ test('prepareCommitHooks skips dotnet when there is no local-tool manifest', () 
     }
   }));
 
+/** Fake `dotnet` that writes the husky bootstrap on `dotnet husky install`, like the real Husky.Net CLI does. */
+const DOTNET_HUSKY_INSTALL_SCRIPT = 'if [ "$1" = "husky" ]; then mkdir -p .husky/_ && echo "#!/bin/sh" > .husky/_/husky.sh; fi\nexit 0';
+
+function captureConsoleError(): { messages: string[]; restore: () => void } {
+  const messages: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    messages.push(args.join(' '));
+  };
+  return { messages, restore: () => (console.error = original) };
+}
+
+test('prepareCommitHooks runs "dotnet husky install" when the manifest declares Husky.Net, regenerating .husky/_/husky.sh', () =>
+  withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.husky'));
+    mkdirSync(join(dir, '.config'));
+    writeFileSync(join(dir, '.husky', 'pre-commit'), '#!/bin/sh\n. .husky/_/husky.sh\n');
+    writeFileSync(join(dir, '.config', 'dotnet-tools.json'), JSON.stringify({ tools: { husky: { version: '0.7.2' } } }));
+    const dotnet = withFakeBinary('dotnet', DOTNET_HUSKY_INSTALL_SCRIPT);
+    try {
+      await withPath(dotnet.binDir, () => prepareCommitHooks(dir));
+      assert.match(readFileSync(dotnet.argsFile, 'utf-8'), /tool restore/);
+      assert.match(readFileSync(dotnet.argsFile, 'utf-8'), /husky install/);
+      assert.ok(existsSync(join(dir, '.husky', '_', 'husky.sh')));
+    } finally {
+      dotnet.cleanup();
+    }
+  }));
+
+test('prepareCommitHooks skips "dotnet husky install" when the manifest declares no husky tool', () =>
+  withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.husky'));
+    mkdirSync(join(dir, '.config'));
+    writeFileSync(join(dir, '.config', 'dotnet-tools.json'), JSON.stringify({ tools: { csharpier: {} } }));
+    const dotnet = withFakeBinary('dotnet', 'exit 0');
+    try {
+      await withPath(dotnet.binDir, () => prepareCommitHooks(dir));
+      assert.doesNotMatch(readArgs(dotnet.argsFile), /husky install/);
+    } finally {
+      dotnet.cleanup();
+    }
+  }));
+
+test('prepareCommitHooks skips "dotnet husky install" when there is no .husky dir', () =>
+  withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.config'));
+    writeFileSync(join(dir, '.config', 'dotnet-tools.json'), JSON.stringify({ tools: { husky: {} } }));
+    const dotnet = withFakeBinary('dotnet', DOTNET_HUSKY_INSTALL_SCRIPT);
+    try {
+      await withPath(dotnet.binDir, () => prepareCommitHooks(dir));
+      assert.doesNotMatch(readArgs(dotnet.argsFile), /husky install/);
+    } finally {
+      dotnet.cleanup();
+    }
+  }));
+
+test('prepareCommitHooks warns when "dotnet husky install" leaves .husky/_/husky.sh missing', () =>
+  withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.husky'));
+    mkdirSync(join(dir, '.config'));
+    writeFileSync(join(dir, '.config', 'dotnet-tools.json'), JSON.stringify({ tools: { husky: {} } }));
+    const dotnet = withFakeBinary('dotnet', 'exit 0');
+    const logs = captureConsoleError();
+    try {
+      await withPath(dotnet.binDir, () => prepareCommitHooks(dir));
+      assert.ok(logs.messages.some((message) => message.includes('.husky/_/husky.sh missing')));
+    } finally {
+      logs.restore();
+      dotnet.cleanup();
+    }
+  }));
+
+test('prepareCommitHooks skips "dotnet husky install" when "dotnet tool restore" fails', () =>
+  withTempDir(async (dir) => {
+    mkdirSync(join(dir, '.husky'));
+    mkdirSync(join(dir, '.config'));
+    writeFileSync(join(dir, '.config', 'dotnet-tools.json'), JSON.stringify({ tools: { husky: {} } }));
+    const dotnet = withFakeBinary('dotnet', 'exit 1');
+    const logs = captureConsoleError();
+    try {
+      await withPath(dotnet.binDir, () => prepareCommitHooks(dir));
+      assert.doesNotMatch(readArgs(dotnet.argsFile), /husky install/);
+    } finally {
+      logs.restore();
+      dotnet.cleanup();
+    }
+  }));
+
 test('prepareCommitHooks never throws, even when both commands fail', () =>
   withTempDir(async (dir) => {
     mkdirSync(join(dir, '.husky'));
