@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CORRECTION_LEAD,
+  RESOLUTION_LEAD,
   buildCommentReplyPrompt,
   gateReplies,
   isOwnComment,
@@ -45,6 +46,7 @@ test('the prompt states the configured floor, the correction opening, and the fo
   const prompt = buildCommentReplyPrompt([comment()], '--- File: app.ts\n1 | const a = 1;', 'CRITICAL', '```suggestion:-0+0');
   assert.match(prompt, /whose severity is CRITICAL or worse/);
   assert.match(prompt, new RegExp(CORRECTION_LEAD));
+  assert.match(prompt, new RegExp(RESOLUTION_LEAD));
   assert.match(prompt, /```suggestion:-0\+0/);
   assert.match(prompt, /### Thread 1 — @alice/);
 });
@@ -66,6 +68,12 @@ test('gateReplies drops a support reply under the floor but keeps a correction a
   ];
   const kept = gateReplies(replies, comments, 'MAJOR', 10);
   assert.deepEqual(kept.map((entry) => entry.comment.id), ['b'], 'a misdirection is corrected regardless of how serious it is');
+});
+
+test('gateReplies keeps a resolution at any severity — a settled thread is closed however small the point was', () => {
+  const comments = [comment({ id: 'a' })];
+  const replies: CommentReply[] = [{ thread: 1, kind: 'resolve', severity: 'MINOR', reply: 'the env lookup replaced it' }];
+  assert.deepEqual(gateReplies(replies, comments, 'CRITICAL', 10).map((entry) => entry.reply.kind), ['resolve']);
 });
 
 test('gateReplies ignores a thread number the prompt never showed and answers each thread once', () => {
@@ -108,6 +116,16 @@ test('a correction the agent already opened correctly is not double-prefixed', (
     'claude',
   );
   assert.equal(body.indexOf(CORRECTION_LEAD), body.lastIndexOf(CORRECTION_LEAD));
+});
+
+test('a resolution always opens with its own lead, so the reason is inside the thread being closed', () => {
+  const body = renderReplyBody(
+    { comment: comment(), reply: { thread: 1, kind: 'resolve', severity: 'CRITICAL', reply: 'app.ts:1 now reads the token from the environment.' } },
+    'github',
+    'claude',
+  );
+  assert.ok(body.startsWith(`${RESOLUTION_LEAD} app.ts:1 now reads the token from the environment.`));
+  assert.equal(body.includes(CORRECTION_LEAD), false);
 });
 
 test('a reply to an unthreadable comment quotes the original, since it lands as a new top-level comment', () => {

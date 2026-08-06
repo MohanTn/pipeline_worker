@@ -369,6 +369,7 @@ const REVIEW_THREADS = {
         reviewThreads: {
           nodes: [
             {
+              id: 'RT_kwDOthread1',
               isResolved: false,
               comments: {
                 nodes: [
@@ -377,7 +378,11 @@ const REVIEW_THREADS = {
                 ],
               },
             },
-            { isResolved: true, comments: { nodes: [{ databaseId: 20, body: 'settled', path: 'a.ts', line: 1, url: null, author: { login: 'carol' } }] } },
+            {
+              id: 'RT_kwDOthread2',
+              isResolved: true,
+              comments: { nodes: [{ databaseId: 20, body: 'settled', path: 'a.ts', line: 1, url: null, author: { login: 'carol' } }] },
+            },
           ],
         },
       },
@@ -405,11 +410,42 @@ test('listMrComments returns unresolved review threads as one text thread each, 
         { id: comments[1].id, author: comments[1].author, threadable: comments[1].threadable },
         { id: 'issue:55', author: 'sonarqube[bot]', threadable: false },
       );
+      // Resolving takes the *thread* node id, not the comment id replies use;
+      // a PR-level comment has no thread to resolve at all.
+      assert.equal(comments[0].resolvableId, 'RT_kwDOthread1');
+      assert.equal(comments[1].resolvableId, undefined);
     });
     assert.equal(requests[0].path, '/graphql');
     assert.equal(requests[1].path, '/repos/acme/widgets/issues/7/comments?per_page=100');
   } finally {
     server.close();
+  }
+});
+
+test('resolveComment closes the thread through the GraphQL mutation, and surfaces a refusal', async () => {
+  const ok = await startCommentsStub({ data: { resolveReviewThread: { thread: { isResolved: true } } } }, []);
+  try {
+    await withGithubApi(`http://127.0.0.1:${ok.port}`, async () => {
+      await createGithubForge(githubConfig()).resolveComment(7, 'RT_kwDOthread1');
+    });
+    assert.equal(ok.requests[0].path, '/graphql');
+    const sent = ok.requests[0].body as { query: string; variables: { threadId: string } };
+    assert.match(sent.query, /resolveReviewThread/);
+    assert.deepEqual(sent.variables, { threadId: 'RT_kwDOthread1' });
+  } finally {
+    ok.server.close();
+  }
+
+  const denied = await startCommentsStub({ errors: [{ message: 'Resource not accessible by integration' }] }, []);
+  try {
+    await withGithubApi(`http://127.0.0.1:${denied.port}`, async () => {
+      await assert.rejects(
+        () => createGithubForge(githubConfig()).resolveComment(7, 'RT_kwDOthread1'),
+        /resolveReviewThread failed: Resource not accessible by integration/,
+      );
+    });
+  } finally {
+    denied.server.close();
   }
 });
 

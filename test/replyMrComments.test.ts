@@ -102,6 +102,7 @@ function forgeStub(comments: MrComment[] = []): ForgeClient {
     createInlineComment: async () => ({ id: 1 }),
     listMrComments: async () => comments,
     replyToComment: async () => ({ id: 1 }),
+    resolveComment: async () => {},
     hasMergeConflicts: async () => false,
     isMrMerged: async () => false,
     enableAutoMerge: async () => {
@@ -190,6 +191,73 @@ test('a MINOR agreement is dropped by the severity floor while a MINOR correctio
 
     assert.equal(count, 1);
     assert.match(posted[0], /^b:This is not recommended because: utils\.ts is not on this branch\./);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a thread the code already handles is answered and then resolved, so the MR stays clean', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const resolved: Array<{ mrIid: number; resolvableId: string }> = [];
+  const posted: string[] = [];
+  try {
+    const forge = forgeStub([mrComment({ id: 'd1', resolvableId: 'disc-1' })]);
+    forge.replyToComment = async (_mrIid, _commentId, body) => {
+      posted.push(body);
+      return { id: 1 };
+    };
+    forge.resolveComment = async (mrIid, resolvableId) => {
+      // The reply must already be in the thread when it is closed.
+      assert.equal(posted.length, 1);
+      resolved.push({ mrIid, resolvableId });
+    };
+    const payload = JSON.stringify({
+      replies: [{ thread: 1, kind: 'resolve', severity: 'CRITICAL', reply: 'app.ts:1 reads it from the environment now.' }],
+    });
+    const count = await maybeReplyToMrComments(forge, replyConfig(), agentReturning(payload), worktreePath, 'main', 7);
+
+    assert.equal(count, 1);
+    assert.deepEqual(resolved, [{ mrIid: 7, resolvableId: 'disc-1' }]);
+    assert.match(posted[0], /^Addressed by the current code: app\.ts:1 reads it from the environment now\./);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a supported or corrected thread is never resolved — only the code having handled it closes a thread', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  try {
+    const forge = forgeStub([mrComment({ resolvableId: 'disc-1' })]);
+    forge.resolveComment = async () => {
+      throw new Error('resolveComment must not be called');
+    };
+    assert.equal(await maybeReplyToMrComments(forge, replyConfig(), agentReturning(SUPPORT_PAYLOAD), worktreePath, 'main', 7), 1);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a refused resolve, and a thread the forge cannot resolve at all, still leave the reply standing', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const payload = JSON.stringify({
+    replies: [{ thread: 1, kind: 'resolve', severity: 'MAJOR', reply: 'handled in app.ts.' }],
+  });
+  try {
+    const refused = forgeStub([mrComment({ resolvableId: 'disc-1' })]);
+    refused.resolveComment = async () => {
+      throw new Error('403 forbidden');
+    };
+    assert.equal(await maybeReplyToMrComments(refused, replyConfig(), agentReturning(payload), worktreePath, 'main', 7), 1);
+
+    // A GitHub PR-level comment has no thread to resolve, so nothing is attempted.
+    const unresolvable = forgeStub([mrComment({ id: 'issue:5', threadable: false })]);
+    unresolvable.resolveComment = async () => {
+      throw new Error('resolveComment must not be called');
+    };
+    assert.equal(await maybeReplyToMrComments(unresolvable, replyConfig(), agentReturning(payload), worktreePath, 'main', 7), 1);
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });

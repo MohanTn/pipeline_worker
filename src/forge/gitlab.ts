@@ -192,6 +192,9 @@ function toMrComment(discussion: any): MrComment | undefined {
   const position = first.position ?? {};
   return {
     id: String(discussion.id),
+    // Only a resolvable discussion (one anchored to the diff) can be marked
+    // resolved; an MR-level discussion has no resolution state at all.
+    ...(notes.some((note: any) => note.resolvable === true) ? { resolvableId: String(discussion.id) } : {}),
     author: first.author?.username ?? 'unknown',
     body: renderThread(notes.map((note: any) => ({ author: note.author?.username ?? 'unknown', body: note.body ?? '' }))),
     ...(position.new_path ? { path: position.new_path } : {}),
@@ -319,6 +322,19 @@ export function createGitlabForge(config: PipelineWorkerConfig, executor?: GlabE
         { body },
       );
       return { id: raw.id };
+    },
+
+    async resolveComment(mrIid: number, resolvableId: string): Promise<void> {
+      await apiWrite(
+        exec,
+        auth,
+        `GitLab API PUT merge_requests/${mrIid}/discussions/${resolvableId}`,
+        'PUT',
+        projectPath(auth, `/merge_requests/${mrIid}/discussions/${encodeURIComponent(resolvableId)}`),
+        // A boolean goes through --field, so GitLab receives JSON true rather
+        // than the string "true", which it rejects (see apiWrite).
+        { resolved: true },
+      );
     },
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {
