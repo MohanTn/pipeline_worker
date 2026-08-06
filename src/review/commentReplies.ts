@@ -3,7 +3,7 @@
  * an MR/PR, read the threads already on it — human review comments and scanner
  * findings (SonarQube, Checkmarx, …) — and answer the ones worth answering.
  *
- * Two kinds of answer, and only two:
+ * Three kinds of answer, and only three:
  *
  *   support — the thread names a real problem in this diff, at or above the
  *             configured severity floor. The reply confirms it and says what
@@ -12,10 +12,15 @@
  *             that should not be done here (a scanner false positive, a
  *             suggestion that breaks something else). The reply opens with
  *             "This is not recommended because:" and gives the reason.
+ *   resolve — the thread was right, and the code under review already does
+ *             what it asked for. The reply says where, and the thread is then
+ *             marked resolved on the forge so the MR/PR stays clean.
  *
  * The severity floor gates `support` only. A misdirection is corrected
  * whatever its severity: a wrong steer left standing costs the author time
- * regardless of how serious the thing it points at would have been.
+ * regardless of how serious the thing it points at would have been. A settled
+ * thread is closed whatever its severity for the same reason — how serious the
+ * point once was says nothing about whether it still stands.
  *
  * Agent output is untrusted here exactly as in findings.ts — zod first, then
  * the gate — and the thread a reply names is an index into the list the prompt
@@ -29,7 +34,7 @@ import { SEVERITY_RANK, type ReviewSeverity } from './types.js';
 import type { MrComment } from '../forge/types.js';
 import type { ForgeName } from '../types.js';
 
-export type ReplyKind = 'support' | 'correct';
+export type ReplyKind = 'support' | 'correct' | 'resolve';
 
 export interface CommentReply {
   /** 1-based position in the thread list the prompt rendered. */
@@ -54,6 +59,9 @@ const OWN_COMMENT_MARKER = /pipeline-worker (review|reply) \(/;
 
 /** The opening a correction must carry, so a reader sees the verdict before the reasoning. */
 export const CORRECTION_LEAD = 'This is not recommended because:';
+
+/** The opening a resolution must carry — the thread is about to be closed, so the reason must be the first thing read. */
+export const RESOLUTION_LEAD = 'Addressed by the current code:';
 
 /** Long scanner dumps are common; a thread is worth this much of the prompt and no more. */
 const MAX_THREAD_CHARS = 4_000;
@@ -80,7 +88,8 @@ export function scannerLabel(comment: MrComment): string | undefined {
 export const COMMENT_REPLY_SYSTEM =
   'You are an elite, pragmatic Staff Software Engineer reviewing an open merge request. You are answering the ' +
   'comments other people and automated scanners have already left on it. You are decisive and specific: you confirm ' +
-  'a real problem and name its fix, or you say plainly that a suggestion should not be followed and why. You never ' +
+  'a real problem and name its fix, you say plainly that a suggestion should not be followed and why, or you close a ' +
+  'thread the code has already answered. You never ' +
   'reply just to agree, to thank, or to restate the comment. You judge every claim against the diff you are shown, ' +
   'including a scanner\'s: scanners report false positives, and an unchallenged one costs the author real time.';
 
@@ -96,20 +105,20 @@ export const COMMENT_REPLY_SCHEMA = {
           thread: { type: 'number', description: 'The number of the thread being answered, copied from its "### Thread N" header.' },
           kind: {
             type: 'string',
-            enum: ['support', 'correct'],
+            enum: ['support', 'correct', 'resolve'],
             description:
-              'support: the thread is right about a real problem in this diff. correct: the thread points at the wrong place, misreads the code, or recommends something that should not be done here.',
+              'support: the thread is right about a real problem still present in this diff. correct: the thread points at the wrong place, misreads the code, or recommends something that should not be done here. resolve: the thread was right and the code shown already does what it asked, so the thread is settled and will be marked resolved.',
           },
           severity: {
             type: 'string',
             enum: ['CRITICAL', 'MAJOR', 'MINOR'],
             description:
-              'For "support", how bad the problem the thread found is. For "correct", how much damage following the comment would do. CRITICAL: data loss, security hole, or guaranteed crash. MAJOR: a real bug or serious design defect. MINOR: everything else.',
+              'For "support", how bad the problem the thread found is. For "correct", how much damage following the comment would do. For "resolve", how bad the problem was before the code addressed it. CRITICAL: data loss, security hole, or guaranteed crash. MAJOR: a real bug or serious design defect. MINOR: everything else.',
           },
           reply: {
             type: 'string',
             description:
-              'Markdown, addressed to the thread. For "correct" it must begin with "This is not recommended because:" followed by the reason and, when there is one, the right place or the right fix instead.',
+              'Markdown, addressed to the thread. For "correct" it must begin with "This is not recommended because:" followed by the reason and, when there is one, the right place or the right fix instead. For "resolve" it must begin with "Addressed by the current code:" followed by where in the diff it is handled.',
           },
         },
         required: ['thread', 'kind', 'severity', 'reply'],
@@ -152,12 +161,17 @@ export function buildCommentReplyPrompt(comments: MrComment[], diffSections: str
     'the cause, misreads what the code does, or recommends a change that should not be made here (this includes a ' +
     'scanner false positive). Such a reply MUST begin with the exact words ' +
     `"${CORRECTION_LEAD}" and then give the reason, plus the right place or the right fix when you know it.\n` +
-    '3. Say nothing about a thread you would only be agreeing with, thanking, or summarizing. An empty replies list is ' +
+    '3. Reply with kind "resolve" when the thread asked for something the code below ALREADY does — the change it ' +
+    'requested is visible in the diff, or the line it objected to is gone. Such a reply MUST begin with the exact ' +
+    `words "${RESOLUTION_LEAD}" and then name where in the diff it is handled, because the thread will be marked ` +
+    'resolved and closed on the strength of that sentence. Use it only when the diff proves the point is settled; if ' +
+    'the fix is only partial, use "support" instead and say what is still missing.\n' +
+    '4. Say nothing about a thread you would only be agreeing with, thanking, or summarizing. An empty replies list is ' +
     'the correct answer for a merge request whose comments are all already right and already actionable.\n' +
-    '4. Base every judgement on the diff below. If the diff does not carry enough evidence to be sure the thread is ' +
-    'wrong, do not correct it.\n' +
-    `5. When a concrete fix fits on the lines under discussion, append a suggestion block:\n${fence}\n<corrected code>\n\`\`\`\n` +
-    '6. Set "thread" to the number in the "### Thread N" header of the thread you are answering.\n\n' +
+    '5. Base every judgement on the diff below. If the diff does not carry enough evidence to be sure the thread is ' +
+    'wrong, do not correct it, and if it does not prove the point is handled, do not resolve it.\n' +
+    `6. When a concrete fix fits on the lines under discussion, append a suggestion block:\n${fence}\n<corrected code>\n\`\`\`\n` +
+    '7. Set "thread" to the number in the "### Thread N" header of the thread you are answering.\n\n' +
     '### Open comment threads:\n' +
     `${renderThreads(comments)}\n\n` +
     '### Git Diff Data (gutter = line number in the new file):\n' +
@@ -167,7 +181,7 @@ export function buildCommentReplyPrompt(comments: MrComment[], diffSections: str
 
 const ReplyShape = z.object({
   thread: z.number().int().positive(),
-  kind: z.enum(['support', 'correct']),
+  kind: z.enum(['support', 'correct', 'resolve']),
   severity: z.enum(['CRITICAL', 'MAJOR', 'MINOR']),
   reply: z.string().min(1),
 });
@@ -199,8 +213,8 @@ export function parseReplies(text: string): CommentReply[] {
 /**
  * Applies the gate: a thread number the prompt never showed is dropped, one
  * thread gets at most one reply, `support` must clear the severity floor, and
- * the whole run is capped. A `correct` deliberately ignores the floor — see the
- * file header.
+ * the whole run is capped. `correct` and `resolve` deliberately ignore the
+ * floor — see the file header.
  */
 export function gateReplies(replies: CommentReply[], comments: MrComment[], minSeverity: ReviewSeverity, maxReplies: number): PreparedReply[] {
   const floor = SEVERITY_RANK[minSeverity];
@@ -220,13 +234,14 @@ export function gateReplies(replies: CommentReply[], comments: MrComment[], minS
 /**
  * The body actually posted. Three jobs: quote the original when the forge
  * cannot thread the reply under it (GitHub's PR-level comments), enforce the
- * correction opening the agent was asked for but does not reliably produce,
- * and sign it so the next run recognizes this thread as answered.
+ * kind's opening — which the agent was asked for but does not reliably produce
+ * — and sign it so the next run recognizes this thread as answered.
  */
 export function renderReplyBody(prepared: PreparedReply, forge: ForgeName, agentName: string): string {
   const { comment, reply } = prepared;
   const quote = comment.threadable ? '' : `> Replying to ${comment.url ? `[@${comment.author}'s comment](${comment.url})` : `@${comment.author}'s comment`}\n\n`;
   const text = reply.reply.trim();
-  const lead = reply.kind === 'correct' && !text.toLowerCase().startsWith(CORRECTION_LEAD.toLowerCase()) ? `${CORRECTION_LEAD} ` : '';
+  const required = reply.kind === 'correct' ? CORRECTION_LEAD : reply.kind === 'resolve' ? RESOLUTION_LEAD : '';
+  const lead = required && !text.toLowerCase().startsWith(required.toLowerCase()) ? `${required} ` : '';
   return `${quote}${lead}${normalizeSuggestionFence(text, forge)}\n\n_${reply.severity} · pipeline-worker reply (${agentName})_`;
 }

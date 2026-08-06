@@ -129,8 +129,12 @@ const ENABLE_AUTO_MERGE_MUTATION =
 const REVIEW_THREADS_QUERY =
   'query($owner: String!, $name: String!, $number: Int!) { ' +
   'repository(owner: $owner, name: $name) { pullRequest(number: $number) { ' +
-  'reviewThreads(first: 100) { nodes { isResolved comments(first: 50) { nodes { ' +
+  'reviewThreads(first: 100) { nodes { id isResolved comments(first: 50) { nodes { ' +
   'databaseId body path line url author { login } } } } } } } }';
+
+/** Resolving is GraphQL-only as well, and it takes the thread's node id — not the comment's databaseId that replies use. */
+const RESOLVE_THREAD_MUTATION =
+  'mutation($threadId: ID!) { resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } } }';
 
 /** Marks a PR-level (issue) comment id, which GitHub cannot thread a reply under — see MrComment.threadable. */
 const ISSUE_COMMENT_PREFIX = 'issue:';
@@ -145,6 +149,7 @@ interface GraphqlComment {
 }
 
 interface ReviewThreadNode {
+  id: string;
   isResolved: boolean;
   comments?: { nodes?: GraphqlComment[] };
 }
@@ -161,6 +166,9 @@ function toThreadComment(thread: ReviewThreadNode): MrComment | undefined {
     // The thread's *first* comment is the one /replies posts under: replying
     // to a later comment's id makes GitHub open a second thread on the line.
     id: String(first.databaseId),
+    // The thread's own node id, which is what resolveReviewThread takes — the
+    // databaseId above is a comment id and the mutation rejects it.
+    ...(thread.id ? { resolvableId: thread.id } : {}),
     author: first.author?.login ?? 'unknown',
     body: renderThread(notes.map((note) => ({ author: note.author?.login ?? 'unknown', body: note.body ?? '' }))),
     ...(first.path ? { path: first.path } : {}),
@@ -316,6 +324,13 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
         : `/pulls/${mrIid}/comments/${commentId}/replies`;
       const res = await githubRequest(auth, path, { method: 'POST', body: JSON.stringify({ body }) });
       return parseIdResponse(res);
+    },
+
+    async resolveComment(_mrIid: number, resolvableId: string): Promise<void> {
+      const body = await githubGraphqlRequest(auth, RESOLVE_THREAD_MUTATION, { threadId: resolvableId });
+      if (body.errors?.length) {
+        throw new Error(`GitHub GraphQL resolveReviewThread failed: ${body.errors.map((e) => e.message).join('; ')}`);
+      }
     },
 
     // scaffold:inject-client

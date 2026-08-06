@@ -265,8 +265,16 @@ const DISCUSSIONS = JSON.stringify([
   {
     id: 'def456',
     notes: [
-      { id: 2, system: false, resolved: false, body: 'This leaks a token.', author: { username: 'alice' }, position: { new_path: 'src/app.ts', new_line: 42 } },
-      { id: 3, system: false, resolved: false, body: 'Agreed.', author: { username: 'bob' } },
+      {
+        id: 2,
+        system: false,
+        resolved: false,
+        resolvable: true,
+        body: 'This leaks a token.',
+        author: { username: 'alice' },
+        position: { new_path: 'src/app.ts', new_line: 42 },
+      },
+      { id: 3, system: false, resolved: false, resolvable: true, body: 'Agreed.', author: { username: 'bob' } },
     ],
   },
   { id: 'ghi789', notes: [{ id: 4, system: false, resolved: true, body: 'settled', author: { username: 'carol' } }] },
@@ -287,6 +295,20 @@ test('listMrComments returns each open discussion as one text thread, dropping s
   assert.match(comments[0].body, /This leaks a token\.\n\n--- reply from @bob\nAgreed\./);
   // An MR-level thread carries no diff anchor, and that is not a failure.
   assert.equal(comments[1].path, undefined);
+  // Only a resolvable discussion can be closed; the MR-level one has no resolution state at all.
+  assert.equal(comments[0].resolvableId, 'def456');
+  assert.equal(comments[1].resolvableId, undefined);
+});
+
+test('resolveComment PUTs resolved=true on the discussion, as a JSON boolean', async () => {
+  const { exec, calls } = fakeExecutor([() => JSON.stringify({ id: 'def456', notes: [] })]);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  await forge.resolveComment(7, 'def456');
+
+  assert.equal(calls[0].args[1], 'projects/1/merge_requests/7/discussions/def456');
+  assert.ok(calls[0].args.includes('-X') && calls[0].args.includes('PUT'));
+  // --field, not --raw-field: GitLab rejects the string "true" here.
+  assert.deepEqual(fieldPairs(calls[0].args), ['--field resolved=true']);
 });
 
 test('replyToComment POSTs a note into the discussion it answers, with the body as a raw field', async () => {

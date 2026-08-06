@@ -54,6 +54,13 @@ export interface MrComment {
   author: string;
   /** The whole thread as text: the opening comment, then each reply under its own `--- reply from @x` header. */
   body: string;
+  /**
+   * Handle for marking this thread resolved, passed straight back to
+   * resolveComment — GitHub's review-thread node id, GitLab's discussion id.
+   * Absent when the forge has nothing resolvable for it (a GitHub PR-level
+   * comment, a GitLab discussion with no resolvable note).
+   */
+  resolvableId?: string;
   /** Diff anchor, when the thread is line-anchored at all (a PR-level or MR-level comment has none). */
   path?: string;
   line?: number;
@@ -106,6 +113,16 @@ export interface ForgeClient {
    * rather than throwing for an unthreadable target.
    */
   replyToComment(mrIid: number, commentId: string, body: string): Promise<{ id: number }>;
+  /**
+   * Marks one of listMrComments' threads resolved, so a point the current code
+   * already answers stops occupying the MR/PR — GitHub's `resolveReviewThread`
+   * mutation, GitLab's `resolved=true` on the discussion. `resolvableId` is
+   * that thread's field verbatim; a thread without one is never passed here.
+   * Throws on rejection (the forge may refuse when the caller is not the
+   * thread's author and lacks write access), and the caller treats that as
+   * best-effort — see workflow/replyMrComments.ts.
+   */
+  resolveComment(mrIid: number, resolvableId: string): Promise<void>;
   /**
    * True only when the forge has *confirmed* the MR/PR has real merge
    * conflicts against its target branch (GitHub's `mergeable_state: "dirty"`,

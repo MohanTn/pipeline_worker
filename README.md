@@ -206,8 +206,9 @@ A follow-up run reviews only the files *that* run touched. `pipeline-worker revi
 
 - **Confirm** — the thread names a real problem in this diff at or above `reviewMinSeverity`; the reply says so and gives the fix.
 - **Correct** — the thread points at the wrong line, misreads the code, or recommends something that should not be done here (a scanner false positive included). The reply opens with `This is not recommended because: …` and gives the reason. Corrections ignore the severity floor: a wrong steer costs time whatever it was pointing at.
+- **Resolve** — the thread was right and the current code already does what it asked. The reply opens with `Addressed by the current code: …` and names where in the diff it is handled, then **the thread is marked resolved on the forge** (GitHub's `resolveReviewThread`, GitLab's `resolved=true`) so a point your latest commit settled stops occupying the MR/PR. Resolutions ignore the severity floor too, and a partial fix is a *confirm* saying what is still missing, never a resolve.
 
-Replies are threaded (GitLab discussion notes, GitHub review-comment replies); a GitHub PR-level comment has no thread, so its reply is a new comment quoting the original. Resolved threads are skipped, pipeline-worker never answers its own comments, and at most `reviewMaxComments` replies are posted per run. The automatic review inside `run`/`resume` skips all of this — a freshly opened MR/PR has nothing to answer.
+Replies are threaded (GitLab discussion notes, GitHub review-comment replies); a GitHub PR-level comment has no thread, so its reply is a new comment quoting the original — and nothing to resolve, so it is only answered. The reply is always posted before the thread is closed, and a forge that refuses to resolve (someone else's thread, no permission) leaves the reply standing. Already-resolved threads are skipped, pipeline-worker never answers its own comments, and at most `reviewMaxComments` replies are posted per run. The automatic review inside `run`/`resume` skips all of this — a freshly opened MR/PR has nothing to answer.
 
 ### Target branch
 
