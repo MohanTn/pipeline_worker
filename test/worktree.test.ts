@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, readdirSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureDiff, resetRepo } from '../src/git/diff.js';
@@ -356,6 +356,76 @@ test('checkoutExistingBranch checks out a branch already pushed to origin, reset
     }
   } finally {
     rmSync(originDir, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('checkoutExistingBranch reuses a worktree that already has the branch checked out (e.g. repoRoot itself) instead of failing, pulling it up to date with origin', async () => {
+  const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-origin-'));
+  const repoRoot = await makeSampleRepo();
+  const otherClone = mkdtempSync(join(tmpdir(), 'pipeline-worker-other-'));
+  try {
+    await execFileAsync('git', ['init', '-q', '--bare', originDir]);
+    await execFileAsync('git', ['branch', '-M', 'main'], { cwd: repoRoot });
+    await execFileAsync('git', ['remote', 'add', 'origin', originDir], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repoRoot });
+
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feature/reuse-test'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'feature.txt'), 'first push\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: repoRoot });
+    await execFileAsync('git', ['commit', '-q', '-m', 'feature work'], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'feature/reuse-test'], { cwd: repoRoot });
+    // repoRoot is deliberately left checked out on feature/reuse-test — this
+    // is the exact collision `git worktree add -B` refuses ("already used by
+    // worktree at ...") when e.g. `pipeline-worker fix` is run from the same
+    // checkout that opened the MR/PR.
+
+    // Someone else pushes a follow-up commit — the "latest from origin" that
+    // reusing repoRoot must pick up.
+    await execFileAsync('git', ['clone', '-q', originDir, otherClone]);
+    await execFileAsync('git', ['checkout', '-q', 'feature/reuse-test'], { cwd: otherClone });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: otherClone });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: otherClone });
+    writeFileSync(join(otherClone, 'feature.txt'), 'second push from elsewhere\n');
+    await execFileAsync('git', ['commit', '-q', '-am', 'follow-up work'], { cwd: otherClone });
+    await execFileAsync('git', ['push', '-q'], { cwd: otherClone });
+
+    const worktreePath = await checkoutExistingBranch(repoRoot, 'feature/reuse-test');
+
+    assert.equal(worktreePath, repoRoot);
+    assert.equal(readFileSync(join(repoRoot, 'feature.txt'), 'utf-8'), 'second push from elsewhere\n');
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(otherClone, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('removeWorktree leaves a reused (non pipeline-worker-owned) worktree untouched', async () => {
+  const repoRoot = await makeSampleRepo();
+  try {
+    await removeWorktree(repoRoot, repoRoot);
+    assert.equal(existsSync(repoRoot), true);
+    assert.equal(existsSync(join(repoRoot, '.git')), true);
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('createWorktree cleans up its temp dir when git worktree add fails, instead of leaking an empty tmp directory', async () => {
+  const repoRoot = await makeSampleRepo();
+  const worktreePath = await createWorktree(repoRoot, 'pipeline-worker/tmp-dup');
+  try {
+    const before = readdirSync(tmpdir()).filter((name) => name.startsWith('pipeline-worker-')).length;
+
+    // Same branch name again: `git worktree add -b` refuses since the branch
+    // already exists, without ever creating the destination worktree dir.
+    await assert.rejects(() => createWorktree(repoRoot, 'pipeline-worker/tmp-dup'));
+
+    const after = readdirSync(tmpdir()).filter((name) => name.startsWith('pipeline-worker-')).length;
+    assert.equal(after, before);
+  } finally {
+    await removeWorktree(repoRoot, worktreePath);
     rmSync(repoRoot, { recursive: true, force: true });
   }
 });

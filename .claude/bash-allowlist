@@ -1,0 +1,13 @@
+# Extra Bash binaries allowed in this repo, on top of the machine-wide
+# default allowlist in bash-allowlist-guard.sh (rg fd fdfind git npm npx node
+# python3 python jq pytest go cargo make). One bare binary name per line.
+# npm/node/git already cover build (`npm run build`), lint (`npm run lint`),
+# and test (`npm test`); these cover what pipeline-worker's own source shells
+# out to and what a "review and fix" turn needs to exercise directly:
+tsc
+eslint
+glab
+dotnet
+claude
+copilot
+pi
