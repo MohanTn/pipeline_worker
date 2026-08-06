@@ -32,6 +32,42 @@ export interface InlineComment {
   body: string;
 }
 
+/**
+ * One *open* comment thread already on the MR/PR — a human's review comment, a
+ * plain discussion, or a scanner bot's finding (SonarQube, Checkmarx, …).
+ * Read by workflow/replyMrComments.ts so `review` can answer what is already
+ * there instead of only adding to it.
+ *
+ * A thread, not a single note: `body` carries the opening comment followed by
+ * every reply under it, which is both what the agent needs to judge whether
+ * the point still stands and how a thread pipeline-worker already answered is
+ * recognized (its own footer shows up in the text).
+ */
+export interface MrComment {
+  /**
+   * Opaque reply target, passed straight back to replyToComment — GitLab's
+   * discussion id, GitHub's top-level review-comment id, or `issue:<id>` for a
+   * GitHub PR-level comment, which has no thread of its own.
+   */
+  id: string;
+  /** Login of whoever opened the thread ('unknown' when the forge reports no author). */
+  author: string;
+  /** The whole thread as text: the opening comment, then each reply under its own `--- reply from @x` header. */
+  body: string;
+  /** Diff anchor, when the thread is line-anchored at all (a PR-level or MR-level comment has none). */
+  path?: string;
+  line?: number;
+  /** Web link to the thread, used to quote it when the forge cannot thread the reply. */
+  url?: string;
+  /**
+   * False when the forge has no reply-under-this-comment concept for it
+   * (a GitHub PR-level comment): a reply still lands, as a new top-level
+   * comment, so the caller quotes the original into it rather than relying on
+   * a thread the reader would never see.
+   */
+  threadable: boolean;
+}
+
 export interface ForgeClient {
   /** Idempotency check: finds an already-open MR/PR for this branch, if any. */
   findExistingMr(sourceBranch: string): Promise<MergeRequest | undefined>;
@@ -56,6 +92,20 @@ export interface ForgeClient {
    * best-effort (a note, not a failed run) — see workflow/reviewMergeRequest.ts.
    */
   createInlineComment(mrIid: number, comment: InlineComment): Promise<{ id: number }>;
+  /**
+   * Every *open* comment thread on the MR/PR, newest last. Resolved threads
+   * and the forge's own system notes ("changed the description", "added 3
+   * commits") are filtered out here rather than by the caller: they are noise
+   * in both forges and neither is something a reviewer can answer.
+   */
+  listMrComments(mrIid: number): Promise<MrComment[]>;
+  /**
+   * Replies to one of listMrComments' threads. `commentId` is that thread's
+   * `id` verbatim. Where the forge cannot thread (GitHub's PR-level comments)
+   * the reply is posted as a new top-level comment instead, so this resolves
+   * rather than throwing for an unthreadable target.
+   */
+  replyToComment(mrIid: number, commentId: string, body: string): Promise<{ id: number }>;
   /**
    * True only when the forge has *confirmed* the MR/PR has real merge
    * conflicts against its target branch (GitHub's `mergeable_state: "dirty"`,

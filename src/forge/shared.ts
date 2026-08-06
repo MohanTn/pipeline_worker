@@ -86,6 +86,19 @@ export function firstOrUndefined<T, R>(list: T[], map: (item: T) => R): R | unde
   return list.length > 0 ? map(list[0]) : undefined;
 }
 
+/**
+ * Renders one comment thread as the flat text MrComment.body declares: the
+ * opening comment, then every reply under a header naming its author. Shared
+ * so a GitLab discussion and a GitHub review thread read identically in the
+ * agent's prompt, and so a thread pipeline-worker already answered carries its
+ * own footer in the text where the caller's own-comment filter can see it.
+ */
+export function renderThread(notes: Array<{ author: string; body: string }>): string {
+  const [first, ...replies] = notes;
+  if (!first) return '';
+  return [first.body, ...replies.map((note) => `--- reply from @${note.author}\n${note.body}`)].join('\n\n');
+}
+
 /** Both createMrNote implementations parse the response the same way, just against differently-shaped request paths. */
 export async function parseIdResponse(res: Response): Promise<{ id: number }> {
   const note = (await res.json()) as { id: number };

@@ -96,7 +96,9 @@ program
 
 program
   .command('review')
-  .description("Review an open MR/PR's diff with the configured agent and post line-anchored comments on it (nothing else — no checks, no CI watch)")
+  .description(
+    "Review an open MR/PR's diff with the configured agent, post line-anchored comments, and reply to the comments already on it, scanner findings included (nothing else — no checks, no CI watch)",
+  )
   .requiredOption('--branch <name>', 'branch whose open MR/PR should be reviewed')
   .action(async (opts: { branch: string }) => {
     try {
@@ -201,8 +203,12 @@ Examples:
   $ pipeline-worker review --branch pipeline-worker/add-login
       Review that branch's open MR/PR with the configured agent and post
       line-anchored comments (with one-click \`\`\`suggestion fixes) on the lines
-      it flags. Runs regardless of PIPELINE_WORKER_REVIEW, which only gates the
-      automatic review inside \`run\`/\`resume\`.
+      it flags. Then read the comment threads already open on it — humans and
+      scanner bots (SonarQube, Checkmarx) alike — and reply where it matters:
+      confirming a finding at or above \`reviewMinSeverity\`, or correcting a
+      comment that points at the wrong place ("This is not recommended
+      because: …"). Runs regardless of the \`review\` setting, which only gates
+      the automatic review inside \`run\`/\`resume\`.
 
   $ pipeline-worker status --branch pipeline-worker/add-login
       Print the persisted state of that run.

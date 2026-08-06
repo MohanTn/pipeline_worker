@@ -10,8 +10,8 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob } from '../types.js';
-import type { CreateMrArgs, ForgeClient, InlineComment } from './types.js';
-import { firstOrUndefined, isRetryableStatus } from './shared.js';
+import type { CreateMrArgs, ForgeClient, InlineComment, MrComment } from './types.js';
+import { firstOrUndefined, isRetryableStatus, renderThread } from './shared.js';
 import { configFilePath } from '../config/file.js';
 import { writePromptToStdin } from '../agent/stdinPrompt.js';
 
@@ -176,6 +176,32 @@ function toMergeRequest(raw: any): MergeRequest {
   };
 }
 
+/**
+ * One GitLab discussion as an open thread, or undefined when it is nothing a
+ * reviewer can answer: a system note ("added 3 commits"), an already-resolved
+ * thread, or a discussion whose notes are all system notes. GitLab tracks
+ * resolution per note, and a thread counts as settled as soon as any of its
+ * resolvable notes is resolved — the UI resolves them together.
+ */
+function toMrComment(discussion: any): MrComment | undefined {
+  const notes = (discussion.notes ?? []).filter((note: any) => note.system !== true);
+  if (notes.length === 0) return undefined;
+  if (notes.some((note: any) => note.resolved === true)) return undefined;
+
+  const first = notes[0];
+  const position = first.position ?? {};
+  return {
+    id: String(discussion.id),
+    author: first.author?.username ?? 'unknown',
+    body: renderThread(notes.map((note: any) => ({ author: note.author?.username ?? 'unknown', body: note.body ?? '' }))),
+    ...(position.new_path ? { path: position.new_path } : {}),
+    ...(typeof position.new_line === 'number' ? { line: position.new_line } : {}),
+    // Every GitLab note lives in a discussion, and every discussion takes
+    // notes — there is no unthreadable comment on this forge.
+    threadable: true,
+  };
+}
+
 function toPipeline(raw: any): Pipeline {
   return { id: raw.id, status: raw.status, webUrl: raw.web_url };
 }
@@ -271,6 +297,28 @@ export function createGitlabForge(config: PipelineWorkerConfig, executor?: GlabE
       }
       // The discussion's own id is a hash string; the note id is the numeric one.
       return { id: posted.id };
+    },
+
+    async listMrComments(mrIid: number): Promise<MrComment[]> {
+      const list = await apiGet(
+        exec,
+        auth,
+        `GitLab API GET merge_requests/${mrIid}/discussions`,
+        projectPath(auth, `/merge_requests/${mrIid}/discussions?per_page=100`),
+      );
+      return (Array.isArray(list) ? list : []).map(toMrComment).filter((comment): comment is MrComment => comment !== undefined);
+    },
+
+    async replyToComment(mrIid: number, commentId: string, body: string): Promise<{ id: number }> {
+      const raw = await apiWrite(
+        exec,
+        auth,
+        `GitLab API POST merge_requests/${mrIid}/discussions/${commentId}/notes`,
+        'POST',
+        projectPath(auth, `/merge_requests/${mrIid}/discussions/${encodeURIComponent(commentId)}/notes`),
+        { body },
+      );
+      return { id: raw.id };
     },
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {

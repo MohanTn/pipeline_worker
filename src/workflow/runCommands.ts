@@ -12,6 +12,7 @@ import { adoptBranch, resolveResumeMode } from './adoptBranch.js';
 import { continueRun, resumeHint } from './orchestrate.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { maybeReviewMergeRequest } from './reviewMr.js';
+import { maybeReplyToMrComments } from './replyMrComments.js';
 import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './runPlan.js';
 import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
@@ -148,7 +149,12 @@ export async function resumeRun(repoRoot: string, opts: { branch: string; target
   return state.phase;
 }
 
-/** Reviews an open MR/PR's diff and posts line-anchored comments. Returns how many comments were posted. */
+/**
+ * Reviews an open MR/PR's diff, posts line-anchored comments, and then answers
+ * the comment threads already on it (human review comments and scanner
+ * findings alike — see replyMrComments.ts). Returns how many comments were
+ * posted in total, replies included.
+ */
 export async function reviewBranch(repoRoot: string, opts: { branch: string }): Promise<number> {
   const config = loadConfig(repoRoot);
   setCompletionSound(config.completionSound);
@@ -170,8 +176,13 @@ export async function reviewBranch(repoRoot: string, opts: { branch: string }): 
     // overridden here — the `review` setting only gates the automatic stage
     // inside `run`/`resume`.
     const posted = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid);
-    endRun('done', posted > 0 ? `posted ${posted} comment(s) on ${mr.webUrl}` : `nothing worth commenting on — ${mr.webUrl}`);
-    return posted;
+    // Answering what is already there is part of an explicit review, and only
+    // of an explicit review: inside run/resume the MR/PR was opened seconds
+    // ago and carries nothing to answer.
+    const replies = await maybeReplyToMrComments(forge, config, agent, worktreePath, mr.targetBranch, mr.iid);
+    const total = posted + replies;
+    endRun('done', total > 0 ? `posted ${posted} comment(s) and ${replies} reply(ies) on ${mr.webUrl}` : `nothing worth commenting on — ${mr.webUrl}`);
+    return total;
   } finally {
     await removeWorktree(repoRoot, worktreePath);
   }

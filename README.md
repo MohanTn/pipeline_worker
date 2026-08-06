@@ -102,6 +102,7 @@ Each turn gets a one-sentence `--system-prompt` and a gated tool set. On `claude
 | intent capture | `Read` — the diff is embedded in the prompt (capped at 20000 chars, trimmed middle-out) |
 | conflict resolution | `Read`, `Write`, `Edit` — staging and committing stay with pipeline-worker |
 | MR/PR review | `Read` — works from the diff in its prompt, one turn per `reviewChunkChars` of diff |
+| MR/PR comment replies | `Read` — one turn carrying every open thread plus the diff |
 | CI fix / local check fix | unrestricted — fixing a red build means running the failing command |
 
 `copilot` has no per-invocation allowlist (`--allow-all-tools` is required unattended), so its turns get full tool access; the system prompt still applies.
@@ -143,7 +144,7 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 | `pipeline-worker tui` | Full-screen dashboard: runs, sessions, settings editor, setup guide |
 | `pipeline-worker run [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
 | `pipeline-worker resume --branch <name> [--target <branch>]` | Resume a crashed run, or adopt a branch it has no record of |
-| `pipeline-worker review --branch <name>` | Review that branch's open MR/PR and post line-anchored comments |
+| `pipeline-worker review --branch <name>` | Review that branch's open MR/PR, post line-anchored comments, and reply to the comments already on it (scanner findings included) |
 | `pipeline-worker status --branch <name>` | Print the persisted state of a run |
 | `pipeline-worker sessions [--branch <name>]` | List persisted runs, or one run's full timeline |
 | `pipeline-worker update` | Install the latest release from npm |
@@ -198,6 +199,15 @@ With `"review": true`, the agent reviews the branch diff right after the MR/PR o
 - **Best-effort** — any failure here becomes a note; the run's outcome is unchanged.
 
 A follow-up run reviews only the files *that* run touched. `pipeline-worker review --branch <name>` runs this stage alone and ignores the `review` setting.
+
+#### Answering the comments already there
+
+`pipeline-worker review --branch <name>` does one thing the automatic stage does not: once its own comments are posted, it reads every **open** thread on the MR/PR — human comments and scanner findings alike (**SonarQube** and **Checkmarx** are recognized and labelled for the agent) — and replies where it matters:
+
+- **Confirm** — the thread names a real problem in this diff at or above `reviewMinSeverity`; the reply says so and gives the fix.
+- **Correct** — the thread points at the wrong line, misreads the code, or recommends something that should not be done here (a scanner false positive included). The reply opens with `This is not recommended because: …` and gives the reason. Corrections ignore the severity floor: a wrong steer costs time whatever it was pointing at.
+
+Replies are threaded (GitLab discussion notes, GitHub review-comment replies); a GitHub PR-level comment has no thread, so its reply is a new comment quoting the original. Resolved threads are skipped, pipeline-worker never answers its own comments, and at most `reviewMaxComments` replies are posted per run. The automatic review inside `run`/`resume` skips all of this — a freshly opened MR/PR has nothing to answer.
 
 ### Target branch
 
