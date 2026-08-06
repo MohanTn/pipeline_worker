@@ -59,6 +59,18 @@ export function adoptSkeleton(branch: string): StepSeed[] {
   ];
 }
 
+/** `pipeline-worker fix --branch`: adopt the branch, fix what its MR/PR's comments got right, verify, push, and answer every thread. */
+export function fixSkeleton(branch: string): StepSeed[] {
+  return [
+    { id: 'adopt', label: 'adopt', detail: `fetch + checkout origin/${branch}` },
+    { id: 'comments', label: 'comments', detail: 'read open threads · bot findings' },
+    { id: 'fix', label: 'fix', detail: 'edit the code the valid comments point at' },
+    { id: 'checks', label: 'checks', detail: 'build · lint · test' },
+    { id: 'push', label: 'push', detail: `commit the fixes and push ${branch}` },
+    { id: 'replies', label: 'replies', detail: 'reply: fixed here · not recommended because' },
+  ];
+}
+
 /** `pipeline-worker review --branch`: adopt the branch's open MR/PR, review its diff, answer the comments already on it, approve it if it came back clean. Nothing else. */
 export function reviewSkeleton(branch: string): StepSeed[] {
   return [

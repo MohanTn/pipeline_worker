@@ -50,7 +50,7 @@ export interface PreparedReply {
  * re-entry guard: a thread whose text already contains it was answered by a
  * previous run, and answering it again is how a bot becomes noise.
  */
-const OWN_COMMENT_MARKER = /pipeline-worker (review|reply) \(/;
+const OWN_COMMENT_MARKER = /pipeline-worker (review|reply|fix) \(/;
 
 /** The opening a correction must carry, so a reader sees the verdict before the reasoning. */
 export const CORRECTION_LEAD = 'This is not recommended because:';
@@ -61,6 +61,7 @@ const MAX_THREAD_CHARS = 4_000;
 const SCANNERS: Array<{ label: string; pattern: RegExp }> = [
   { label: 'SonarQube', pattern: /sonar(qube|cloud)?/i },
   { label: 'Checkmarx', pattern: /checkmarx|\bcx[-_ ]?(one|flow|sast)\b/i },
+  { label: 'CodeRabbit', pattern: /coderabbit/i },
 ];
 
 /** True for a thread pipeline-worker itself wrote — its own review comment, or an earlier reply. */
@@ -174,8 +175,8 @@ const ReplyShape = z.object({
 
 const PayloadShape = z.union([z.object({ replies: z.array(ReplyShape) }), z.array(ReplyShape)]);
 
-/** Agents wrap JSON in prose or fences often enough to be worth one salvage attempt (same stance as findings.ts). */
-function extractJson(text: string): string | undefined {
+/** Agents wrap JSON in prose or fences often enough to be worth one salvage attempt (same stance as findings.ts). Shared with commentFixes.ts. */
+export function extractJson(text: string): string | undefined {
   const trimmed = text.trim();
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) return trimmed;
   const start = trimmed.search(/[[{]/);

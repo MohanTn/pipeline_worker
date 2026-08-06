@@ -5,7 +5,7 @@ import path from 'node:path';
 import { Command } from 'commander';
 import { ensureLatestVersion, installVersion } from './version/autoUpdate.js';
 import { runWorkflow } from './workflow/orchestrate.js';
-import { resumeRun, reviewBranch } from './workflow/runCommands.js';
+import { resumeRun, reviewBranch, fixBranch } from './workflow/runCommands.js';
 import { loadRunState, listRunStates } from './state/runState.js';
 import { findRepoRoot } from './git/commit.js';
 import { printSessionList, printSessionDetail } from './ui/sessions.js';
@@ -113,6 +113,24 @@ program
   });
 
 program
+  .command('fix')
+  .description(
+    "Act on the comments already on a branch's open MR/PR: fix the code the valid ones point at, verify build/lint/test, push the fix onto the branch, and reply to every thread (bot findings from CodeRabbit, SonarQube, Checkmarx included) — saying what was fixed, or why the comment does not hold",
+  )
+  .requiredOption('--branch <name>', 'branch whose open MR/PR comments should be fixed')
+  .action(async (opts: { branch: string }) => {
+    try {
+      const repoRoot = await findRepoRoot(process.cwd());
+      await fixBranch(repoRoot, { branch: opts.branch });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      endRun('failed', message);
+      console.error('pipeline-worker fix failed:', message);
+      process.exit(1);
+    }
+  });
+
+program
   .command('status')
   .description('Print the persisted state of a run')
   .requiredOption('--branch <name>', 'branch name of the run to inspect')
@@ -212,6 +230,17 @@ Examples:
       when the whole review came back clean — nothing flagged at or above
       \`reviewMinSeverity\`, nothing in the open threads it had to confirm, and no
       merge conflicts. Set \`reviewApprove: false\` to keep approving a human act.
+
+  $ pipeline-worker fix --branch pipeline-worker/add-login
+      The other half of \`review\`: instead of only answering the comments on
+      that branch's MR/PR, act on them. Every open thread — humans and bots
+      (CodeRabbit, SonarQube, Checkmarx) alike — is judged against the code.
+      A valid comment is fixed in the worktree; build/lint/test must pass
+      before anything is pushed, and the fix lands as one commit on the same
+      branch, answered with "Fixed in <sha>: ...". An invalid one changes
+      nothing and is answered with "This is not recommended because: ...".
+      A thread the agent claims to have fixed without touching a file is
+      dropped rather than answered.
 
   $ pipeline-worker status --branch pipeline-worker/add-login
       Print the persisted state of that run.

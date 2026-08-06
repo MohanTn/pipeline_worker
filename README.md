@@ -145,6 +145,7 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 | `pipeline-worker run [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
 | `pipeline-worker resume --branch <name> [--target <branch>]` | Resume a crashed run, or adopt a branch it has no record of |
 | `pipeline-worker review --branch <name>` | Review that branch's open MR/PR, post line-anchored comments, reply to the comments already on it (scanner findings included), and approve it when nothing was flagged |
+| `pipeline-worker fix --branch <name>` | Fix the code that branch's MR/PR comments point at (bots included), push it, and reply to every thread |
 | `pipeline-worker status --branch <name>` | Print the persisted state of a run |
 | `pipeline-worker sessions [--branch <name>]` | List persisted runs, or one run's full timeline |
 | `pipeline-worker update` | Install the latest release from npm |
@@ -208,6 +209,15 @@ A follow-up run reviews only the files *that* run touched. `pipeline-worker revi
 - **Correct** — the thread points at the wrong line, misreads the code, or recommends something that should not be done here (a scanner false positive included). The reply opens with `This is not recommended because: …` and gives the reason. Corrections ignore the severity floor: a wrong steer costs time whatever it was pointing at.
 
 Replies are threaded (GitLab discussion notes, GitHub review-comment replies); a GitHub PR-level comment has no thread, so its reply is a new comment quoting the original. Resolved threads are skipped, pipeline-worker never answers its own comments, and at most `reviewMaxComments` replies are posted per run. The automatic review inside `run`/`resume` skips all of this — a freshly opened MR/PR has nothing to answer.
+
+#### Acting on the comments: `pipeline-worker fix --branch <name>`
+
+`review` answers the threads on an MR/PR; `fix` **does what they ask**. It checks the branch out into a disposable worktree, hands the agent every open thread — humans and bots alike (**CodeRabbit**, **SonarQube** and **Checkmarx** are recognized and labelled) — along with the branch diff, and lets it edit the code:
+
+- **Fixed** — the comment is right, so the agent changes the code. All accepted fixes land as **one commit** on the same branch (`fix: address N review comment(s) on !42`), and each thread is answered `Fixed in <sha>: …`.
+- **Invalid** — the comment misreads the code, points at the wrong place, or recommends something that must not be done here (the common case for a scanner false positive). Nothing is edited and the thread is answered `This is not recommended because: …`.
+
+Two guards decide what actually reaches the branch: **`build`/`lint`/`test` must pass in the worktree before anything is pushed** (a failing check aborts the command with nothing pushed and no replies posted), and a thread the agent *claims* to have fixed while leaving every file untouched is **dropped rather than answered** — a reply pointing at a commit that carries nothing is worse than no reply. Unlike `review`, this command is not best-effort: a forge that cannot be read or a check that fails is a failed command, not a note. It never approves and never merges.
 
 #### Approving a clean review
 
