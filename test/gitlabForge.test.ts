@@ -256,6 +256,50 @@ test('body-less POST (retryPipeline) passes no --input or field flags to glab', 
   assert.equal(calls[0].input, undefined);
 });
 
+// The reply stage answers open threads only: a resolved discussion, and
+// GitLab's own system notes ("added 3 commits"), are not something a reviewer
+// can usefully answer — and re-answering a settled thread is how a bot becomes
+// noise.
+const DISCUSSIONS = JSON.stringify([
+  { id: 'abc123', notes: [{ id: 1, system: true, body: 'added 3 commits', author: { username: 'alice' } }] },
+  {
+    id: 'def456',
+    notes: [
+      { id: 2, system: false, resolved: false, body: 'This leaks a token.', author: { username: 'alice' }, position: { new_path: 'src/app.ts', new_line: 42 } },
+      { id: 3, system: false, resolved: false, body: 'Agreed.', author: { username: 'bob' } },
+    ],
+  },
+  { id: 'ghi789', notes: [{ id: 4, system: false, resolved: true, body: 'settled', author: { username: 'carol' } }] },
+  { id: 'jkl012', notes: [{ id: 5, system: false, resolved: false, body: 'SonarQube: 1 code smell.', author: { username: 'sonarqube-bot' } }] },
+]);
+
+test('listMrComments returns each open discussion as one text thread, dropping system notes and resolved threads', async () => {
+  const { exec, calls } = fakeExecutor([() => DISCUSSIONS]);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  const comments = await forge.listMrComments(7);
+
+  assert.equal(calls[0].args[1], 'projects/1/merge_requests/7/discussions?per_page=100');
+  assert.deepEqual(comments.map((comment) => comment.id), ['def456', 'jkl012']);
+  assert.deepEqual(
+    { author: comments[0].author, path: comments[0].path, line: comments[0].line, threadable: comments[0].threadable },
+    { author: 'alice', path: 'src/app.ts', line: 42, threadable: true },
+  );
+  assert.match(comments[0].body, /This leaks a token\.\n\n--- reply from @bob\nAgreed\./);
+  // An MR-level thread carries no diff anchor, and that is not a failure.
+  assert.equal(comments[1].path, undefined);
+});
+
+test('replyToComment POSTs a note into the discussion it answers, with the body as a raw field', async () => {
+  const { exec, calls } = fakeExecutor([() => JSON.stringify({ id: 99 })]);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  const note = await forge.replyToComment(7, 'def456', 'This is not recommended because: it is validated upstream.');
+
+  assert.deepEqual(note, { id: 99 });
+  assert.equal(calls[0].args[1], 'projects/1/merge_requests/7/discussions/def456/notes');
+  assert.ok(calls[0].args.includes('-X') && calls[0].args.includes('POST'));
+  assert.deepEqual(fieldPairs(calls[0].args), ['--raw-field body=This is not recommended because: it is validated upstream.']);
+});
+
 test('POST with body passes --raw-field pairs, never --input or stdin', async () => {
   const { exec, calls } = fakeExecutor([
     () => JSON.stringify({ iid: 1, web_url: '', source_branch: 'feat/branch', target_branch: 'main', state: 'opened' }),

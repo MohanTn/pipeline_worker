@@ -57,8 +57,8 @@ export const REVIEW_SCHEMA = {
   required: ['findings'],
 } as const;
 
-/** Each chunk as its own labeled section, so a multi-file turn keeps every line number attributable to one path. */
-function renderSections(chunks: DiffChunk[]): string {
+/** Each chunk as its own labeled section, so a multi-file turn keeps every line number attributable to one path. Shared with the comment-reply turn (review/commentReplies.ts), which shows the agent the same diff. */
+export function renderSections(chunks: DiffChunk[]): string {
   return chunks.map((chunk) => `--- File: ${chunk.path}\n--- Language: ${chunk.language}\n${chunk.body}`).join('\n\n');
 }
 

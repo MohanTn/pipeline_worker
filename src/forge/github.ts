@@ -7,8 +7,8 @@
  */
 
 import type { MergeMethod, PipelineWorkerConfig, MergeRequest, Pipeline, PipelineJob, PipelineStatus } from '../types.js';
-import type { CreateMrArgs, ForgeClient, InlineComment } from './types.js';
-import { forgeFetch, firstOrUndefined, parseIdResponse } from './shared.js';
+import type { CreateMrArgs, ForgeClient, InlineComment, MrComment } from './types.js';
+import { forgeFetch, firstOrUndefined, parseIdResponse, renderThread } from './shared.js';
 import { configFilePath } from '../config/file.js';
 
 interface GithubAuth {
@@ -119,6 +119,59 @@ const ENABLE_AUTO_MERGE_MUTATION =
   'mutation($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) { ' +
   'enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) { clientMutationId } }';
 
+/**
+ * Review threads must come from GraphQL, not REST: `/pulls/{n}/comments`
+ * returns every review comment but says nothing about whether its thread was
+ * resolved, so a REST-only reader would keep re-answering settled threads.
+ * `line` is null on an outdated thread, which is why the mapped anchor is
+ * optional.
+ */
+const REVIEW_THREADS_QUERY =
+  'query($owner: String!, $name: String!, $number: Int!) { ' +
+  'repository(owner: $owner, name: $name) { pullRequest(number: $number) { ' +
+  'reviewThreads(first: 100) { nodes { isResolved comments(first: 50) { nodes { ' +
+  'databaseId body path line url author { login } } } } } } } }';
+
+/** Marks a PR-level (issue) comment id, which GitHub cannot thread a reply under — see MrComment.threadable. */
+const ISSUE_COMMENT_PREFIX = 'issue:';
+
+interface GraphqlComment {
+  databaseId: number;
+  body: string | null;
+  path: string | null;
+  line: number | null;
+  url: string | null;
+  author: { login: string } | null;
+}
+
+interface ReviewThreadNode {
+  isResolved: boolean;
+  comments?: { nodes?: GraphqlComment[] };
+}
+
+interface ReviewThreadsData {
+  repository?: { pullRequest?: { reviewThreads?: { nodes?: ReviewThreadNode[] } } };
+}
+
+function toThreadComment(thread: ReviewThreadNode): MrComment | undefined {
+  const notes = thread.comments?.nodes ?? [];
+  const first = notes[0];
+  if (!first) return undefined;
+  return {
+    // The thread's *first* comment is the one /replies posts under: replying
+    // to a later comment's id makes GitHub open a second thread on the line.
+    id: String(first.databaseId),
+    author: first.author?.login ?? 'unknown',
+    body: renderThread(notes.map((note) => ({ author: note.author?.login ?? 'unknown', body: note.body ?? '' }))),
+    ...(first.path ? { path: first.path } : {}),
+    ...(typeof first.line === 'number' ? { line: first.line } : {}),
+    ...(first.url ? { url: first.url } : {}),
+    threadable: true,
+  };
+}
+
+// scaffold:inject
+
 interface GraphqlResponse {
   data?: unknown;
   errors?: Array<{ message: string }>;
@@ -224,6 +277,48 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       });
       return parseIdResponse(res);
     },
+
+    async listMrComments(mrIid: number): Promise<MrComment[]> {
+      // Two sources, because GitHub keeps them apart: line-anchored review
+      // threads (GraphQL, the only place resolution state exists) and PR-level
+      // comments (REST /issues/{n}/comments), which is where scanner bots such
+      // as SonarQube and Checkmarx post their findings.
+      const graphql = await githubGraphqlRequest(auth, REVIEW_THREADS_QUERY, { owner, name: auth.repo.split('/')[1], number: mrIid });
+      if (graphql.errors?.length) throw new Error(`GitHub GraphQL reviewThreads failed: ${graphql.errors.map((e) => e.message).join('; ')}`);
+      const threads = (graphql.data as ReviewThreadsData | undefined)?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+      const reviewComments = threads
+        .filter((thread) => !thread.isResolved)
+        .map(toThreadComment)
+        .filter((comment): comment is MrComment => comment !== undefined);
+
+      const res = await githubRequest(auth, `/issues/${mrIid}/comments?per_page=100`);
+      const issueComments = (await res.json()) as Array<{ id: number; body: string | null; html_url: string; user: { login: string } | null }>;
+      // A PR-level comment has no thread of its own on GitHub — nothing to
+      // resolve, and nothing to reply *under* (MrComment.threadable).
+      const prLevel: MrComment[] = issueComments.map(
+        (comment) => ({
+          id: `${ISSUE_COMMENT_PREFIX}${comment.id}`,
+          author: comment.user?.login ?? 'unknown',
+          body: comment.body ?? '',
+          url: comment.html_url,
+          threadable: false,
+        }),
+      );
+      return [...reviewComments, ...prLevel];
+    },
+
+    async replyToComment(mrIid: number, commentId: string, body: string): Promise<{ id: number }> {
+      // No reply endpoint exists for a PR-level comment, so its reply lands as
+      // a new top-level comment; the caller quotes the original into the body
+      // so the connection is still visible (see MrComment.threadable).
+      const path = commentId.startsWith(ISSUE_COMMENT_PREFIX)
+        ? `/issues/${mrIid}/comments`
+        : `/pulls/${mrIid}/comments/${commentId}/replies`;
+      const res = await githubRequest(auth, path, { method: 'POST', body: JSON.stringify({ body }) });
+      return parseIdResponse(res);
+    },
+
+    // scaffold:inject-client
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {
       const res = await githubRequest(auth, `/pulls/${mrIid}`);

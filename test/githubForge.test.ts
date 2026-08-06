@@ -337,6 +337,98 @@ test('getCiConfigPath always resolves undefined with no HTTP request — GitHub 
   }
 });
 
+// listMrComments has to read two GitHub surfaces at once: review threads come
+// from GraphQL (the only place `isResolved` exists, so settled threads are not
+// answered again) and the PR-level comments scanner bots post come from REST.
+function startCommentsStub(graphqlBody: unknown, issueComments: unknown): Promise<{ server: Server; port: number; requests: Array<{ method?: string; path?: string; body: unknown }> }> {
+  const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      requests.push({ method: req.method, path: req.url, body: raw ? JSON.parse(raw) : undefined });
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/graphql') res.end(JSON.stringify(graphqlBody));
+      else if (req.method === 'POST') res.end(JSON.stringify({ id: 777 }));
+      else res.end(JSON.stringify(issueComments));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port, requests });
+    });
+  });
+}
+
+const REVIEW_THREADS = {
+  data: {
+    repository: {
+      pullRequest: {
+        reviewThreads: {
+          nodes: [
+            {
+              isResolved: false,
+              comments: {
+                nodes: [
+                  { databaseId: 11, body: 'This leaks a token.', path: 'src/app.ts', line: 42, url: 'http://example/c/11', author: { login: 'alice' } },
+                  { databaseId: 12, body: 'Agreed.', path: 'src/app.ts', line: 42, url: 'http://example/c/12', author: { login: 'bob' } },
+                ],
+              },
+            },
+            { isResolved: true, comments: { nodes: [{ databaseId: 20, body: 'settled', path: 'a.ts', line: 1, url: null, author: { login: 'carol' } }] } },
+          ],
+        },
+      },
+    },
+  },
+};
+
+test('listMrComments returns unresolved review threads as one text thread each, plus the PR-level comments scanners post', async () => {
+  const { server, port, requests } = await startCommentsStub(REVIEW_THREADS, [
+    { id: 55, body: 'SonarQube: 1 code smell.', html_url: 'http://example/i/55', user: { login: 'sonarqube[bot]' } },
+  ]);
+  try {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      const comments = await forge.listMrComments(7);
+
+      assert.equal(comments.length, 2, 'the resolved thread must not come back');
+      // The thread's FIRST comment id is the reply target; the whole thread is the body.
+      assert.deepEqual(
+        { id: comments[0].id, author: comments[0].author, path: comments[0].path, line: comments[0].line, threadable: comments[0].threadable },
+        { id: '11', author: 'alice', path: 'src/app.ts', line: 42, threadable: true },
+      );
+      assert.match(comments[0].body, /This leaks a token\.\n\n--- reply from @bob\nAgreed\./);
+      assert.deepEqual(
+        { id: comments[1].id, author: comments[1].author, threadable: comments[1].threadable },
+        { id: 'issue:55', author: 'sonarqube[bot]', threadable: false },
+      );
+    });
+    assert.equal(requests[0].path, '/graphql');
+    assert.equal(requests[1].path, '/repos/acme/widgets/issues/7/comments?per_page=100');
+  } finally {
+    server.close();
+  }
+});
+
+test('replyToComment threads under a review comment, and falls back to a new PR-level comment for one that cannot be threaded', async () => {
+  const { server, port, requests } = await startCommentsStub(REVIEW_THREADS, []);
+  try {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
+      const forge = createGithubForge(githubConfig());
+      assert.deepEqual(await forge.replyToComment(7, '11', 'not so'), { id: 777 });
+      await forge.replyToComment(7, 'issue:55', 'not so either');
+    });
+    assert.equal(requests[0].path, '/repos/acme/widgets/pulls/7/comments/11/replies');
+    assert.deepEqual(requests[0].body, { body: 'not so' });
+    assert.equal(requests[1].path, '/repos/acme/widgets/issues/7/comments');
+  } finally {
+    server.close();
+  }
+});
+
 for (const state of ['clean', 'unstable', 'blocked', 'behind', 'draft', 'unknown', undefined]) {
   test(`hasMergeConflicts is false for GitHub mergeable_state ${JSON.stringify(state)} (not a real conflict)`, async () => {
     const { server, port } = await startPrStub(state);
