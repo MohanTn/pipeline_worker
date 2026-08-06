@@ -1,5 +1,5 @@
 /**
- * The `resume` and `review` commands as callable functions, so both the CLI
+ * The `resume`, `review` and `fix` commands as callable functions, so both the CLI
  * (src/cli.ts) and the TUI's sessions browser drive exactly the same code
  * path. They were inline command actions until the TUI needed them; the
  * behaviour is unchanged except that a precondition failure now throws instead
@@ -14,7 +14,8 @@ import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { maybeApproveMergeRequest } from './approveMr.js';
 import { maybeReviewMergeRequest } from './reviewMr.js';
 import { maybeReplyToMrComments } from './replyMrComments.js';
-import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './runPlan.js';
+import { fixMrComments, type FixOutcome } from './fixMrComments.js';
+import { resumeSkeleton, adoptSkeleton, reviewSkeleton, fixSkeleton } from './runPlan.js';
 import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
 import { selectAgent } from '../agent/index.js';
@@ -188,6 +189,41 @@ export async function reviewBranch(repoRoot: string, opts: { branch: string }): 
     const wrote = total > 0 ? `posted ${review.posted} comment(s) and ${replies.posted} reply(ies)` : 'nothing worth commenting on';
     endRun('done', `${wrote}${approved ? ' · approved' : ''} — ${mr.webUrl}`);
     return total;
+  } finally {
+    await removeWorktree(repoRoot, worktreePath);
+  }
+}
+
+/**
+ * Acts on the comments already on the branch's open MR/PR (see
+ * fixMrComments.ts): fixes the code the valid ones point at, pushes that fix
+ * onto the same branch, and replies to every thread it answered — bot findings
+ * (CodeRabbit, SonarQube, Checkmarx) included. Unlike `review`, a failure here
+ * fails the command: the worktree is removed either way, so a fix that could
+ * not be verified is a fix that was never pushed.
+ */
+export async function fixBranch(repoRoot: string, opts: { branch: string }): Promise<FixOutcome> {
+  const config = loadConfig(repoRoot);
+  setCompletionSound(config.completionSound);
+  setPlainOutput(config.plainOutput);
+  const forge = createForge(config);
+  const agent = selectAgent(config);
+
+  const mr = await forge.findExistingMr(opts.branch);
+  if (!mr) {
+    throw new Error(`no open MR/PR found for branch ${opts.branch} — open one first (pipeline-worker resume --branch ${opts.branch}).`);
+  }
+
+  beginRun(fixSkeleton(opts.branch), { title: opts.branch });
+  const worktreePath = await runStep('adopt', `checkout ${opts.branch} into a disposable worktree`, () =>
+    checkoutExistingBranch(repoRoot, opts.branch),
+  );
+  try {
+    const outcome = await fixMrComments(forge, config, agent, worktreePath, opts.branch, mr.targetBranch, mr.iid);
+    const acted = outcome.fixed > 0 || outcome.refuted > 0;
+    const summary = acted ? `fixed ${outcome.fixed} · refuted ${outcome.refuted} · replied ${outcome.posted}` : 'nothing to act on';
+    endRun('done', `${summary} — ${mr.webUrl}`);
+    return outcome;
   } finally {
     await removeWorktree(repoRoot, worktreePath);
   }

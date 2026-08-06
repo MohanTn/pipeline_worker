@@ -14,15 +14,26 @@ import { dirname, join } from 'node:path';
 const projectRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = join(projectRoot, 'dist', 'cli.js');
 
-test('pipeline-worker run --help documents the --target base-branch flag and the default branch it resolves', async () => {
-  const stdout = await new Promise<string>((resolve, reject) => {
-    const child = spawn('node', [cliPath, 'run', '--help']);
+function cliOutput(args: string[]): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('node', [cliPath, ...args]);
     let out = '';
     child.stdout.on('data', (chunk) => (out += chunk));
     child.on('error', reject);
     child.on('close', () => resolve(out));
   });
+}
+
+test('pipeline-worker run --help documents the --target base-branch flag and the default branch it resolves', async () => {
+  const stdout = await cliOutput(['run', '--help']);
 
   assert.match(stdout, /--target <branch>/);
   assert.match(stdout, /main or master/);
+});
+
+test('pipeline-worker fix --help says it requires a branch and names the bots it answers', async () => {
+  const stdout = await cliOutput(['fix', '--help']);
+
+  assert.match(stdout, /--branch <name>/);
+  assert.match(stdout, /CodeRabbit, SonarQube, Checkmarx/);
 });
