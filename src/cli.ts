@@ -97,7 +97,7 @@ program
 program
   .command('review')
   .description(
-    "Review an open MR/PR's diff with the configured agent, post line-anchored comments, and reply to the comments already on it, scanner findings included (nothing else — no checks, no CI watch)",
+    "Review an open MR/PR's diff with the configured agent, post line-anchored comments, reply to the comments already on it (scanner findings included), and approve it when nothing was flagged (nothing else — no checks, no CI watch)",
   )
   .requiredOption('--branch <name>', 'branch whose open MR/PR should be reviewed')
   .action(async (opts: { branch: string }) => {
@@ -208,7 +208,10 @@ Examples:
       confirming a finding at or above \`reviewMinSeverity\`, or correcting a
       comment that points at the wrong place ("This is not recommended
       because: …"). Runs regardless of the \`review\` setting, which only gates
-      the automatic review inside \`run\`/\`resume\`.
+      the automatic review inside \`run\`/\`resume\`. Finally, approves the MR/PR
+      when the whole review came back clean — nothing flagged at or above
+      \`reviewMinSeverity\`, nothing in the open threads it had to confirm, and no
+      merge conflicts. Set \`reviewApprove: false\` to keep approving a human act.
 
   $ pipeline-worker status --branch pipeline-worker/add-login
       Print the persisted state of that run.

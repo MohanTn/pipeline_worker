@@ -42,6 +42,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     enableAutoMerge: async () => {
       throw new Error('not used');
     },
+    approveMr: async () => {},
     getCiConfigPath: async () => undefined,
     ...overrides,
   };
@@ -250,6 +251,7 @@ function fixLoopForge(overrides: Partial<ForgeClient> = {}): ForgeClient {
     enableAutoMerge: async () => {
       throw new Error('not used');
     },
+    approveMr: async () => {},
     getCiConfigPath: async () => undefined,
     ...overrides,
   };

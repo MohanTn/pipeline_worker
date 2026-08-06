@@ -90,6 +90,10 @@ export const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test
   // definitions. Only a genuinely huge diff splits across turns.
   reviewChunkChars: 200_000,
   reviewFilesPerTurn: 0,
+  // Default-on, unlike `review`: this one only takes effect when a human typed
+  // `review --branch X`, which is already the opt-in, and a reviewer that reads
+  // a clean diff and then says nothing is a reviewer nobody trusts.
+  reviewApprove: true,
   // Default-on: the whole point of the run is that the change now lives on
   // that branch, so leaving the caller standing on it is what makes the next
   // edit a follow-up commit instead of a second, unrelated MR/PR.
@@ -359,6 +363,7 @@ export function loadConfig(repoRoot: string): PipelineWorkerConfig {
     reviewChunkChars: positiveNumber(settings.reviewChunkChars, DEFAULT_CONFIG.reviewChunkChars),
     // 0 is meaningful here ("decide from the agent"), so it cannot go through positiveNumber.
     reviewFilesPerTurn: nonNegativeNumber(settings.reviewFilesPerTurn, DEFAULT_CONFIG.reviewFilesPerTurn),
+    reviewApprove: boolean('reviewApprove', settings.reviewApprove, DEFAULT_CONFIG.reviewApprove),
     switchToFeatureBranch: boolean('switchToFeatureBranch', settings.switchToFeatureBranch, DEFAULT_CONFIG.switchToFeatureBranch),
     plainOutput: boolean('plainOutput', settings.plainOutput, DEFAULT_CONFIG.plainOutput),
   };

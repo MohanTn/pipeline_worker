@@ -39,6 +39,7 @@ function replyConfig(overrides: Partial<PipelineWorkerConfig> = {}): PipelineWor
     reviewMaxComments: 10,
     reviewChunkChars: 200_000,
     reviewFilesPerTurn: 0,
+    reviewApprove: true,
     littleCoder: { binary: 'little-coder', maxPromptChars: 12_000 },
     ...overrides,
   } as PipelineWorkerConfig;
@@ -107,6 +108,7 @@ function forgeStub(comments: MrComment[] = []): ForgeClient {
     enableAutoMerge: async () => {
       throw new Error('not used');
     },
+    approveMr: async () => {},
     getCiConfigPath: async () => undefined,
   } as ForgeClient;
 }
@@ -124,9 +126,9 @@ test('replies to an open comment thread, on the thread it names, signed so a lat
       posted.push({ mrIid, commentId, body });
       return { id: posted.length };
     };
-    const count = await maybeReplyToMrComments(forge, replyConfig(), agentReturning(SUPPORT_PAYLOAD), worktreePath, 'main', 7);
+    const outcome = await maybeReplyToMrComments(forge, replyConfig(), agentReturning(SUPPORT_PAYLOAD), worktreePath, 'main', 7);
 
-    assert.equal(count, 1);
+    assert.deepEqual(outcome, { posted: 1, clean: false }, 'a confirmed comment is a problem still standing');
     assert.equal(posted[0].mrIid, 7);
     assert.equal(posted[0].commentId, 'd1');
     assert.match(posted[0].body, /Confirmed — read it from the environment instead\./);
@@ -163,8 +165,8 @@ test("pipeline-worker's own comments are never answered — a second review must
   const { worktreePath, originDir } = await makeReviewableBranch();
   try {
     const own = mrComment({ body: '### Hard-coded secret\n\nMove it.\n\n_CRITICAL · pipeline-worker review (claude)_' });
-    const count = await maybeReplyToMrComments(forgeStub([own]), replyConfig(), NEVER_INVOKED, worktreePath, 'main', 7);
-    assert.equal(count, 0);
+    const outcome = await maybeReplyToMrComments(forgeStub([own]), replyConfig(), NEVER_INVOKED, worktreePath, 'main', 7);
+    assert.deepEqual(outcome, { posted: 0, clean: true }, 'nothing left to answer reads as clean');
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -186,9 +188,9 @@ test('a MINOR agreement is dropped by the severity floor while a MINOR correctio
         { thread: 2, kind: 'correct', severity: 'MINOR', reply: 'utils.ts is not on this branch.' },
       ],
     });
-    const count = await maybeReplyToMrComments(forge, replyConfig(), agentReturning(payload), worktreePath, 'main', 7);
+    const outcome = await maybeReplyToMrComments(forge, replyConfig(), agentReturning(payload), worktreePath, 'main', 7);
 
-    assert.equal(count, 1);
+    assert.deepEqual(outcome, { posted: 1, clean: true }, 'only a correction survived the floor, and a refuted point does not block');
     assert.match(posted[0], /^b:This is not recommended because: utils\.ts is not on this branch\./);
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
@@ -203,7 +205,7 @@ test('a forge that cannot list comments is reduced to a note, not a failed run',
     forge.listMrComments = async () => {
       throw new Error('GitLab API GET discussions failed: 403 forbidden');
     };
-    assert.equal(await maybeReplyToMrComments(forge, replyConfig(), NEVER_INVOKED, worktreePath, 'main', 7), 0);
+    assert.deepEqual(await maybeReplyToMrComments(forge, replyConfig(), NEVER_INVOKED, worktreePath, 'main', 7), { posted: 0, clean: false });
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -226,13 +228,13 @@ test('a rejected reply costs only itself, and prose from the agent posts nothing
         { thread: 2, kind: 'support', severity: 'MAJOR', reply: 'two' },
       ],
     });
-    assert.equal(await maybeReplyToMrComments(forge, replyConfig(), agentReturning(payload), worktreePath, 'main', 7), 1);
+    assert.deepEqual(await maybeReplyToMrComments(forge, replyConfig(), agentReturning(payload), worktreePath, 'main', 7), { posted: 1, clean: false });
 
     const quiet = forgeStub([mrComment()]);
     quiet.replyToComment = async () => {
       throw new Error('replyToComment must not be called');
     };
-    assert.equal(await maybeReplyToMrComments(quiet, replyConfig(), agentReturning('Looks fine to me!'), worktreePath, 'main', 7), 0);
+    assert.deepEqual(await maybeReplyToMrComments(quiet, replyConfig(), agentReturning('Looks fine to me!'), worktreePath, 'main', 7), { posted: 0, clean: true });
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -242,8 +244,8 @@ test('a rejected reply costs only itself, and prose from the agent posts nothing
 test('an unreachable target branch is reduced to a note, after the comments were already fetched', async () => {
   const { worktreePath, originDir } = await makeReviewableBranch();
   try {
-    const count = await maybeReplyToMrComments(forgeStub([mrComment()]), replyConfig(), NEVER_INVOKED, worktreePath, 'no-such-branch', 7);
-    assert.equal(count, 0);
+    const outcome = await maybeReplyToMrComments(forgeStub([mrComment()]), replyConfig(), NEVER_INVOKED, worktreePath, 'no-such-branch', 7);
+    assert.deepEqual(outcome, { posted: 0, clean: false });
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });

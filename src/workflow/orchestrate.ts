@@ -698,7 +698,9 @@ async function runPipeline(
   // accept. A follow-up run is scoped to the files it just touched: the rest
   // of the branch has already been through review.
   cursor.stage = 'review';
-  const posted = await maybeReviewMergeRequest(
+  // Only `posted` matters here: the review's clean/not verdict exists for
+  // `review --branch`'s approval stage, which a run never reaches.
+  const { posted } = await maybeReviewMergeRequest(
     ctx.forge,
     ctx.config,
     ctx.agent,

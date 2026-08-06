@@ -316,6 +316,56 @@ test('createInlineComment resolves the PR head sha, then POSTs a RIGHT-side comm
   }
 });
 
+/** Serves one canned status/body for every request and records what was asked. */
+function startReviewStub(status: number, body: unknown): Promise<{ server: Server; port: number; requests: Array<{ method?: string; path?: string; body: unknown }> }> {
+  const requests: Array<{ method?: string; path?: string; body: unknown }> = [];
+  const server = http.createServer((req, res) => {
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
+    req.on('end', () => {
+      requests.push({ method: req.method, path: req.url, body: raw ? JSON.parse(raw) : undefined });
+      res.setHeader('content-type', 'application/json');
+      res.writeHead(status);
+      res.end(JSON.stringify(body));
+    });
+  });
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({ server, port, requests });
+    });
+  });
+}
+
+test('approveMr POSTs an APPROVE review on the PR, in one request', async () => {
+  const { server, port, requests } = await startReviewStub(200, { id: 909, state: 'APPROVED' });
+  try {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
+      await createGithubForge(githubConfig()).approveMr(42);
+    });
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].method, 'POST');
+    assert.equal(requests[0].path, '/repos/acme/widgets/pulls/42/reviews');
+    assert.deepEqual(requests[0].body, { event: 'APPROVE' });
+  } finally {
+    server.close();
+  }
+});
+
+// The common case for pipeline-worker: it opened the PR, so GitHub refuses to
+// let the same account approve it. The caller must get a real error to note.
+test('approveMr throws when GitHub refuses a self-approval', async () => {
+  const { server, port } = await startReviewStub(422, { message: 'Unprocessable Entity: "Can not approve your own pull request"' });
+  try {
+    await withGithubApi(`http://127.0.0.1:${port}`, async () => {
+      await assert.rejects(() => createGithubForge(githubConfig()).approveMr(42), /422/);
+    });
+  } finally {
+    server.close();
+  }
+});
+
 test('getCiConfigPath always resolves undefined with no HTTP request — GitHub has no custom-path concept', async () => {
   let calls = 0;
   const server = http.createServer((req, res) => {

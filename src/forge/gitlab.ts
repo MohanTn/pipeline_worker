@@ -347,6 +347,12 @@ export function createGitlabForge(config: PipelineWorkerConfig, executor?: GlabE
       });
     },
 
+    async approveMr(mrIid: number): Promise<void> {
+      // Approvals are a paid-tier feature on GitLab: this endpoint answers 404
+      // on Free, which surfaces as a labeled error the caller turns into a note.
+      await apiWrite(exec, auth, `GitLab API POST merge_requests/${mrIid}/approve`, 'POST', projectPath(auth, `/merge_requests/${mrIid}/approve`));
+    },
+
     async getCiConfigPath(): Promise<string | undefined> {
       const project = await apiGet(exec, auth, 'GitLab API GET project', projectPath(auth));
       // Absent/null/empty all mean "using the default .gitlab-ci.yml path" —

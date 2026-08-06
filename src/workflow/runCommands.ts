@@ -11,6 +11,7 @@ import { watchPipeline } from './watchPipeline.js';
 import { adoptBranch, resolveResumeMode } from './adoptBranch.js';
 import { continueRun, resumeHint } from './orchestrate.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
+import { maybeApproveMergeRequest } from './approveMr.js';
 import { maybeReviewMergeRequest } from './reviewMr.js';
 import { maybeReplyToMrComments } from './replyMrComments.js';
 import { resumeSkeleton, adoptSkeleton, reviewSkeleton } from './runPlan.js';
@@ -175,13 +176,17 @@ export async function reviewBranch(repoRoot: string, opts: { branch: string }): 
     // Asking for a review explicitly *is* the opt-in, so config.review is
     // overridden here — the `review` setting only gates the automatic stage
     // inside `run`/`resume`.
-    const posted = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid);
+    const review = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid);
     // Answering what is already there is part of an explicit review, and only
     // of an explicit review: inside run/resume the MR/PR was opened seconds
     // ago and carries nothing to answer.
     const replies = await maybeReplyToMrComments(forge, config, agent, worktreePath, mr.targetBranch, mr.iid);
-    const total = posted + replies;
-    endRun('done', total > 0 ? `posted ${posted} comment(s) and ${replies} reply(ies) on ${mr.webUrl}` : `nothing worth commenting on — ${mr.webUrl}`);
+    // Both stages have to vouch for it: a clean diff still isn't approvable
+    // while a comment the agent itself confirmed sits open on the MR/PR.
+    const approved = await maybeApproveMergeRequest(forge, config, mr.iid, review.clean && replies.clean);
+    const total = review.posted + replies.posted;
+    const wrote = total > 0 ? `posted ${review.posted} comment(s) and ${replies.posted} reply(ies)` : 'nothing worth commenting on';
+    endRun('done', `${wrote}${approved ? ' · approved' : ''} — ${mr.webUrl}`);
     return total;
   } finally {
     await removeWorktree(repoRoot, worktreePath);

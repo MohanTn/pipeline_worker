@@ -146,6 +146,7 @@ function lookupOnlyForge(onLookup: (branch: string) => MergeRequest | undefined)
     createInlineComment: notUsed,
     hasMergeConflicts: notUsed,
     enableAutoMerge: notUsed,
+    approveMr: notUsed,
     isMrMerged: notUsed,
     getCiConfigPath: notUsed,
   } as unknown as ForgeClient;

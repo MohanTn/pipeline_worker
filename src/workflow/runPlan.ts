@@ -59,11 +59,12 @@ export function adoptSkeleton(branch: string): StepSeed[] {
   ];
 }
 
-/** `pipeline-worker review --branch`: adopt the branch's open MR/PR, review its diff, then answer the comments already on it. Nothing else. */
+/** `pipeline-worker review --branch`: adopt the branch's open MR/PR, review its diff, answer the comments already on it, approve it if it came back clean. Nothing else. */
 export function reviewSkeleton(branch: string): StepSeed[] {
   return [
     { id: 'adopt', label: 'adopt', detail: `fetch + checkout origin/${branch}` },
     { id: 'review', label: 'review', detail: 'review the diff · inline comments' },
     { id: 'replies', label: 'replies', detail: 'answer open comments · scanner findings' },
+    { id: 'approve', label: 'approve', detail: 'approve the MR/PR when nothing was flagged' },
   ];
 }

@@ -133,6 +133,17 @@ export interface PipelineWorkerConfig {
    */
   reviewFilesPerTurn: number;
   /**
+   * Let `pipeline-worker review --branch X` approve the MR/PR when its review
+   * came back clean — no finding at or above `reviewMinSeverity`, nothing in
+   * the existing comment threads it had to confirm, and no merge conflicts.
+   * Only that explicit command ever approves; `run`/`resume` never do, since a
+   * run reviewing its own diff approving its own MR/PR is not a review.
+   * Best-effort: both forges refuse an approval for reasons no caller can fix
+   * (GitHub bars self-approval, GitLab's approvals API is paid-tier), and a
+   * refusal is a note rather than a failed run.
+   */
+  reviewApprove: boolean;
+  /**
    * When the run settles green, check the feature branch out in your own repo
    * instead of leaving you on the target branch — so the next round of edits
    * (and the next `pipeline-worker run`) lands on the same MR/PR as a

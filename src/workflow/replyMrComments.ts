@@ -16,7 +16,7 @@
  * prose, a rejected reply — each is reduced to a note.
  */
 
-import { reviewTurnLimits } from './reviewMr.js';
+import { reviewTurnLimits, type ReviewOutcome } from './reviewMr.js';
 import { mergeBase } from '../git/commit.js';
 import { diffTextSinceRef } from '../git/diff.js';
 import { chunkDiff } from '../review/chunkDiff.js';
@@ -66,7 +66,16 @@ function describeThreads(comments: MrComment[]): string {
   return `${comments.length} open comment thread(s)${scanners.length > 0 ? ` (incl. ${scanners.join(' · ')})` : ''}`;
 }
 
-/** Returns how many replies were actually posted — 0 when there is nothing to answer, nothing survived the gate, or anything failed. Never rejects. */
+/**
+ * Answers what is already on the MR/PR. `posted` is 0 when there is nothing to
+ * answer, nothing survived the gate, or anything failed. Never rejects.
+ *
+ * `clean` (see reviewMr.ts's ReviewOutcome) is this stage's verdict on the
+ * discussion: a `support` reply means the agent read a comment and agreed the
+ * problem is real, which is exactly the thing an approval must not paper over.
+ * A `correct` reply is the opposite — the point was raised and refuted — so it
+ * leaves the verdict clean.
+ */
 export async function maybeReplyToMrComments(
   forge: ForgeClient,
   config: PipelineWorkerConfig,
@@ -74,13 +83,13 @@ export async function maybeReplyToMrComments(
   worktreePath: string,
   targetBranch: string,
   mrIid: number,
-): Promise<number> {
+): Promise<ReviewOutcome> {
   try {
     return await runStep('replies', `${config.agent} answers the comments already on the MR/PR`, async () => {
       const comments = answerable(await forge.listMrComments(mrIid));
       if (comments.length === 0) {
         note('no open comments to answer');
-        return 0;
+        return { posted: 0, clean: true };
       }
 
       const limits = reviewTurnLimits(config);
@@ -106,16 +115,16 @@ export async function maybeReplyToMrComments(
       const prepared = gateReplies(parseReplies(result.text), comments, config.reviewMinSeverity, config.reviewMaxComments);
       if (prepared.length === 0) {
         note('nothing in those comments needs an answer');
-        return 0;
+        return { posted: 0, clean: true };
       }
 
       const posted = await postReplies(forge, mrIid, prepared, config);
       note(`replied to ${posted} of ${prepared.length} comment thread(s)`);
-      return posted;
+      return { posted, clean: !prepared.some((entry) => entry.reply.kind === 'support') };
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     note(`comment replies skipped: ${message}`);
-    return 0;
+    return { posted: 0, clean: false };
   }
 }
