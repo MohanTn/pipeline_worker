@@ -208,6 +208,25 @@ test('enableAutoMerge propagates a rejection (e.g. pending approvals) as a throw
   assert.equal(calls.length, 1);
 });
 
+test('approveMr POSTs merge_requests/{iid}/approve with no fields', async () => {
+  const { exec, calls } = fakeExecutor([() => '{"id":7,"state":"opened"}']);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  await forge.approveMr(7);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args.slice(0, 4), ['api', 'projects/1/merge_requests/7/approve', '-X', 'POST']);
+  assert.deepEqual(fieldPairs(calls[0].args), []);
+});
+
+test('approveMr propagates GitLab Free\'s 404 (approvals are a paid-tier API) as a thrown error the caller can note', async () => {
+  const { exec } = fakeExecutor([
+    () => {
+      throw new Error('api call failed: 404 Not Found');
+    },
+  ]);
+  const forge = createGitlabForge(gitlabConfig(), exec);
+  await assert.rejects(() => forge.approveMr(7), /404/);
+});
+
 test('getCiConfigPath GETs the bare project endpoint and returns ci_config_path when set', async () => {
   const { exec, calls } = fakeExecutor([() => JSON.stringify({ id: 1, ci_config_path: 'ci/custom.yml' })]);
   const forge = createGitlabForge(gitlabConfig(), exec);

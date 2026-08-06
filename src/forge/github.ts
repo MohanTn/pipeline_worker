@@ -318,6 +318,16 @@ export function createGithubForge(config: PipelineWorkerConfig): ForgeClient {
       return parseIdResponse(res);
     },
 
+    async approveMr(mrIid: number): Promise<void> {
+      // GitHub rejects an account approving its own pull request, which is the
+      // common case when pipeline-worker opened it: the rejection is a labeled
+      // error the caller reduces to a note.
+      await githubRequest(auth, `/pulls/${mrIid}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify({ event: 'APPROVE' }),
+      });
+    },
+
     // scaffold:inject-client
 
     async hasMergeConflicts(mrIid: number): Promise<boolean> {

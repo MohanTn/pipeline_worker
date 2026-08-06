@@ -34,6 +34,7 @@ function stubForge(overrides: Partial<ForgeClient>): ForgeClient {
     hasMergeConflicts: notUsed,
     isMrMerged: notUsed,
     enableAutoMerge: notUsed,
+    approveMr: notUsed,
     getCiConfigPath: notUsed,
     ...overrides,
   };

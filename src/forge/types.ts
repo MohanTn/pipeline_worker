@@ -134,6 +134,17 @@ export interface ForgeClient {
    */
   isMrMerged(mrIid: number): Promise<boolean>;
   /**
+   * Records an approval on the MR/PR in the authenticated user's name —
+   * GitHub's `POST /pulls/{n}/reviews` with `event: "APPROVE"`, GitLab's
+   * `POST /merge_requests/{iid}/approve`. Throws far more readily than the
+   * comment endpoints and for reasons no caller can fix: GitHub refuses to let
+   * an account approve its own pull request, and GitLab's approvals API is a
+   * paid-tier feature that answers 404 elsewhere. Every caller therefore
+   * treats a rejection as best-effort — a note, not a failed run (see
+   * workflow/approveMr.ts).
+   */
+  approveMr(mrIid: number): Promise<void>;
+  /**
    * The project's custom CI/CD configuration file path, if one is set
    * (GitLab's "CI/CD configuration file" project setting) — used by
    * watchPipeline.ts's hasCiConfig to recognize CI as configured even when

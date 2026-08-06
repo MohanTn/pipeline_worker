@@ -144,7 +144,7 @@ A stage with no command is skipped. No toolchain and no configured commands mean
 | `pipeline-worker tui` | Full-screen dashboard: runs, sessions, settings editor, setup guide |
 | `pipeline-worker run [--ticket <id>] [--target <branch>]` | Capture the current diff and drive it to a green MR/PR |
 | `pipeline-worker resume --branch <name> [--target <branch>]` | Resume a crashed run, or adopt a branch it has no record of |
-| `pipeline-worker review --branch <name>` | Review that branch's open MR/PR, post line-anchored comments, and reply to the comments already on it (scanner findings included) |
+| `pipeline-worker review --branch <name>` | Review that branch's open MR/PR, post line-anchored comments, reply to the comments already on it (scanner findings included), and approve it when nothing was flagged |
 | `pipeline-worker status --branch <name>` | Print the persisted state of a run |
 | `pipeline-worker sessions [--branch <name>]` | List persisted runs, or one run's full timeline |
 | `pipeline-worker update` | Install the latest release from npm |
@@ -208,6 +208,18 @@ A follow-up run reviews only the files *that* run touched. `pipeline-worker revi
 - **Correct** — the thread points at the wrong line, misreads the code, or recommends something that should not be done here (a scanner false positive included). The reply opens with `This is not recommended because: …` and gives the reason. Corrections ignore the severity floor: a wrong steer costs time whatever it was pointing at.
 
 Replies are threaded (GitLab discussion notes, GitHub review-comment replies); a GitHub PR-level comment has no thread, so its reply is a new comment quoting the original. Resolved threads are skipped, pipeline-worker never answers its own comments, and at most `reviewMaxComments` replies are posted per run. The automatic review inside `run`/`resume` skips all of this — a freshly opened MR/PR has nothing to answer.
+
+#### Approving a clean review
+
+`pipeline-worker review --branch <name>` finishes by **approving** the MR/PR, but only when the whole review vouches for it:
+
+- the review read a real diff and raised **nothing** at or above `reviewMinSeverity`;
+- nothing in the open threads was something the agent had to **confirm** (a correction does not block — the point was raised and refuted);
+- the forge reports **no merge conflicts** against the target branch.
+
+Anything else — a finding posted, a comment confirmed, a stage that failed or was skipped — leaves the MR/PR unapproved. "We could not look" never counts as "we looked and it was fine". Set `"reviewApprove": false` to keep approving a human-only act. `run`/`resume` never approve at all: a run reviewing its own diff is not a reviewer.
+
+Approval is best-effort, and both forges refuse it for reasons nothing here can fix — **GitHub rejects approving your own pull request** (the usual case when pipeline-worker opened it, so use a separate reviewer token to make this work), and **GitLab's approvals API is a paid-tier feature** that answers 404 on Free. Either refusal becomes a note; the command's outcome is unchanged.
 
 ### Target branch
 

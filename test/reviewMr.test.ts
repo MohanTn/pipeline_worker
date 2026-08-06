@@ -40,6 +40,7 @@ function reviewConfig(overrides: Partial<PipelineWorkerConfig> = {}): PipelineWo
     reviewMaxComments: 10,
     reviewChunkChars: 200_000,
     reviewFilesPerTurn: 0,
+    reviewApprove: true,
     littleCoder: { binary: 'little-coder', maxPromptChars: 12_000 },
     ...overrides,
   };
@@ -109,6 +110,7 @@ function forgeStub(): ForgeClient {
     enableAutoMerge: async () => {
       throw new Error('not used');
     },
+    approveMr: async () => {},
     getCiConfigPath: async () => undefined,
   };
 }
@@ -120,8 +122,8 @@ const CRITICAL_FINDING = JSON.stringify({
 test('does not invoke the agent or the forge when config.review is disabled', async () => {
   const { worktreePath, originDir } = await makeReviewableBranch();
   try {
-    const posted = await maybeReviewMergeRequest(forgeStub(), reviewConfig({ review: false }), NEVER_INVOKED, worktreePath, 'main', 7);
-    assert.equal(posted, 0);
+    const outcome = await maybeReviewMergeRequest(forgeStub(), reviewConfig({ review: false }), NEVER_INVOKED, worktreePath, 'main', 7);
+    assert.deepEqual(outcome, { posted: 0, clean: false }, 'a skipped review must never read as a clean one');
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -137,9 +139,9 @@ test('posts one inline comment per surviving finding, on the right file and line
       comments.push({ mrIid, comment });
       return { id: comments.length };
     };
-    const posted = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7);
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7);
 
-    assert.equal(posted, 1);
+    assert.deepEqual(outcome, { posted: 1, clean: false });
     assert.equal(comments.length, 1);
     assert.equal(comments[0].mrIid, 7);
     assert.equal(comments[0].comment.path, 'app.ts');
@@ -229,9 +231,9 @@ test('a finding is anchored to the right file when one turn carried several', as
         { file: 'app.ts', line: 99, severity: 'CRITICAL', comment: '### Hallucinated\n\nno' },
       ],
     });
-    const posted = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(payload), worktreePath, 'main', 7);
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(payload), worktreePath, 'main', 7);
 
-    assert.equal(posted, 2);
+    assert.equal(outcome.posted, 2);
     assert.deepEqual(
       comments.map((entry) => `${entry.comment.path}:${entry.comment.line}`).sort(),
       ['app.ts:2', 'mod1.ts:1'],
@@ -249,8 +251,8 @@ test('an unusable agent payload leaves the run unchanged and posts nothing', asy
     forge.createInlineComment = async () => {
       throw new Error('createInlineComment must not be called');
     };
-    const posted = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning('Looks fine to me!'), worktreePath, 'main', 7);
-    assert.equal(posted, 0);
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning('Looks fine to me!'), worktreePath, 'main', 7);
+    assert.deepEqual(outcome, { posted: 0, clean: true }, 'prose parses to no findings, which is a clean diff');
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -264,8 +266,8 @@ test('a forge rejecting the comment position is reduced to a note, not an except
     forge.createInlineComment = async () => {
       throw new Error('GitLab API POST discussions failed: 400 line must be part of the diff');
     };
-    const posted = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7);
-    assert.equal(posted, 0);
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7);
+    assert.deepEqual(outcome, { posted: 0, clean: false }, 'a finding that could not be posted is still a finding');
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });
@@ -275,8 +277,8 @@ test('a forge rejecting the comment position is reduced to a note, not an except
 test('an unreachable target branch (no such ref) is reduced to a note, not a failed run', async () => {
   const { worktreePath, originDir } = await makeReviewableBranch();
   try {
-    const posted = await maybeReviewMergeRequest(forgeStub(), reviewConfig(), NEVER_INVOKED, worktreePath, 'no-such-branch', 7);
-    assert.equal(posted, 0);
+    const outcome = await maybeReviewMergeRequest(forgeStub(), reviewConfig(), NEVER_INVOKED, worktreePath, 'no-such-branch', 7);
+    assert.deepEqual(outcome, { posted: 0, clean: false }, 'a failed review must never read as a clean one');
   } finally {
     rmSync(worktreePath, { recursive: true, force: true });
     rmSync(originDir, { recursive: true, force: true });

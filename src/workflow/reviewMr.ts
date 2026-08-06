@@ -73,6 +73,20 @@ export function reviewTurnLimits(config: PipelineWorkerConfig): { maxChars: numb
   };
 }
 
+/**
+ * What a review-shaped stage leaves behind: how many comments landed, and
+ * whether the stage is willing to vouch for the diff.
+ *
+ * `clean` is affirmative evidence, never the absence of errors — under the
+ * never-throw contract every failure path here returns 0 comments, and "we
+ * could not look" must never read the same as "we looked and it was fine".
+ * Only workflow/approveMr.ts consumes it.
+ */
+export interface ReviewOutcome {
+  posted: number;
+  clean: boolean;
+}
+
 /** Posts each surviving finding, individually: one rejected position must not cost the comments that would still land. */
 export async function postFindings(
   forge: ForgeClient,
@@ -95,7 +109,7 @@ export async function postFindings(
   return posted;
 }
 
-/** Returns how many comments were actually posted — 0 when disabled, when nothing survived the gate, or when anything failed. Never rejects. */
+/** Reviews the diff and posts what it finds. `posted` is 0 when disabled, when nothing survived the gate, or when anything failed. Never rejects. */
 export async function maybeReviewMergeRequest(
   forge: ForgeClient,
   config: PipelineWorkerConfig,
@@ -104,10 +118,10 @@ export async function maybeReviewMergeRequest(
   targetBranch: string,
   mrIid: number,
   scopeFiles?: string[],
-): Promise<number> {
+): Promise<ReviewOutcome> {
   if (!config.review) {
     skipStep('review', 'config.review is disabled — set PIPELINE_WORKER_REVIEW=true to have the agent review its own diff');
-    return 0;
+    return { posted: 0, clean: false };
   }
 
   try {
@@ -116,8 +130,10 @@ export async function maybeReviewMergeRequest(
       const base = await mergeBase(worktreePath, `origin/${targetBranch}`);
       const chunks = scopeChunks(chunkDiff(await diffTextSinceRef(worktreePath, base), limits.maxChars), scopeFiles);
       if (chunks.length === 0) {
+        // Not clean: an empty review is not a passed review, and there is
+        // nothing here for anyone to approve either.
         note('nothing reviewable in this diff (no added lines a comment could anchor to)');
-        return 0;
+        return { posted: 0, clean: false };
       }
 
       const turns = groupChunks(chunks, limits.maxChars, limits.maxFiles);
@@ -131,16 +147,16 @@ export async function maybeReviewMergeRequest(
       });
       if (findings.length === 0) {
         note(`no findings at or above ${config.reviewMinSeverity} — nothing worth commenting on`);
-        return 0;
+        return { posted: 0, clean: true };
       }
 
       const posted = await postFindings(forge, mrIid, findings, config.forge, config.agent);
       note(`posted ${posted} of ${findings.length} review comment(s)`);
-      return posted;
+      return { posted, clean: false };
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     note(`review skipped: ${message}`);
-    return 0;
+    return { posted: 0, clean: false };
   }
 }

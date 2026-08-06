@@ -279,6 +279,13 @@ export const CONFIG_FIELDS: readonly ConfigField[] = [
     kind: 'number',
     doc: 'Files one review turn may cover. 0 means "decide from the agent": everything at once for a cloud model, a few files at a time for little-coder.',
   },
+  {
+    path: 'reviewApprove',
+    label: 'reviewApprove',
+    group: 'Review',
+    kind: 'boolean',
+    doc: 'Let `pipeline-worker review --branch X` approve the MR/PR when the review came back clean: no finding at or above reviewMinSeverity, nothing in the open threads it had to confirm, and no merge conflicts. Never applies to run/resume. Turn it off to keep approving a human-only act.',
+  },
 
   {
     path: 'completionSound',
