@@ -1,0 +1,33 @@
+flowchart TD
+  Select["agent/index.ts: selectAgent(config)"] -->|config.agent| Which{which adapter}
+  Which -->|claude| Claude["agent/claude.ts: createClaudeAdapter({bare: config.bareAgentMode})"]
+  Which -->|copilot| Copilot["agent/copilot.ts: copilotAdapter"]
+  Which -->|pi| Pi["agent/pi.ts: piAdapter"]
+  Which -->|little-coder| LittleCoder["agent/littleCoder.ts: createLittleCoderAdapter(config.littleCoder)\npi's adapter + flags, own binary + maxPromptChars trim"]
+
+  AdapterIface["agent/types.ts: AgentAdapter.invoke(AgentInvokeOptions)\n-> AgentInvokeResult {output, usage}"]
+  Claude --> AdapterIface
+  Copilot --> AdapterIface
+  Pi --> AdapterIface
+  LittleCoder --> AdapterIface
+
+  subgraph Scoping["Every invoke() call passes a scoped turn — not a trusted one"]
+    SysPrompt["one-sentence systemPrompt"]
+    AllowedTools["allowedTools list -> claude adapter maps to\n--tools (built-ins that exist) + --allowedTools (run unprompted)"]
+    ReadOnly["intent capture / review turns:\nallowedTools = ['Read'], diff embedded in prompt (capped)"]
+    ConflictTurn["apply/merge conflict turns:\nallowedTools = ['Read','Write','Edit'], permissionMode 'acceptEdits'"]
+    ShellTurn["CI-fix / local-check-fix turns:\nno allowedTools restriction -> full shell\n(needed to run glab/gh CLI directly)"]
+    BareMode["config.bareAgentMode -> claude adapter adds --bare\nforces API-key-only auth"]
+  end
+  AdapterIface --> Scoping
+
+  Callers["call sites"] --> CaptureIntent["workflow/captureIntent.ts -> ReadOnly"]
+  Callers --> ReviewDiff["review/reviewDiff.ts -> ReadOnly"]
+  Callers --> ApplyConflict["orchestrate.ts resolveApplyConflicts -> ConflictTurn"]
+  Callers --> WatchConflict["watchPipeline.ts resolveConflictsWithAgent -> ConflictTurn"]
+  Callers --> CiFix["watchPipeline.ts runCiFixAttempt -> ShellTurn"]
+  Callers --> LocalFix["watchPipeline.ts local check fix -> ShellTurn"]
+  Callers --> FixComments["workflow/fixMrComments.ts -> ShellTurn (build/lint/test needs shell)"]
+
+  Note1["CLI flags verified against installed CLI (claude --help)\nbefore use; module comment records which ones were checked"]
+  Claude -.-> Note1

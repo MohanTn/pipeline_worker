@@ -1,0 +1,40 @@
+flowchart TD
+  CLI(["pw review --branch X\n(src/cli.ts -> workflow/runCommands.ts reviewBranch)"]) --> FindMr["forge.findExistingMr(branch)\nno open MR/PR -> throws, tells user to `resume --branch` first"]
+  FindMr --> FreshWorktree["EVERY invocation: checkoutExistingBranch\n-> a brand-new disposable worktree, removed in finally\nno memory of a prior review run is kept in the worktree"]
+  FreshWorktree --> ForceReview["maybeReviewMergeRequest(..., {...config, review:true})\nexplicit review overrides config.review gate"]
+
+  ForceReview --> Base["mergeBase(worktree, origin/targetBranch)"]
+  Base --> Diff["diffTextSinceRef(worktree, base)\n= the WHOLE branch diff since merge-base, every single time\n(scopeFiles is undefined here — only orchestrate.ts's follow-up-commit\npath passes scopeFiles to narrow this)"]
+  Diff --> Chunk["chunkDiff + groupChunks\n(review/chunkDiff.ts)\nreviewTurnLimits(config): cloud agent = 1 turn w/ reviewChunkChars,\nlittle-coder = few files/turn clamped to littleCoder.maxPromptChars"]
+  Chunk --> ReviewDiff["review/reviewDiff.ts: reviewDiff(agent, turns, worktreePath, opts)"]
+
+  subgraph PromptBuild["THE PROMPT — same text built once, agent-agnostic\nsrc/review/prompt.ts"]
+    Sys["REVIEW_SYSTEM (prompt.ts:21)\nStaff Engineer/Security Auditor persona,\nfixed constant, sent as opts.systemPrompt"]
+    Build["buildReviewPrompt(chunks, fence) (prompt.ts:81)\nper-turn: file list + 5 CRITICAL INSTRUCTIONS +\nrenderSections(chunks) = the diff itself w/ gutter line numbers"]
+    Schema["REVIEW_SCHEMA (prompt.ts:38)\nfindings[] json schema, sent as opts.jsonSchema"]
+  end
+  ReviewDiff -->|"for each turn: agent.invoke({prompt: buildReviewPrompt(turn, fence),\nsystemPrompt: REVIEW_SYSTEM, jsonSchema: REVIEW_SCHEMA,\nallowedTools:['Read'], model: config.reviewModel})"| PromptBuild
+
+  PromptBuild --> Dispatch{"agent/index.ts selectAgent(config.agent)\nSAME prompt/systemPrompt/jsonSchema object,\nDIFFERENT wire format per adapter"}
+  Dispatch -->|claude| ClaudeAdp["agent/claude.ts buildClaudeArgs\nreal CLI flags: --system-prompt <text>, --json-schema <json>\nprompt itself piped to stdin (runClaudeProcess)"]
+  Dispatch -->|copilot| CopilotAdp["agent/copilot.ts\nno --system-prompt/--json-schema flags ->\npromptText.ts composePrompt(): systemPrompt + prompt + SCHEMA_INSTRUCTION\nfolded into ONE stdin blob; JSON pulled back out via extractJsonObject + clipToSchema"]
+  Dispatch -->|pi| PiAdp["agent/pi.ts\nsame composePrompt() folding as copilot,\n--provider github-copilot, --tools <mapped>, stdin"]
+  Dispatch -->|little-coder| LcAdp["agent/littleCoder.ts\ncomposePrompt() folding, THEN truncateToBudget(prompt, littleCoder.maxPromptChars)\nmiddle-out trim — REVIEW_PROMPT_OVERHEAD_CHARS(1500) reserved so the diff patch\nitself is never the part trimmed (reviewMr.ts reviewTurnLimits)"]
+
+  ClaudeAdp --> Parse["parseFindings (review/findings.ts)\nzod-validate, tolerate prose-wrapped JSON"]
+  CopilotAdp --> Parse
+  PiAdp --> Parse
+  LcAdp --> Parse
+
+  Parse --> Gate["gatekeep(findings, turns.flat(), minSeverity, maxComments)\nseverity floor -> anchor must be a real added line in THIS turn's chunks\n-> dedupe via in-memory Set (scoped to this ONE review call only)\n-> sort by severity, slice to maxComments"]
+  Gate --> Post["postFindings: forge.createInlineComment per finding\nNO check against comments already posted by an earlier review run"]
+  Post --> Replies["maybeReplyToMrComments: answers open threads separately\n(human + scanner bot comments)"]
+  Replies --> Approve["maybeApproveMergeRequest\nonly if review.clean && replies.clean"]
+  Approve --> End(["endRun('done'): posted N comment(s) + M reply(ies) [+ approved]"])
+
+  subgraph MultiRun["Running `pw review --branch X` again with NO new commits"]
+    Repeat1["run 1: diff since merge-base -> same findings -> posts comments A,B,C"]
+    Repeat2["run 2 (nothing changed): diff since merge-base is IDENTICAL\n-> agent re-reviews the same lines -> gatekeep dedupes only\nwithin run 2's own findings, not against run 1's already-posted A,B,C\n-> A,B,C get reposted as duplicates on the MR/PR"]
+    Repeat1 -.-> Repeat2
+  end
+  End -.->|"branch unchanged, review run again"| Repeat1

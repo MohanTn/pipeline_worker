@@ -1,0 +1,13 @@
+{
+  "routes": [
+    { "keywords": ["cli", "command", "commander", "cli.ts", "argv", "pipeline-worker run", "subcommand"], "file": "diagrams/cli/commands.mmd", "priority": 6 },
+    { "keywords": ["orchestrate", "runWorkflow", "continueRun", "pipeline stage", "phase", "PHASE_ORDER", "resume", "capture diff", "worktree apply", "intent"], "file": "diagrams/workflow/run-pipeline.mmd", "priority": 10 },
+    { "keywords": ["watchPipeline", "ci-watch", "ci fix", "pipeline failed", "maxFixAttempts", "escalate", "conflict resolve", "merge conflict", "polling"], "file": "diagrams/workflow/ci-watch-loop.mmd", "priority": 9 },
+    { "keywords": ["forge", "github", "gitlab", "glab", "createForge", "ForgeClient", "merge request", "pull request", "reviewThreads", "MrComment"], "file": "diagrams/forge/integration.mmd", "priority": 8 },
+    { "keywords": ["review --branch", "reviewBranch", "review prompt", "buildReviewPrompt", "REVIEW_SYSTEM", "reviewDiff", "duplicate review comments", "reviewMr", "gatekeep findings", "postFindings"], "file": "diagrams/workflow/review-branch-flow.mmd", "priority": 9 },
+    { "keywords": ["agent", "selectAgent", "AgentAdapter", "claude adapter", "copilot", "pi adapter", "little-coder", "allowedTools", "invoke", "bareAgentMode"], "file": "diagrams/agent/invocation.mmd", "priority": 8 },
+    { "keywords": ["tui", "dashboard", "TuiApp", "MenuView", "SettingsView", "SessionsView", "RunView", "setup wizard"], "file": "diagrams/ui/tui-navigation.mmd", "priority": 6 },
+    { "keywords": ["test", "node:test", "tsx", "stub forge", "stub agent", "GlabExecutor fake", "cli.test.ts", "npm test"], "file": "diagrams/test/suite-shape.mmd", "priority": 5 },
+    { "keywords": ["debug", "bug", "error", "traceback", "stack trace", "investigate", "root cause", "reproduce"], "file": "diagrams/debug/playbook.mmd", "priority": 9 }
+  ]
+}

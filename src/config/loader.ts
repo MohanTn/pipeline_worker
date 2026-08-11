@@ -51,7 +51,11 @@ export const DEFAULT_CONFIG: Omit<PipelineWorkerConfig, 'build' | 'lint' | 'test
   pollIntervalSeconds: 15,
   branchPattern: 'pipeline-worker/{name}',
   cleanupOnSuccess: true,
-  cleanupEarly: false,
+  // Default-on: the repo lock (see state/lock.ts) otherwise stays held for the
+  // whole ci-watch loop below, up to its 2-hour safety window, which blocks
+  // every other run against this repo for no reason once the MR/PR is open
+  // and repoRoot's copy is redundant.
+  cleanupEarly: true,
   // The claude/copilot alias default; agents whose CLI takes a provider/id
   // instead (pi, little-coder) never see this literal — loadConfig resolves
   // their default to '' via defaultAliasModel, so the model has to be

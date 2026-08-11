@@ -1,0 +1,26 @@
+flowchart TD
+  Runner["node --import tsx --test test/**/*.test.ts\n(node:test + node:assert/strict, no mocking libs)"]
+
+  Runner --> Forge["forge tests"]
+  Forge --> GHTest["githubForge.test.ts:\nreal local http.createServer stub (Server helper, startXStub)"]
+  Forge --> GLTest["gitlabForge.test.ts:\nfake GlabExecutor asserting on glab argv/stdin"]
+
+  Runner --> Workflow["workflow tests"]
+  Workflow --> StubForge["hand-written stub objects implementing ForgeClient"]
+  Workflow --> StubAgent["hand-written stub objects implementing AgentAdapter"]
+  Workflow --> Examples["orchestrate.test.ts, adoptBranch.test.ts, watchPipeline.test.ts,\nreviewMr.test.ts, fixMrComments.test.ts, replyMrComments.test.ts,\nrunWorkflow.test.ts, syncTargetBranch.test.ts"]
+
+  Runner --> GitTouch["git-touching tests"]
+  GitTouch --> RealRepos["mkdtempSync + git init, bare origin where needed\ncleaned up in finally (commit.test.ts, worktree.test.ts,\nsquash.test.ts, remote.test.ts, adoptBranch.test.ts)"]
+
+  Runner --> CliTest["cli.test.ts\nexercises built dist/cli.js -> npm run build required before npm test"]
+
+  Runner --> TuiTest["TUI tests"]
+  TuiTest --> FakeStream["tuiApp.test.ts: FakeStream/FakeInput implementing TuiStream/InStream"]
+  TuiTest --> TuiViews["tuiViews.test.ts, tuiRunDashboard.test.ts, tuiConfig.test.ts,\ntuiPrimitives.test.ts: fake SettingsIo/SessionsIo/RunIo"]
+
+  Runner --> Unit["pure-logic unit tests"]
+  Unit --> UnitEx["chunkDiff.test.ts, findings.test.ts (reviewFindings), format.test.ts,\ncommentFixes.test.ts, commentReplies.test.ts, toonEnvelope.test.ts,\nbranchName.test.ts, runPlan.test.ts, runTree.test.ts"]
+
+  Gate["Gate before any commit:\nnpm run build && npm run lint && npm test"]
+  Runner -.-> Gate

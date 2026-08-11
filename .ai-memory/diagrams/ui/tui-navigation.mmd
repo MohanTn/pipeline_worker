@@ -1,0 +1,28 @@
+mindmap
+  root(("ui/tui/index.ts: buildHome(repoRoot, screen)"))
+    Run workflow
+      RunView --views/run.ts--
+      runIo.start -> workflow/orchestrate.ts runWorkflow
+    Sessions
+      SessionsView --views/sessions.ts--
+      list -> state/runState.ts listRunStates
+      resume -> workflow/runCommands.ts resumeRun
+      review -> workflow/runCommands.ts reviewBranch
+      mrUrl -> ui/mrUrl.ts resolveMrUrl fallback
+      copy -> Screen.copyToClipboard OSC 52
+    Settings
+      SettingsView --views/settings.ts--
+      read/save -> tui/configStore.ts readSettingsFile/saveSettingsFile
+      resolve -> config/loader.ts loadConfig
+    Setup guide
+      SetupView --views/setup.ts--
+      WizardStep sequence -> applyAnswers -> save via SettingsIo
+    Quit
+
+    Shared plumbing
+      TuiApp --app.ts-- run loop: draw, runJob, waitForAnyKey, onKey
+      Screen --screen.ts-- single instance shared by home + sessions copy key
+      View interface --view.ts-- render, onKey, hints
+      RunDashboardView --views/runDashboard.ts-- live tree during an active run
+      Every view takes injected Io interface, real bindings only in index.ts
+        keeps views unit-testable with fake Io in test/tuiViews.test.ts

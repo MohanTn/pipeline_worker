@@ -5,3 +5,6 @@ node_modules
 *.log
 
 .claude/repo-map.md
+
+# local hybrid-retrieval index
+.retrieval/

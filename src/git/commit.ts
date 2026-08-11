@@ -36,6 +36,59 @@ export async function execGit(args: string[], options: ExecGitOptions): Promise<
   }
 }
 
+/** Fragments seen in real git failures against a smart-HTTP(S)/SSH remote when the blip is transient rather than a real rejection — DNS, connection reset/refused/timeout, a mid-transfer disconnect, or a 5xx from the remote. Deliberately narrow: an auth failure, a rejected push, or a genuine rebase conflict must fail on the first attempt, since retrying would just repeat the same rejection. */
+const RETRYABLE_GIT_ERROR_PATTERNS = [
+  /could not resolve host/i,
+  /connection (timed out|refused|reset)/i,
+  /network is unreachable/i,
+  /operation timed out/i,
+  /early eof/i,
+  /unexpected disconnect/i,
+  /the remote end hung up unexpectedly/i,
+  /rpc failed/i,
+  /http request failed with status 5\d\d/i,
+  /returned error: 5\d\d/i,
+];
+
+/** Exported for unit testing. */
+export function isRetryableGitError(message: string): boolean {
+  return RETRYABLE_GIT_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export interface GitRetryConfig {
+  maxRetries?: number;
+  baseDelayMs?: number;
+  maxDelayMs?: number;
+}
+
+const DEFAULT_GIT_RETRY: Required<GitRetryConfig> = { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 8000 };
+
+/**
+ * Retries a git network operation (fetch/pull/push against a remote) with
+ * exponential backoff and full jitter, but only for errors that look like a
+ * transient blip (see RETRYABLE_GIT_ERROR_PATTERNS) — the same class
+ * forge/shared.ts's forgeFetch already retries for forge API calls. Without
+ * this, one DNS hiccup or connection reset during `sync`/`push` crashes the
+ * whole run and forces a manual `pipeline-worker resume`, even though the
+ * next attempt would very likely just work. Exported for unit testing.
+ */
+export async function withGitRetry<T>(fn: () => Promise<T>, retryConfig?: GitRetryConfig): Promise<T> {
+  const cfg: Required<GitRetryConfig> = { ...DEFAULT_GIT_RETRY, ...retryConfig };
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isRetryableGitError(message) || attempt >= cfg.maxRetries) throw error;
+      await sleep(Math.random() * Math.min(cfg.maxDelayMs, cfg.baseDelayMs * 2 ** attempt));
+    }
+  }
+}
+
 export async function stageAll(worktreePath: string): Promise<void> {
   await execGit(['add', '-A'], { cwd: worktreePath });
 }
@@ -85,7 +138,7 @@ async function gitStatus(worktreePath: string): Promise<string> {
  * run the two are the same and this is exactly `git push -u origin <branch>`.
  */
 export async function push(worktreePath: string, remote: string, branch: string): Promise<void> {
-  await execGit(['push', '--set-upstream', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath });
+  await withGitRetry(() => execGit(['push', '--set-upstream', remote, `HEAD:refs/heads/${branch}`], { cwd: worktreePath }));
 }
 
 /**

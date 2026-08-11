@@ -1,0 +1,26 @@
+flowchart TD
+  Factory["forge/index.ts: createForge(config)"] -->|config.forge = 'github'| GH["forge/github.ts: createGithubForge"]
+  Factory -->|config.forge = 'gitlab'| GL["forge/gitlab.ts: createGitlabForge"]
+
+  subgraph GitHub["GitHub — direct REST/GraphQL via fetch"]
+    GH --> GHRest["REST: /pulls, /pulls/{n}/comments, workflow runs"]
+    GH --> GHGraphql["GraphQL (githubGraphqlRequest):\nonly way to read reviewThreads.isResolved"]
+    GHGraphql --> ThreadNote["MrComment.threadable:\na PR-level (issue) comment can't be replied-to UNDER,\nreplyToComment posts a new top-level comment instead"]
+    GH -->|"scaffold:inject + scaffold:inject-client markers"| GHScaffold["members added only via\nscaffold.js --template member --inject\n(pre-tool-use hook blocks hand-written ones)"]
+  end
+
+  subgraph GitLab["GitLab — glab CLI child process, no direct HTTP"]
+    GL --> GlabExec["GlabExecutor: glab api ...\nauth via GITLAB_TOKEN env + --hostname\nfrom settings gitlab.host / gitlab.token"]
+    GlabExec --> GlabRequirement["glab must be installed + on PATH\nwherever forge: gitlab runs"]
+  end
+
+  GH -. implements .-> Iface["forge/types.ts: ForgeClient\nfindExistingMr, createMergeRequest, updateMrDescription,\ngetMrPipelines, getFailedJobs, getJobLog, retryPipeline,\ncreateMrNote, createInlineComment, listMrComments, replyToComment,\nhasMergeConflicts, enableAutoMerge, isMrMerged, approveMr, getCiConfigPath"]
+  GL -. implements .-> Iface
+
+  CiFix["CI-fix agent turn (watchPipeline.ts)"] -->|"shell access this turn only"| GlabRequirement
+  CiFix -->|"shell access this turn only"| GhCliNote["gh CLI directly\n(no pipeline-worker-owned MCP server — removed)"]
+
+  Iface --> Callers["callers: workflow/openMergeRequest.ts,\nworkflow/watchPipeline.ts, workflow/reviewMr.ts,\nworkflow/fixMrComments.ts, workflow/replyMrComments.ts,\nworkflow/adoptBranch.ts"]
+
+  Tests["test/githubForge.test.ts:\nreal local http.createServer stub"] -.-> GH
+  TestsGl["test/gitlabForge.test.ts:\nfake GlabExecutor asserting on argv/stdin\n(no real glab binary needed)"] -.-> GL

@@ -1,0 +1,50 @@
+flowchart TD
+  Start(["runWorkflow(repoRoot, {ticket, target})"]) --> Lock["acquireLock(repoRoot)\none run per repo at a time"]
+  Lock --> FollowUp{"findFollowUpMr:\nis current branch's MR/PR already open?"}
+  FollowUp -->|yes| SyncBranchMR["syncBranch = MR's own sourceBranch\ncommit lands as a follow-up, not a new MR"]
+  FollowUp -->|no| ResolveTarget["resolveTargetBranch:\n--target, else origin default, else current branch"]
+
+  SyncBranchMR --> Capture
+  ResolveTarget --> Capture["capture: captureDiff(repoRoot)\nclean tree -> end run 'done'"]
+  Capture --> Worktree["worktree: createWorktree (temp branch)"]
+  Worktree --> Sync["sync: pull --rebase origin <targetBranch>\nwithGitRetry: backoff on DNS/connection-reset/5xx blips\n(git/commit.ts, shared with push)"]
+  Sync --> Apply["apply: applyDiffToWorktree"]
+  Apply -->|conflicts| ApplyConflict["resolveApplyConflicts\nagent.invoke(Read/Write/Edit only)\nsingle attempt"]
+  ApplyConflict -->|resolved| Checks
+  Apply -->|clean| Checks["checks: runChecks (build/lint/test)"]
+  ApplyConflict -->|still conflicted, throws| Catch
+  Checks -->|fail| ChecksFailed["state.failedStage='checks'"]
+  ChecksFailed --> Notify1{"isFollowUp?"}
+  Notify1 -->|yes| NotifyMR["notifyFollowUpFailure:\nbest-effort note on the already-open MR/PR"]
+  Notify1 -->|no| EndFailed
+  NotifyMR --> EndFailed(["endRun('failed'); worktree kept for resume"])
+  Checks -->|pass| Intent["intent: captureIntent via agent\n-> changeType, branchSlug, commitMessage, summary, risk"]
+  Intent --> Branch["branch: renameBranch(worktree, builtBranchName)"]
+  Branch --> Changelog["changelog (opt-in config.updateChangelog)"]
+  Changelog --> Commit["commit: stageAll + commit(intent.commitMessage)"]
+  Commit --> MR{"followUpMr?"}
+  MR -->|yes| AppendMR["appendToMergeRequest: push (withGitRetry) + append file breakdown"]
+  MR -->|no| OpenMR["openMergeRequest: push (withGitRetry) + create MR/PR\n(+ maybeEnableAutoMerge)"]
+  AppendMR --> Review
+  OpenMR --> Review["review: maybeReviewMergeRequest\nline-anchored findings, follow-up scoped to changed files only"]
+  Review --> CleanupEarly["cleanup (config.cleanupEarly, default true):\nresetRepo + release lock early\n-> other runs on this repo can start now"]
+  CleanupEarly --> Watch["ci-watch: watchPipeline\nsee ci-watch-loop.mmd"]
+  Watch --> Finalize{"finalPhase"}
+  Finalize -->|done| Squash["squash (opt-in config.squashOnMerge)\nbest-effort, skipped for follow-ups"]
+  Squash --> CleanupLate["cleanup (no-op here if cleanupEarly already ran it)"]
+  CleanupLate --> SyncTargetBranch["maybeSyncTargetBranch: fast-forward local target"]
+  SyncTargetBranch --> Switch["switch (opt-out config.switchToFeatureBranch):\ncheckout branch locally for follow-up edits"]
+  Switch --> EndDone(["endRun('done'); removeWorktree"])
+  Finalize -->|escalated| EndEscalated(["endRun('escalated'); worktree kept, see MR comment"])
+
+  Catch["drivePipeline's catch: any stage throws\n(apply-conflict, commit, mr, review, ...)"] --> Notify2{"isFollowUp?"}
+  Notify2 -->|yes| NotifyMR
+  Notify2 -->|no| EndFailed
+
+  ResumeEntry(["continueRun(repoRoot, state)\npipeline-worker resume --branch"]) -.->|"phaseReached(state.phase, X) skips X"| Apply
+  ResumeEntry -.-> Checks
+  ResumeEntry -.-> Intent
+  ResumeEntry -.-> Commit
+  ResumeEntry -.-> Watch
+
+  Interrupt["SIGINT/SIGTERM or TUI cancel"] -.-> Kept["worktree + state kept as-is\nendRun('interrupted'); resumeHint printed"]

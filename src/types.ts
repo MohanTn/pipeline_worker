@@ -73,7 +73,7 @@ export interface PipelineWorkerConfig {
   branchPattern: string;
   /** Once cleanup fires (see cleanupEarly for when), reset repoRoot to HEAD — the captured changes now live safely on the branch. */
   cleanupOnSuccess: boolean;
-  /** If true, cleanup fires as soon as the MR/PR is opened (diff is committed + pushed) instead of waiting for CI to go green — lets repoRoot be reused for a new run immediately while this run's CI-watch/fix loop keeps going independently. */
+  /** If true (the default), cleanup fires as soon as the MR/PR is opened (diff is committed + pushed) instead of waiting for CI to go green — lets repoRoot be reused for a new run immediately, and releases the repo lock, while this run's CI-watch/fix loop keeps going independently. */
   cleanupEarly: boolean;
   /** Run the local lint and test stages before opening the MR/PR; false runs only build, skipping both — e.g. when an earlier workflow already verified them. */
   runLintAndTest: boolean;

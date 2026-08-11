@@ -1,0 +1,25 @@
+flowchart TD
+  W(["watchPipeline(forge, config, agent, worktree, branch, targetBranch, mrIid, state, repoRoot, priorPipelineId)"]) --> Poll["poll MR/PR pipeline every config.pollIntervalSeconds"]
+  Poll --> NoPipeline{"no pipeline yet\n(within NO_PIPELINE_GRACE_MS = 60s)"}
+  NoPipeline -->|"no CI config file in worktree"| EndNoCi(["end run: nothing to watch"])
+  NoPipeline -->|"has .gitlab-ci.yml / .github/workflows"| Poll
+
+  Poll --> Conflict{"forge reports mergeable=false\n(GitHub 'dirty' / GitLab 'cannot_be_merged')"}
+  Conflict -->|yes| MergeTarget["merge target branch in locally"]
+  MergeTarget --> ResolveConflicts["agent.invoke(Read/Write/Edit, no shell)\nresolve conflict markers"]
+  ResolveConflicts --> CommitPush1["commit + push"]
+  CommitPush1 --> Poll
+
+  Poll --> Terminal{"pipeline reaches terminal status\nsuccess/failed/canceled/skipped/manual/scheduled"}
+  Terminal -->|success| Done(["state.phase = 'done'"])
+  Terminal -->|failed| FetchLogs["fetchFailedJobContext: getFailedJobs + getJobLog\ncapped MAX_FAILED_JOBS_IN_PROMPT=3, MAX_FAILED_JOB_LOG_CHARS=4000"]
+  FetchLogs --> FixAttempt{"ciFixAttempt < config.maxFixAttempts?"}
+  FixAttempt -->|yes| AgentFix["agent.invoke: shell access this turn\n(glab/gh CLI, no pipeline-worker-owned MCP server)"]
+  AgentFix --> LocalChecks["runChecks again before pushing\n(MAX_LOCAL_CHECK_OUTPUT_CHARS=4000 fed back on failure)"]
+  LocalChecks --> CommitPush2["commit + push"]
+  CommitPush2 --> Poll
+  FixAttempt -->|no, attempts exhausted| Escalate["escalate: post MR/PR comment\nstate.phase = 'escalated'"]
+  Terminal -->|canceled/skipped/manual| Escalate
+
+  Escalate --> End(["watchPipeline returns"])
+  Done --> End

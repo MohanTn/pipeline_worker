@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, cpSync, writeFileSync, unlinkSync, rmSync, exis
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
-import { listConflictedFiles, execGit } from './commit.js';
+import { listConflictedFiles, execGit, withGitRetry } from './commit.js';
 import { prepareCommitHooks } from './prepareHooks.js';
 
 export function generateTempBranchName(): string {
@@ -227,7 +227,7 @@ export async function checkoutExistingBranch(repoRoot: string, branch: string): 
  * exactly like any other command failure here.
  */
 export async function syncWithOrigin(worktreePath: string, targetBranch: string): Promise<void> {
-  await execGit(['pull', '--rebase', 'origin', targetBranch], { cwd: worktreePath });
+  await withGitRetry(() => execGit(['pull', '--rebase', 'origin', targetBranch], { cwd: worktreePath }));
 }
 
 export interface ApplyDiffResult {

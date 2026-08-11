@@ -105,6 +105,24 @@ async function resolveApplyConflicts(agent: AgentAdapter, repoRoot: string, stat
   await stageAll(worktreePath);
 }
 
+/**
+ * Best-effort notice on the already-open MR/PR when a follow-up run dies
+ * before reaching any stage that would otherwise post something there
+ * (append-to-MR, review, ci-watch's own escalation). Without this, a human
+ * watching that MR/PR had no signal at all that the follow-up attempt
+ * failed — they would only find out by checking pipeline-worker's own state
+ * file. Never fails the run: a rejected note becomes a `note()`, same as
+ * every other best-effort forge write in this file.
+ */
+async function notifyFollowUpFailure(forge: ForgeClient, mr: MergeRequest, stage: string, message: string): Promise<void> {
+  try {
+    await forge.createMrNote(mr.iid, `🚨 **pipeline-worker: a follow-up run failed (${stage} stage)**\n\n${message}`);
+  } catch (error) {
+    const noteMessage = error instanceof Error ? error.message : String(error);
+    note(`could not post the failure notice to ${mr.webUrl}: ${noteMessage}`);
+  }
+}
+
 export interface RunWorkflowOptions {
   /** Ticket/issue id to interpolate into config.branchPattern's {ticket} placeholder, if it has one. */
   ticket?: string;
@@ -243,6 +261,8 @@ export async function runAndReportChecks(
   state: RunState,
   repoRoot: string,
   failureHint?: string,
+  /** Set when this run is adding a commit to an MR/PR that's already open — see notifyFollowUpFailure. */
+  followUp?: { forge: ForgeClient; mr: MergeRequest },
 ): Promise<CheckResult[] | null> {
   const checks = await runStep(
     'checks',
@@ -258,6 +278,7 @@ export async function runAndReportChecks(
     state.failedStage = 'checks';
     recordEvent(repoRoot, state, `${failedCheck.name} check failed, aborted before opening a merge request`, 'error');
     // Before endRun: once the run display settles, nothing more is painted.
+    if (followUp) await notifyFollowUpFailure(followUp.forge, followUp.mr, 'checks', `${failedCheck.name} failed — aborted before opening a merge request`);
     if (failureHint) note(failureHint);
     endRun('failed', `${failedCheck.name} failed — aborted before opening a merge request`);
     process.exitCode = 1;
@@ -391,6 +412,7 @@ async function ensureChecks(ctx: PipelineContext, state: RunState, cursor: Stage
     state,
     ctx.repoRoot,
     `worktree kept at ${state.worktreePath} — fix it there, then ${resumeHint(state)}`,
+    ctx.followUpMr ? { forge: ctx.forge, mr: ctx.followUpMr } : undefined,
   );
 }
 
@@ -768,6 +790,8 @@ async function drivePipeline(ctx: PipelineContext, state: RunState, releaseLock:
     const message = error instanceof Error ? error.message : String(error);
     state.failedStage = cursor.stage;
     recordEvent(ctx.repoRoot, state, `Run failed in the ${cursor.stage} stage: ${message}`, 'error');
+    // Before endRun: once the run display settles, nothing more is painted.
+    if (ctx.followUpMr) await notifyFollowUpFailure(ctx.forge, ctx.followUpMr, cursor.stage, message);
     note(`worktree kept at ${ctx.worktreePath} — ${resumeHint(state)}`);
     endRun('failed', message);
     throw error;

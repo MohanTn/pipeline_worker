@@ -197,10 +197,10 @@ test('the settings file sets branchPattern and cleanupOnSuccess', () => {
   });
 });
 
-test('loadConfig defaults cleanupEarly to false and switchToFeatureBranch to true', () => {
+test('loadConfig defaults cleanupEarly to true and switchToFeatureBranch to true', () => {
   withTempDir((dir) => {
     const config = loadConfig(dir);
-    assert.equal(config.cleanupEarly, false);
+    assert.equal(config.cleanupEarly, true);
     assert.equal(config.switchToFeatureBranch, true);
   });
 });
@@ -212,10 +212,10 @@ test('the settings file can turn switchToFeatureBranch off', () => {
   });
 });
 
-test('"cleanupEarly": true sets cleanupEarly', () => {
+test('"cleanupEarly": false turns cleanupEarly off', () => {
   withTempDir((dir) => {
-    writeSettings({ cleanupEarly: true });
-    assert.equal(loadConfig(dir).cleanupEarly, true);
+    writeSettings({ cleanupEarly: false });
+    assert.equal(loadConfig(dir).cleanupEarly, false);
   });
 });
 

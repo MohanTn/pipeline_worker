@@ -5,9 +5,11 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { phaseReached, resumeHint, resolveTargetBranch, findFollowUpMr, recordMrOnState } from '../src/workflow/orchestrate.js';
+import { phaseReached, resumeHint, resolveTargetBranch, findFollowUpMr, recordMrOnState, runAndReportChecks } from '../src/workflow/orchestrate.js';
+import { beginRun, setRenderer } from '../src/ui/steps.js';
+import type { Renderer } from '../src/ui/renderer.js';
 import type { ForgeClient } from '../src/forge/types.js';
-import type { MergeRequest, RunState } from '../src/types.js';
+import type { MergeRequest, PipelineWorkerConfig, RunState } from '../src/types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -176,4 +178,124 @@ test('findFollowUpMr never asks the forge from a detached HEAD — there is no b
 
     assert.equal(await findFollowUpMr(forge, repoDir), undefined);
     assert.deepEqual(branches, []);
+  }));
+
+/** Only createMrNote matters for these tests; every other call would be a bug in the code under test. */
+function noteSpyForge(): { forge: ForgeClient; notes: Array<{ mrIid: number; body: string }> } {
+  const notes: Array<{ mrIid: number; body: string }> = [];
+  const notUsed = async (): Promise<never> => {
+    throw new Error('not used');
+  };
+  const forge = {
+    findExistingMr: notUsed,
+    createMergeRequest: notUsed,
+    updateMrDescription: notUsed,
+    getMrDescription: notUsed,
+    getMrPipelines: notUsed,
+    getFailedJobs: notUsed,
+    getJobLog: notUsed,
+    retryPipeline: notUsed,
+    createMrNote: async (mrIid: number, body: string) => {
+      notes.push({ mrIid, body });
+      return { id: 1 };
+    },
+    createInlineComment: notUsed,
+    hasMergeConflicts: notUsed,
+    enableAutoMerge: notUsed,
+    approveMr: notUsed,
+    isMrMerged: notUsed,
+    getCiConfigPath: notUsed,
+  } as unknown as ForgeClient;
+  return { forge, notes };
+}
+
+/** Only build/lint/test/runLintAndTest matter for runAndReportChecks. */
+function checksConfig(overrides: Partial<PipelineWorkerConfig> = {}): PipelineWorkerConfig {
+  return {
+    build: 'false', // always exits 1, portable on Linux/macOS CI
+    lint: '',
+    test: '',
+    runLintAndTest: false,
+    ...overrides,
+  } as PipelineWorkerConfig;
+}
+
+function checksState(): RunState {
+  return { branch: 'feat/x', targetBranch: 'main', worktreePath: '/tmp/wt', ciFixAttempt: 0, conflictAttempt: 0, phase: 'apply' };
+}
+
+/**
+ * runAndReportChecks sets process.exitCode = 1 on a failed check — correct
+ * for the real CLI process, but every test below deliberately fails a check
+ * in-process, so left alone it would leak a nonzero exit code into this
+ * whole test file's run (node:test reports the file itself as failed even
+ * though every assertion passed). Reset it after each such test.
+ */
+function resetExitCode(): void {
+  process.exitCode = undefined;
+}
+
+/**
+ * runAndReportChecks paints through ui/steps.ts's runStep/note/endRun, which
+ * without a renderer set falls back to the real live-TTY dashboard renderer —
+ * fine for a real run, but its ANSI/cursor-control output has caused this
+ * suite's parallel test-runner workers to occasionally corrupt their IPC
+ * back to the main process (mirrors runWorkflow.test.ts's captureSettle).
+ * A plain no-op renderer keeps these tests to their own assertions.
+ */
+function withNoopRenderer<T>(fn: () => Promise<T>): Promise<T> {
+  const renderer: Renderer = { onEvent: () => {}, log: () => {}, stop: () => {} };
+  setRenderer(renderer);
+  beginRun([], { title: 'test' });
+  return fn().finally(() => setRenderer(undefined));
+}
+
+test('runAndReportChecks posts a failure notice on the already-open MR/PR when checks fail on a follow-up run', () =>
+  withNoopRenderer(async () => {
+    const { forge, notes } = noteSpyForge();
+    const state = checksState();
+    const worktreePath = mkdtempSync(join(tmpdir(), 'pipeline-worker-checks-followup-'));
+    try {
+      const result = await runAndReportChecks(checksConfig(), worktreePath, state, worktreePath, undefined, { forge, mr: OPEN_MR });
+      assert.equal(result, null);
+      assert.equal(notes.length, 1);
+      assert.equal(notes[0]?.mrIid, OPEN_MR.iid);
+      assert.match(notes[0]?.body ?? '', /follow-up run failed \(checks stage\)/);
+      assert.match(notes[0]?.body ?? '', /build failed/);
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      resetExitCode();
+    }
+  }));
+
+test('runAndReportChecks never touches the forge for a fresh (non-follow-up) run', () =>
+  withNoopRenderer(async () => {
+    const state = checksState();
+    const worktreePath = mkdtempSync(join(tmpdir(), 'pipeline-worker-checks-fresh-'));
+    try {
+      // No `followUp` argument passed — a forge call here would throw ("not used") were one wired in by mistake.
+      const result = await runAndReportChecks(checksConfig(), worktreePath, state, worktreePath);
+      assert.equal(result, null);
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      resetExitCode();
+    }
+  }));
+
+test('runAndReportChecks still fails the run cleanly when the failure notice itself is rejected by the forge', () =>
+  withNoopRenderer(async () => {
+    const state = checksState();
+    const worktreePath = mkdtempSync(join(tmpdir(), 'pipeline-worker-checks-noteFails-'));
+    const forge = {
+      createMrNote: async () => {
+        throw new Error('forge unreachable');
+      },
+    } as unknown as ForgeClient;
+    try {
+      const result = await runAndReportChecks(checksConfig(), worktreePath, state, worktreePath, undefined, { forge, mr: OPEN_MR });
+      assert.equal(result, null, 'a rejected failure notice must not itself throw or change the outcome');
+    } finally {
+      rmSync(worktreePath, { recursive: true, force: true });
+      resetExitCode();
+    }
   }));

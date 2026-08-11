@@ -1,0 +1,36 @@
+flowchart TD
+  CLI["src/cli.ts — commander program 'pipeline-worker'"]
+
+  CLI --> RUN["run (default)\n--ticket --target"]
+  CLI --> TUI["tui"]
+  CLI --> RESUME["resume\n--branch --target"]
+  CLI --> REVIEW["review\n--branch"]
+  CLI --> FIX["fix\n--branch"]
+  CLI --> STATUS["status --branch"]
+  CLI --> SESSIONS["sessions [--branch]"]
+  CLI --> UPDATE["update"]
+
+  RUN -->|"bare invocation on a TTY"| ShouldTui{"shouldOpenTui(argv, stdin.isTTY, stdout.isTTY)"}
+  ShouldTui -->|true| StartTui["ui/tui/index.ts: startTui(repoRoot)"]
+  ShouldTui -->|false| RunWorkflow["workflow/orchestrate.ts: runWorkflow(repoRoot, opts)"]
+
+  TUI --> StartTui
+  RESUME --> ResumeRun["workflow/runCommands.ts: resumeRun"]
+  REVIEW --> ReviewBranch["workflow/runCommands.ts: reviewBranch"]
+  FIX --> FixBranch["workflow/runCommands.ts: fixBranch"]
+
+  ResumeRun -->|"has persisted RunState"| ContinueRun["orchestrate.ts: continueRun (resumeSkeleton)"]
+  ResumeRun -->|"no state — branch pushed by hand or run died pre-MR"| AdoptBranch["workflow/adoptBranch.ts: adoptBranch (adoptSkeleton)"]
+
+  STATUS --> LoadState["state/runState.ts: loadRunState"]
+  SESSIONS --> ListState["state/runState.ts: listRunStates / loadRunState"]
+  SESSIONS --> PrintSessions["ui/sessions.ts: printSessionList / printSessionDetail"]
+
+  UPDATE --> InstallVersion["version/autoUpdate.ts: installVersion(pkg.name, 'latest')"]
+  RUN -.->|"before anything"| EnsureLatest["version/autoUpdate.ts: ensureLatestVersion"]
+
+  RunWorkflow --> WorkflowStages["see workflow/run-pipeline.mmd"]
+  ContinueRun --> WorkflowStages
+  AdoptBranch --> WorkflowStages
+  ReviewBranch --> WorkflowStages
+  FixBranch --> WorkflowStages
