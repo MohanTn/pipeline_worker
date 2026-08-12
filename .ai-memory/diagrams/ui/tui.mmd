@@ -1,0 +1,31 @@
+%% src/ui/ + src/ui/tui/. Hard rule: only src/ui/ writes to process.stdout.
+%% Everything else goes through steps.ts (runStep, step, skipStep, note, ...).
+flowchart TD
+  workflow[workflow/*] --> steps[steps.ts: beginRun/runStep/note/announce]
+  steps --> tree[runTree.ts RunTree: StepNode tree + token splits]
+  steps --> pick[selectRendererMode]
+  pick -->|TTY| tr[treeRenderer.ts TreeRenderer: redraw region + console interception]
+  pick -->|plain| lr[renderer.ts LineRenderer]
+  tree --> fmt[runTreeFormat.ts buildTreeLines / fitToHeight / statusGlyph]
+  fmt --> tr
+  tr --> screenOut[(process.stdout)]
+  lr --> screenOut
+
+  cli[cli tui] --> start[tui/index.ts startTui + buildHome]
+  start --> app[tui/app.ts TuiApp: view stack, runJob, onKey]
+  app --> screen[tui/screen.ts Screen: paint, size, clipboard]
+  app --> keys[tui/keys.ts KeyReader/parseKeys]
+  app --> views
+
+  subgraph views [tui/views]
+    run[run.ts RunView] --> dash[runDashboard.ts RunDashboardView: live steps, notes scroll, cancel]
+    sessions[sessions.ts SessionsView + SessionDetailView]
+    settings[settings.ts SettingsView]
+    setup[setup.ts SetupView wizard]
+    menu[menu.ts MenuView]
+  end
+
+  settings --> cfgs[tui/configSchema.ts ConfigField + configStore.ts read/save settings]
+  sessions --> st[state/runState.ts listRunStates]
+  dash --> steps
+  helpers[line.ts · chrome.ts · list.ts · textInput.ts · theme.ts mocha] --> views

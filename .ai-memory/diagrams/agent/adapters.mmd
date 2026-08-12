@@ -1,0 +1,24 @@
+%% src/agent/ — one AgentAdapter interface, four CLIs. See src/agent/CLAUDE.md
+%% for flag conventions and tool-scoping rules.
+flowchart TD
+  sel[selectAgent  index.ts] --> claude[claude.ts createClaudeAdapter]
+  sel --> copilot[copilot.ts]
+  sel --> pi[pi.ts]
+  sel --> lc[littleCoder.ts createLittleCoderAdapter]
+
+  claude --> iface
+  copilot --> iface
+  pi --> iface
+  lc --> iface
+  iface[AgentAdapter.invoke  types.ts] --> res[AgentInvokeResult + AgentUsage tokens]
+
+  prompt[promptText.ts composePrompt / truncateToBudget] --> stdin[stdinPrompt.ts writePromptToStdin]
+  stdin --> claude
+  claude --> args[buildClaudeArgs + toolGateNames]
+  claude --> parse[parseClaudeResult / parseUsage on ClaudeEnvelope]
+  copilot --> ej1[extractJsonObject + clipToSchema]
+  pi --> ej2[extractJsonObject + mapToolName]
+  lc --> ej3[extractJsonObject + mapLittleCoderTools]
+
+  callers["callers: captureIntent · reviewDiff · commentFixes · commentReplies · watchPipeline fix loop"] --> iface
+  res --> tokens[recordAgentTokens -> RunState + ui usage footer]

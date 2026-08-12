@@ -1,0 +1,29 @@
+%% src/cli.ts — commander program, `run` is the default command.
+%% Every command resolves config via safeLoadConfig() then delegates to src/workflow/.
+mindmap
+  root((pipeline-worker CLI))
+    run (default)
+      --ticket id
+      --target branch
+      runWorkflow / orchestrate.ts
+    tui
+      startTui / ui/tui/index.ts
+      home menu: Run · Sessions · Settings · Setup · Quit
+    resume
+      --branch (required)
+      --target
+      resumeRun / runCommands.ts
+    review
+      --branch
+      reviewBranch / runCommands.ts
+    fix
+      --branch
+      fixBranch / runCommands.ts
+    status
+      --branch
+      loadRunState / state/runState.ts
+    sessions
+      --branch for one timeline
+      listRunStates + ui/sessions.ts
+    update
+      ensureLatestVersion / version/autoUpdate.ts

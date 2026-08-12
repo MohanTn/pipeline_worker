@@ -1,0 +1,31 @@
+%% Step ids come from src/workflow/runPlan.ts (freshRunSkeleton / resumeSkeleton /
+%% adoptSkeleton / fixSkeleton / reviewSkeleton). drivePipeline in orchestrate.ts
+%% walks them via the ensure* cursor functions, persisting RunPhase after each.
+flowchart TD
+  capture[capture: staged + unstaged diff] --> worktree[worktree: temp branch copy]
+  worktree --> sync[sync: pull --rebase origin target]
+  sync --> apply[apply: replay diff into worktree]
+  apply -->|conflict| resolveApply[resolveApplyConflicts: agent patches]
+  resolveApply --> intent
+  apply --> intent[intent: agent infers type/slug/commit msg]
+  intent --> branch[branch: checkout feature branch]
+  branch --> checks[checks: build / lint / test]
+  checks --> changelog[changelog: CHANGELOG.md bullet, best-effort]
+  changelog --> commit[commit]
+  commit --> push[push feature branch]
+  push --> mr[mr: openMergeRequest]
+  mr --> review[review: agent inline comments]
+  review --> ciwatch[ci-watch: watchPipeline, fix + conflict loop]
+  ciwatch --> cleanup[cleanup: reset your repo to HEAD]
+  cleanup --> merge[merge: auto-merge + syncTargetBranch]
+  merge --> switchB[switch: checkout feature branch locally]
+
+  subgraph entrypoints [other entrypoints reuse the same tail]
+    resume[resume: reattach persisted RunState] --> ciwatch
+    adopt[adopt: fetch + checkout origin/branch] --> inspect[inspect diff vs target] --> checks
+    fixcmd[fix: read MR threads] --> fixstep[fix: edit flagged code] --> checks
+    reviewcmd[review: adopt then review + replies + approve] --> review
+  end
+
+  ciwatch -. cancel .-> settle[settleCancelledRun]
+  runstate[(state/runState.ts: never throws)] -.records phase.- capture
