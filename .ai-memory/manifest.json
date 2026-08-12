@@ -1,0 +1,44 @@
+{
+  "routes": [
+    {
+      "keywords": ["debug", "bug", "regression", "failing test", "stack trace", "why does"],
+      "file": "diagrams/debug/playbook.mmd",
+      "priority": 9
+    },
+    {
+      "keywords": ["workflow", "orchestrate", "pipeline", "run stages", "resume", "runPlan", "ci-watch", "RunPhase"],
+      "file": "diagrams/workflow/pipeline.mmd",
+      "priority": 10
+    },
+    {
+      "keywords": ["forge", "gitlab", "github", "merge request", "glab", "ForgeClient", "MR comments", "auto-merge"],
+      "file": "diagrams/forge/integration.mmd",
+      "priority": 9
+    },
+    {
+      "keywords": ["agent", "adapter", "claude", "copilot", "prompt", "AgentAdapter", "tokens", "usage"],
+      "file": "diagrams/agent/adapters.mmd",
+      "priority": 8
+    },
+    {
+      "keywords": ["tui", "ui", "renderer", "steps.ts", "runTree", "settings view", "dashboard", "stdout"],
+      "file": "diagrams/ui/tui.mmd",
+      "priority": 8
+    },
+    {
+      "keywords": ["cli", "command", "commander", "run command", "sessions", "status", "fix command"],
+      "file": "diagrams/cli/commands.mmd",
+      "priority": 7
+    },
+    {
+      "keywords": ["test", "unit test", "stub", "fixture", "node:test", "npm test", "GlabExecutor fake"],
+      "file": "diagrams/test/suite.mmd",
+      "priority": 7
+    },
+    {
+      "keywords": ["refactor", "module", "dependency", "architecture", "imports", "where does"],
+      "file": "diagrams/refactor/modules.mmd",
+      "priority": 6
+    }
+  ]
+}

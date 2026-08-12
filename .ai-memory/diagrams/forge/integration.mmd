@@ -1,0 +1,26 @@
+%% src/forge/ — one ForgeClient interface, two backends. See src/forge/CLAUDE.md.
+flowchart LR
+  caller[workflow/*] --> idx[createForge  index.ts]
+  idx -->|forge: github| gh[createGithubForge  github.ts]
+  idx -->|forge: gitlab| gl[createGitlabForge  gitlab.ts]
+
+  subgraph iface [ForgeClient  types.ts]
+    m1[findExistingMr / createMergeRequest]
+    m2[updateMrDescription / getMrDescription]
+    m3[getMrPipelines / getFailedJobs / getJobLog / retryPipeline / getCiConfigPath]
+    m4[createMrNote / createInlineComment / listMrComments / replyToComment]
+    m5[hasMergeConflicts / enableAutoMerge / isMrMerged / approveMr]
+  end
+
+  gh --> iface
+  gl --> iface
+
+  gh --> rest[githubRequest REST + githubGraphqlRequest for review threads]
+  gh --> runs[aggregateRuns: WorkflowRun -> PipelineStatus]
+  gl --> glab[createGlabExecutor: spawns `glab api`]
+  gl --> retry[withGitlabRetry]
+  rest --> shared[shared.ts: forgeFetch, backoffMs, isRetryableStatus, parseRetryAfterMs]
+  glab --> shared
+
+  note1["tests: github = real http.createServer stub; gitlab = injected fake GlabExecutor"]:::n
+  classDef n fill:#eee,stroke:#999,color:#333

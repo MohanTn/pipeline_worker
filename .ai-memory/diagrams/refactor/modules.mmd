@@ -1,0 +1,38 @@
+%% Module dependency graph. src/workflow/orchestrate.ts is the hub — nearly every
+%% other module is pulled in there, so changes to shared signatures land there first.
+flowchart LR
+  cli[src/cli.ts] --> orch[workflow/orchestrate.ts]
+  cli --> rc[workflow/runCommands.ts]
+  cli --> tui[ui/tui/index.ts]
+  rc --> orch
+  orch --> cfg[config/loader.ts + config/file.ts + detectChecks.ts]
+  orch --> forge["forge/index.ts -&gt; github.ts | gitlab.ts"]
+  orch --> agent[agent/index.ts -> claude/copilot/pi/littleCoder]
+  orch --> git
+
+  subgraph git [src/git]
+    wt[worktree.ts] --- cm[commit.ts]
+    df[diff.ts] --- rm[remote.ts]
+    sq[squash.ts] --- bn[branchName.ts]
+    ph[prepareHooks.ts]
+  end
+
+  orch --> state[state/runState.ts + lock.ts]
+  orch --> proc[process/signalCleanup.ts + cancelScope.ts]
+  orch --> ui[ui/steps.ts]
+
+  subgraph stages [workflow stages orchestrate calls]
+    ci[captureIntent.ts] --- ck[runChecks.ts]
+    ucl[updateChangelog.ts] --- omr[openMergeRequest.ts]
+    rmr[reviewMr.ts] --- wp[watchPipeline.ts]
+    stb[syncTargetBranch.ts] --- ab[adoptBranch.ts]
+    fmc[fixMrComments.ts] --- rmc[replyMrComments.ts]
+    amr[approveMr.ts] --- rp[runPlan.ts]
+  end
+  orch --> stages
+  stages --> forge
+  stages --> agent
+  rmr --> rev[review/: chunkDiff · prompt · findings · reviewDiff]
+  fmc --> cf[review/commentFixes.ts]
+  rmc --> cr[review/commentReplies.ts]
+  agent --> toon[toon/envelope.ts buildEnvelope]

@@ -1,0 +1,28 @@
+%% npm test = node --import tsx --test test/**/*.test.ts (node:test + node:assert/strict).
+%% No mocking libraries. Every code change ships tests in the same commit.
+flowchart TD
+  cmd[npm run build and npm run lint and npm test] --> suite[test/*.test.ts]
+
+  suite --> g1[real throwaway git repos]
+  g1 --> g1d["mkdtempSync + git init, bare origin where needed, cleaned in finally: worktree · commit · squash · remote · diff · adoptBranch · orchestrate"]
+
+  suite --> g2[local HTTP stub]
+  g2 --> g2d["http.createServer: githubForge.test.ts · forgeShared.test.ts"]
+
+  suite --> g3[injected fake executor]
+  g3 --> g3d["fakeExecutor asserts glab argv/stdin: gitlabForge.test.ts — no glab binary needed"]
+
+  suite --> g4[hand-written stubs]
+  g4 --> g4d["stubForge / stubAgent objects implementing ForgeClient and AgentAdapter: runWorkflow · watchPipeline · reviewMr · fixMrComments · replyMrComments"]
+
+  suite --> g5[temp XDG_CONFIG_HOME]
+  g5 --> g5d["writeSettings into a temp dir instead of env vars: config.test.ts · runWorkflow.test.ts"]
+
+  suite --> g6[fake streams / rigs]
+  g6 --> g6d["FakeStream + FakeInput + stripAnsi: treeRenderer · tuiApp · tuiViews · tuiRunDashboard"]
+
+  suite --> g7[built CLI]
+  g7 --> g7d["cli.test.ts runs dist/cli.js — run npm run build first"]
+
+  suite --> g8[fake binaries on PATH]
+  g8 --> g8d["withFakeNpm / withFakeBinary: autoUpdate · updateCli · prepareHooks"]
