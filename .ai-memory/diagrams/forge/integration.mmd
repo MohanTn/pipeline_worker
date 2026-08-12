@@ -7,7 +7,7 @@ flowchart LR
   subgraph iface [ForgeClient  types.ts]
     m1[findExistingMr / createMergeRequest]
     m2[updateMrDescription / getMrDescription]
-    m3[getMrPipelines / getFailedJobs / getJobLog / retryPipeline]
+    m3[getMrPipelines / getFailedJobs / getJobLog / retryPipeline / getCiConfigPath]
     m4[createMrNote / createInlineComment / listMrComments / replyToComment]
     m5[hasMergeConflicts / enableAutoMerge / isMrMerged / approveMr]
   end
