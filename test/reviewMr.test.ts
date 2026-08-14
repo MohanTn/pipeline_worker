@@ -6,9 +6,11 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { maybeReviewMergeRequest, postFindings, reviewTurnLimits, scopeChunks } from '../src/workflow/reviewMr.js';
+import { findingKey } from '../src/review/selection.js';
 import type { AgentAdapter, AgentInvokeOptions } from '../src/agent/types.js';
 import type { ForgeClient, InlineComment } from '../src/forge/types.js';
-import type { DiffChunk } from '../src/review/types.js';
+import type { FindingCandidate } from '../src/review/selection.js';
+import type { DiffChunk, ReviewFinding } from '../src/review/types.js';
 import type { PipelineWorkerConfig } from '../src/types.js';
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +119,14 @@ function forgeStub(): ForgeClient {
 
 const CRITICAL_FINDING = JSON.stringify({
   findings: [{ file: 'app.ts', line: 1, severity: 'CRITICAL', comment: '### Hard-coded secret\n\nMove it to an env var.\n```suggestion\nconst token = process.env.TOKEN;\n```' }],
+});
+
+/** Both lines of the fixture branch's app.ts, so a round can post one and ignore the other. */
+const TWO_FINDINGS = JSON.stringify({
+  findings: [
+    { file: 'app.ts', line: 1, severity: 'CRITICAL', comment: '### Hard-coded secret\n\nMove it to an env var.' },
+    { file: 'app.ts', line: 2, severity: 'MAJOR', comment: '### Magic number\n\nName the port.' },
+  ],
 });
 
 test('does not invoke the agent or the forge when config.review is disabled', async () => {
@@ -346,5 +356,144 @@ test('postFindings keeps going after a rejected comment and reports only what la
     'github',
     'claude',
   );
-  assert.equal(posted, 1);
+  assert.deepEqual(posted.map((finding) => finding.line), [2]);
+});
+
+test('a round-aware review offers its findings to the picker and posts only what came back', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const comments: InlineComment[] = [];
+  try {
+    const forge = forgeStub();
+    forge.createInlineComment = async (_mrIid, comment) => {
+      comments.push(comment);
+      return { id: comments.length };
+    };
+    let offered: FindingCandidate[] = [];
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(TWO_FINDINGS), worktreePath, 'main', 7, undefined, {
+      turn: 1,
+      priorTurns: [],
+      newThreads: [],
+      selectFindings: async (candidates) => {
+        offered = candidates;
+        return candidates.filter((candidate) => candidate.finding.line === 1).map((candidate) => candidate.finding);
+      },
+    });
+
+    assert.equal(offered.length, 2, 'every finding is offered, not just the one that gets posted');
+    assert.deepEqual(offered.map((candidate) => candidate.status), ['new', 'new']);
+    assert.equal(outcome.posted, 1);
+    assert.deepEqual(comments.map((comment) => comment.line), [1]);
+    assert.equal(outcome.round?.posted.length, 1);
+    assert.equal(outcome.round?.ignored.length, 1, 'the finding the human unchecked is remembered as ignored');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a cancelled picker posts nothing and remembers nothing, so the next round offers the same findings', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  try {
+    const forge = forgeStub();
+    forge.createInlineComment = async () => {
+      throw new Error('createInlineComment must not be called after a cancel');
+    };
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7, undefined, {
+      turn: 2,
+      priorTurns: [],
+      newThreads: [],
+      selectFindings: async () => undefined,
+    });
+    assert.equal(outcome.posted, 0);
+    assert.equal(outcome.round, undefined, 'a cancel records no round at all — an empty selection would have');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('an edited body is what reaches the forge, credited as edited', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const comments: InlineComment[] = [];
+  try {
+    const forge = forgeStub();
+    forge.createInlineComment = async (_mrIid, comment) => {
+      comments.push(comment);
+      return { id: comments.length };
+    };
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7, undefined, {
+      turn: 1,
+      priorTurns: [],
+      newThreads: [],
+      selectFindings: async (candidates) => candidates.map((candidate) => ({ ...candidate.finding, body: 'Read it from the environment instead.', edited: true })),
+    });
+
+    assert.equal(comments.length, 1);
+    assert.match(comments[0].body, /Read it from the environment instead\./);
+    assert.doesNotMatch(comments[0].body, /Hard-coded secret/, 'the AI text is replaced, not appended to');
+    assert.match(comments[0].body, /pipeline-worker review \(claude, edited\)/);
+    assert.deepEqual(outcome.round?.edited.length, 1);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a later round suppresses what an earlier one posted and re-offers what it ignored, unchecked', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  try {
+    const findings: ReviewFinding[] = JSON.parse(TWO_FINDINGS).findings;
+    const priorTurns = [
+      { turn: 1, at: '2026-01-01T00:00:00.000Z', posted: [findingKey(findings[0])], ignored: [findingKey(findings[1])], edited: [], threadIds: [] },
+    ];
+    let offered: FindingCandidate[] = [];
+    const outcome = await maybeReviewMergeRequest(forgeStub(), reviewConfig(), agentReturning(TWO_FINDINGS), worktreePath, 'main', 7, undefined, {
+      turn: 2,
+      priorTurns,
+      newThreads: ['@dev on app.ts:1: are you sure?'],
+      selectFindings: async (candidates) => {
+        offered = candidates;
+        return [];
+      },
+    });
+
+    assert.deepEqual(offered.map((candidate) => candidate.status), ['seen', 'ignored']);
+    assert.equal(outcome.posted, 0);
+    assert.deepEqual(outcome.round?.ignored, [findingKey(findings[1])], 'only the offered (non-suppressed) finding is recorded as ignored again');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a later round tells the agent what was already posted and what has been commented since', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const calls: AgentInvokeOptions[] = [];
+  try {
+    await maybeReviewMergeRequest(forgeStub(), reviewConfig(), agentReturning('[]', calls), worktreePath, 'main', 7, undefined, {
+      turn: 3,
+      priorTurns: [{ turn: 1, at: '2026-01-01T00:00:00.000Z', posted: ['app.ts:1:deadbeef'], ignored: [], edited: [], threadIds: ['t1'] }],
+      newThreads: ['@dev on app.ts:1: this is intentional'],
+    });
+
+    assert.match(calls[0].prompt, /### Review round 3/);
+    assert.match(calls[0].prompt, /do not repeat them/);
+    assert.match(calls[0].prompt, /- app\.ts:1/, 'the anchor of an already-posted comment, not its whole body');
+    assert.match(calls[0].prompt, /this is intentional/);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a first round adds no round context to the prompt', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  const calls: AgentInvokeOptions[] = [];
+  try {
+    await maybeReviewMergeRequest(forgeStub(), reviewConfig(), agentReturning('[]', calls), worktreePath, 'main', 7, undefined, { turn: 1, priorTurns: [], newThreads: [] });
+    assert.doesNotMatch(calls[0].prompt, /Review round/);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
 });

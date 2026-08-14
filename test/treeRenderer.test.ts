@@ -317,6 +317,36 @@ test('fitToHeight collapses a long run of finished attempt children, keeping the
   assert.ok(display.some((r) => !('summary' in r) && r.node.id === 'ci-watch/fix-6'));
 });
 
+test('pause hands the terminal back: the region is erased, the cursor shown, and console.log stops being intercepted', () => {
+  withRig((rig) => {
+    const intercepted = console.log;
+    rig.renderer.pause();
+
+    assert.ok(rig.out.writes.some((write) => ERASE_REGION_RE.test(write)), 'the pinned region must be erased before another screen takes over');
+    assert.ok(rig.out.text().endsWith('\x1b[?25h'), 'the cursor is given back to whatever paints next');
+    assert.notEqual(console.log, intercepted, 'console must not be routed into a region that is no longer painted');
+
+    const writesWhilePaused = rig.out.writes.length;
+    rig.renderer.log('a note raised while the picker is up');
+    rig.tree.finish('capture', 'done');
+    assert.equal(rig.out.writes.length, writesWhilePaused, 'nothing may be written while another screen owns the terminal');
+  });
+});
+
+test('resume takes the terminal back, repaints, and re-intercepts console', () => {
+  withRig((rig) => {
+    rig.renderer.pause();
+    const released = console.log;
+    rig.renderer.resume();
+
+    assert.notEqual(console.log, released, 'the region is painted again, so stray console output must be routed around it');
+    assert.match(rig.out.text(), /add-login/, 'the tree is repainted on the way back');
+    const before = rig.out.writes.length;
+    rig.tree.finish('capture', 'done');
+    assert.ok(rig.out.writes.length > before, 'tree events paint again after resume');
+  });
+});
+
 test('fitToHeight falls back to keeping the newest rows when collapsing still does not fit', () => {
   const rows = makeRows(Array.from({ length: 20 }, (_, i) => ({ id: `step-${i}`, depth: 0, status: 'done' as const })));
   const display = fitToHeight(rows, 5);

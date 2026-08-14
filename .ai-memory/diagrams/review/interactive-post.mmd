@@ -1,0 +1,67 @@
+%% SHIPPED. Code: review/selection.ts · state/reviewTurns.ts · workflow/reviewMr.ts
+%% ui/tui/views/reviewPicker.ts · ui/tui/reviewSession.ts · workflow/runCommands.ts
+%% Deviations from the draft: turn history is its own per-branch file (not RunState,
+%% which `review --branch` often has none of), new threads are diffed by thread id
+%% (MrComment has no timestamp), `s` submits while ⏎ opens the detail pane, and the
+%% picker is skipped inside `pw tui` too — that app loop already owns raw stdin.
+flowchart TD
+  cli["cli.ts · pw review --branch b"] --> rb["workflow/runCommands.ts reviewBranch"]
+  rb --> mr{"open MR/PR found?"}
+  mr -- no --> err["throw: open one first"]
+  mr -- yes --> adopt["adopt: disposable worktree"]
+  adopt --> turns["prepareReviewRound: loadReviewTurns(state/review/&lt;branch&gt;.json)<br/>turn = highest recorded + 1 (absent ⇒ turn 1)"]
+  turns --> since["forge.listMrComments → unseenThreadIds vs recorded ids<br/>new threads → prompt.ts buildRoundContext"]
+  since --> stage["reviewMr.ts maybeReviewMergeRequest(turn, priorTurns, newThreads)"]
+  stage --> diff["chunkDiff + groupChunks + reviewDiff"]
+  diff --> gate{"findings above reviewMinSeverity?"}
+  gate -- none --> cleanRun["note: nothing worth commenting on · clean = true"]
+
+  gate -- "n findings" --> dedupe["selection.ts classifyFindings by file:line:hash(comment)<br/>new · seen (hidden) · ignored (unchecked)"]
+  dedupe --> tty{"reviewSession.ts pickerAvailable<br/>stdin+stdout TTY · renderer not delegated"}
+  tty -- no --> postAll["postFindings(new only) — non-interactive path"]
+  tty -- yes --> picker
+
+  subgraph picker ["ui/tui/views/reviewPicker.ts — ReviewPickerView implements View<br/>hosted by reviewSession.ts: steps.withDisplaySuspended + TuiApp"]
+    header["header: Turn 2 · 3 new · 2 seen · 1 ignored · k selected"]
+    header --> list["checkbox list<br/>[x] MAJOR · src/app.ts:42 · Read it from env… [new]<br/>[ ] MINOR · src/cli.ts:9 · … [ignored in turn 1]"]
+    list -- "space" --> toggle["toggle row"]
+    list -- "a / n" --> bulk["check all / none"]
+    list -- "d" --> dups["show/hide duplicates from earlier turns"]
+    list -- "enter on row" --> detail["detail pane: full body + ```suggestion + turn history"]
+    detail -- "esc" --> list
+    list -- "e" --> edit
+    detail -- "e" --> edit
+
+    subgraph edit ["edit buffer: EditorState over ui/tui/textInput.ts applyKey"]
+      buf["multi-line buffer seeded with the AI body"]
+      buf -- "ctrl+s save" --> mark["body = human text · edited = true<br/>empty body ⇒ row unchecked"]
+      buf -- "esc discard" --> keep["AI body unchanged"]
+    end
+
+    mark --> list
+    keep --> list
+    toggle --> list
+    bulk --> list
+    dups --> list
+    list -- "s (submit)" --> submit["done(selected findings, edited bodies applied)"]
+    list -- "esc / q" --> cancel["done(undefined) — cancelled, nothing remembered"]
+  end
+
+  submit --> postSel["postFindings(selected)<br/>footer credits (claude, edited)"]
+  cancel --> none["note: cancelled · no round recorded"]
+  postSel --> record
+  postAll --> record
+  cleanRun --> record
+  record["runCommands: appendReviewTurn<br/>{ turn, at, posted, ignored, edited, threadIds } · never throws"]
+  none --> outcome
+  record --> outcome["ReviewOutcome { posted, clean, round? }"]
+  outcome --> replies["maybeReplyToMrComments — unchanged"]
+  replies --> approve["maybeApproveMergeRequest(review.clean && replies.clean)"]
+  approve --> endRun["endRun done: turn 2 · posted k of n · MR url"] --> rmwt["removeWorktree (finally)"]
+
+  %% Wiring: workflow code never imports the TUI. ReviewRound.selectFindings is a
+  %% FindingSelector (review/selection.ts), injected by runCommands.ts and stubbed
+  %% by the tests — node:test has no TTY, so the picker itself never opens there.
+  stage -. "selectFindings callback" .- picker
+
+  %% Tests: reviewPicker · reviewSelection · reviewTurns · reviewRound · reviewMr · treeRenderer(pause/resume).

@@ -82,6 +82,33 @@ export function setRenderer(renderer: Renderer | undefined): void {
   rendererOverride = renderer;
 }
 
+/**
+ * True when a run's output is being drawn by the TUI's own dashboard rather
+ * than by this module's tree/line renderers. The review picker asks: inside
+ * the TUI the alt screen and stdin's raw mode already belong to the app loop,
+ * so a second full-screen prompt would fight it for every byte — that path
+ * posts every finding instead (see ui/tui/reviewSession.ts).
+ */
+export function rendererIsDelegated(): boolean {
+  return rendererOverride !== undefined;
+}
+
+/**
+ * Lends the terminal to a full-screen prompt for the duration of `task`: the
+ * live tree stops repainting and gives console.log back first, and gets both
+ * back afterwards, whatever `task` did. Without this the 80ms repaint timer
+ * would write into the alt screen the prompt is painting.
+ */
+export async function withDisplaySuspended<T>(task: () => Promise<T>): Promise<T> {
+  const run = ensureActive();
+  run.renderer.pause?.();
+  try {
+    return await task();
+  } finally {
+    run.renderer.resume?.();
+  }
+}
+
 function createRenderer(): Renderer {
   if (rendererOverride) return rendererOverride;
   const mode = selectRendererMode(process.stdout.isTTY === true, plainOutput);

@@ -26,6 +26,11 @@
       "priority": 8
     },
     {
+      "keywords": ["review", "pw review", "review comments", "findings", "select comments", "checkbox", "interactive review", "postFindings"],
+      "file": "diagrams/review/interactive-post.mmd",
+      "priority": 9
+    },
+    {
       "keywords": ["cli", "command", "commander", "run command", "sessions", "status", "fix command"],
       "file": "diagrams/cli/commands.mmd",
       "priority": 7

@@ -58,6 +58,8 @@ export class TreeRenderer implements Renderer {
   private frame = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
+  /** True while another screen owns the terminal (see pause/resume): no repaint, no console interception. */
+  private paused = false;
   private readonly originalConsole = { log: console.log, error: console.error, warn: console.warn };
   // Every painted line is pre-truncated to the terminal width (see the file
   // header), so a resize never changes how many physical rows the region
@@ -98,12 +100,49 @@ export class TreeRenderer implements Renderer {
     process.once('exit', this.restoreCursorOnExit);
     this.out.on?.('resize', this.onResize);
     // Route anything that would print mid-region through log() instead.
-    console.log = (...args: unknown[]) => this.log(args.map(String).join(' '));
-    console.error = (...args: unknown[]) => this.log(args.map(String).join(' '));
-    console.warn = (...args: unknown[]) => this.log(args.map(String).join(' '));
+    this.interceptConsole();
     // unref() so a settled run's process never lingers on the spinner timer.
     this.timer = setInterval(() => this.paint(), PAINT_INTERVAL_MS);
     this.timer.unref?.();
+  }
+
+  /**
+   * Gives the terminal up: erase the pinned region, stop the repaint timer,
+   * hand console.log back, and show the cursor — everything attach() did. Any
+   * write from here (the alt-screen review picker) would otherwise land in the
+   * middle of a region this renderer still believes it owns, and the next
+   * paint would erase rows it does not own.
+   */
+  pause(): void {
+    if (this.paused || this.stopped || !this.tree) return;
+    this.paused = true;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+    this.eraseRegion();
+    this.restoreConsole();
+    this.out.write(SHOW_CURSOR);
+  }
+
+  resume(): void {
+    if (!this.paused || this.stopped) return;
+    this.paused = false;
+    this.out.write(HIDE_CURSOR);
+    this.interceptConsole();
+    this.timer = setInterval(() => this.paint(), PAINT_INTERVAL_MS);
+    this.timer.unref?.();
+    this.paint();
+  }
+
+  private interceptConsole(): void {
+    console.log = (...args: unknown[]) => this.log(args.map(String).join(' '));
+    console.error = (...args: unknown[]) => this.log(args.map(String).join(' '));
+    console.warn = (...args: unknown[]) => this.log(args.map(String).join(' '));
+  }
+
+  private restoreConsole(): void {
+    console.log = this.originalConsole.log;
+    console.error = this.originalConsole.error;
+    console.warn = this.originalConsole.warn;
   }
 
   private eraseRegion(): void {
@@ -113,8 +152,9 @@ export class TreeRenderer implements Renderer {
     }
   }
 
-  /** Freeform text: erase the region, let the text enter scrollback, repaint beneath it. */
+  /** Freeform text: erase the region, let the text enter scrollback, repaint beneath it. A note raised while paused waits for the region to come back rather than printing over the screen that took it. */
   log(text: string): void {
+    if (this.paused) return;
     this.eraseRegion();
     this.out.write(`${text}\n`);
     if (!this.stopped) this.paint();
@@ -128,7 +168,7 @@ export class TreeRenderer implements Renderer {
   }
 
   private paint(): void {
-    if (!this.tree || this.stopped) return;
+    if (!this.tree || this.stopped || this.paused) return;
     this.frame += 1;
     const lines = this.buildFrame(this.tree.header.status);
     this.eraseRegion();
@@ -154,9 +194,7 @@ export class TreeRenderer implements Renderer {
     this.stopped = true;
     this.renderedLines = 0;
     this.out.write(SHOW_CURSOR);
-    console.log = this.originalConsole.log;
-    console.error = this.originalConsole.error;
-    console.warn = this.originalConsole.warn;
+    this.restoreConsole();
     this.out.off?.('resize', this.onResize);
   }
 }

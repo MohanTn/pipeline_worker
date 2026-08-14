@@ -36,6 +36,8 @@ export interface ReviewOptions {
   minSeverity: ReviewSeverity;
   maxComments: number;
   forge: ForgeName;
+  /** What earlier review rounds said and what has been commented since (see prompt.ts's buildRoundContext). Empty on a first round. */
+  roundContext?: string;
 }
 
 export interface ReviewResult {
@@ -67,7 +69,7 @@ export async function reviewDiff(agent: AgentAdapter, turns: DiffChunk[][], work
 
   for (const turn of turns) {
     const result = await agent.invoke({
-      prompt: buildReviewPrompt(turn, fence),
+      prompt: buildReviewPrompt(turn, fence, opts.roundContext),
       systemPrompt: REVIEW_SYSTEM,
       cwd: worktreePath,
       jsonSchema: REVIEW_SCHEMA,

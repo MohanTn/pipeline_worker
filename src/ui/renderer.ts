@@ -26,6 +26,13 @@ export interface Renderer {
   log(text: string): void;
   /** Final paint for the run's terminal status; must leave the terminal usable. */
   stop(status: RunStatus, detail: string | undefined, tree: RunTree): void;
+  /**
+   * Hands the terminal to something else for a while — the review picker takes
+   * the whole screen mid-run (see steps.ts's withDisplaySuspended). Optional:
+   * a renderer that owns no repaint loop (LineRenderer) needs neither half.
+   */
+  pause?(): void;
+  resume?(): void;
 }
 
 export function formatElapsed(ms: number): string {

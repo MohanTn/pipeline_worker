@@ -201,6 +201,16 @@ With `"review": true`, the agent reviews the branch diff right after the MR/PR o
 
 A follow-up run reviews only the files *that* run touched. `pipeline-worker review --branch <name>` runs this stage alone and ignores the `review` setting.
 
+#### Picking what gets posted
+
+On a terminal, `pipeline-worker review --branch <name>` no longer posts straight to the MR/PR: every finding is shown first in a checkbox screen, and only what you submit is posted.
+
+- **Pick** — `space` toggles a comment, `a`/`n` check all or none, `⏎` reads the whole body, `s` submits, `q` cancels (posting nothing, remembering nothing). New findings start checked, so `s` alone reproduces the old behavior.
+- **Edit** — `e` opens the comment in an editor seeded with the agent's text: rewrite it, or add to it. `ctrl-s` saves, `esc` discards, and saving an empty body unchecks the row. An edited comment is posted as your text and credited `pipeline-worker review (claude, edited)`; the anchor (file, line, severity) stays the agent's.
+- **Rounds** — each review of the same branch is numbered and remembered (`.pipeline-worker/state/review/<branch>.json`). Round 2 hides what round 1 already posted (`d` shows it anyway), re-offers what you unchecked **unchecked**, and tells the agent which comments already exist and which threads were opened since — so a second review answers the new discussion instead of repeating itself.
+
+Non-interactive runs are unchanged: with a piped stdin/stdout (CI, `| tee`), or from inside `pipeline-worker tui`, every new finding is posted with no prompt.
+
 #### Answering the comments already there
 
 `pipeline-worker review --branch <name>` does one thing the automatic stage does not: once its own comments are posted, it reads every **open** thread on the MR/PR — human comments and scanner findings alike (**SonarQube** and **Checkmarx** are recognized and labelled for the agent) — and replies where it matters:

@@ -78,7 +78,22 @@ export function renderSections(chunks: DiffChunk[]): string {
  * system prompt rather than prefixed here, so what follows is only this
  * turn's own instructions and data.
  */
-export function buildReviewPrompt(chunks: DiffChunk[], fence: string): string {
+/**
+ * The tail of a later round's prompt: what earlier rounds already said about
+ * this MR/PR, and the comments that appeared since. Without it a second
+ * `review --branch` re-derives the diff cold and re-flags what round 1 posted,
+ * which is exactly what the turn history exists to prevent — the dedupe in
+ * reviewMr.ts drops those findings afterwards, but only after the agent has
+ * been paid to produce them.
+ */
+export function buildRoundContext(turn: number, alreadyPosted: string[], newThreads: string[]): string {
+  if (turn <= 1 || (alreadyPosted.length === 0 && newThreads.length === 0)) return '';
+  const posted = alreadyPosted.length > 0 ? `Comments earlier rounds already posted (do not repeat them):\n${alreadyPosted.map((line) => `- ${line}`).join('\n')}\n\n` : '';
+  const threads = newThreads.length > 0 ? `Comment threads opened on the merge request since the last round — react to these, and drop any finding they already answer:\n${newThreads.map((body) => `- ${body}`).join('\n')}\n\n` : '';
+  return `### Review round ${turn}\n\nThis diff has been reviewed ${turn - 1} time(s) already.\n\n${posted}${threads}`;
+}
+
+export function buildReviewPrompt(chunks: DiffChunk[], fence: string, roundContext = ''): string {
   const paths = [...new Set(chunks.map((chunk) => chunk.path))];
   const fileList = paths.length > 1 ? `Files in this diff, all of which you must review:\n${paths.map((path) => `- ${path}`).join('\n')}\n\n` : '';
   const anchor =
@@ -100,6 +115,7 @@ export function buildReviewPrompt(chunks: DiffChunk[], fence: string): string {
     '4. Do not review generated or vendored content (lock files, build output, snapshots): return no findings for it.\n' +
     '5. Review the diff below and nothing else. Do not open the changed files to read their full contents — if the ' +
     'diff alone is not enough to be sure a finding is real, drop that finding.\n\n' +
+    roundContext +
     '### Git Diff Data (gutter = line number in the new file):\n' +
     `${renderSections(chunks)}\n`
   );
