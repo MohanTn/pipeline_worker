@@ -118,10 +118,11 @@ program
     "Act on the comments already on a branch's open MR/PR: fix the code the valid ones point at, verify build/lint/test, push the fix onto the branch, and reply to every thread (bot findings from CodeRabbit, SonarQube, Checkmarx included) — saying what was fixed, or why the comment does not hold",
   )
   .requiredOption('--branch <name>', 'branch whose open MR/PR comments should be fixed')
-  .action(async (opts: { branch: string }) => {
+  .option('--include-own', "also act on the findings `pipeline-worker review` posted, not only other people's and bots' comments (threads it has already answered stay excluded)")
+  .action(async (opts: { branch: string; includeOwn?: boolean }) => {
     try {
       const repoRoot = await findRepoRoot(process.cwd());
-      await fixBranch(repoRoot, { branch: opts.branch });
+      await fixBranch(repoRoot, { branch: opts.branch, includeOwn: opts.includeOwn });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       endRun('failed', message);

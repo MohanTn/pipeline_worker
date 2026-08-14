@@ -12,7 +12,7 @@ import { adoptBranch, resolveResumeMode } from './adoptBranch.js';
 import { continueRun, resumeHint } from './orchestrate.js';
 import { maybeSyncTargetBranch } from './syncTargetBranch.js';
 import { maybeApproveMergeRequest } from './approveMr.js';
-import { maybeReviewMergeRequest } from './reviewMr.js';
+import { maybeReviewMergeRequest, type ReviewRound } from './reviewMr.js';
 import { maybeReplyToMrComments } from './replyMrComments.js';
 import { fixMrComments, type FixOutcome } from './fixMrComments.js';
 import { resumeSkeleton, adoptSkeleton, reviewSkeleton, fixSkeleton } from './runPlan.js';
@@ -20,12 +20,16 @@ import { loadConfig } from '../config/loader.js';
 import { createForge } from '../forge/index.js';
 import { selectAgent } from '../agent/index.js';
 import { loadRunState, recordEvent } from '../state/runState.js';
+import { appendReviewTurn, loadReviewTurns } from '../state/reviewTurns.js';
+import { nextTurnNumber, unseenThreadIds } from '../review/selection.js';
+import { isOwnComment } from '../review/commentReplies.js';
+import { createFindingSelector } from '../ui/tui/reviewSession.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree, worktreeExists } from '../git/worktree.js';
 import { remoteBranchExists } from '../git/remote.js';
 import { beginRun, endRun, note, runStep, seedRunTokens, setPlainOutput } from '../ui/steps.js';
 import { setCompletionSound } from '../ui/notify.js';
 import { makeIdempotentCleanup, registerExitSignals } from '../process/signalCleanup.js';
-import type { ForgeClient } from '../forge/types.js';
+import type { ForgeClient, MrComment } from '../forge/types.js';
 import type { AgentAdapter } from '../agent/types.js';
 import type { PipelineWorkerConfig, ResumableRunState, RunPhase, RunState } from '../types.js';
 
@@ -151,6 +155,51 @@ export async function resumeRun(repoRoot: string, opts: { branch: string; target
   return state.phase;
 }
 
+/** Room one carried-over thread gets in the round's prompt context — enough to know what it asks, not enough for ten threads to crowd out the diff. */
+const THREAD_CONTEXT_CHARS = 400;
+/** Threads carried into the prompt, newest kept: a long-running MR/PR must not spend its whole review budget re-reading its own history. */
+const MAX_CONTEXT_THREADS = 10;
+
+/**
+ * Sets up one review round: which number it is, which comment threads appeared
+ * since the previous one, and — on an interactive terminal — the picker that
+ * decides what actually gets posted (see ui/tui/reviewSession.ts).
+ *
+ * Best-effort throughout, like the review stage it feeds: a forge that will not
+ * list comments costs the round its context, not its run.
+ */
+export async function prepareReviewRound(
+  forge: ForgeClient,
+  repoRoot: string,
+  branch: string,
+  mrIid: number,
+): Promise<{ round: ReviewRound; threadIds: string[] }> {
+  const priorTurns = loadReviewTurns(repoRoot, branch);
+  const turn = nextTurnNumber(priorTurns);
+  let comments: MrComment[] = [];
+  try {
+    comments = await forge.listMrComments(mrIid);
+  } catch (error) {
+    note(`could not read the MR/PR's comment threads — reviewing without them: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const threadIds = comments.map((comment) => comment.id);
+  const unseen = new Set(unseenThreadIds(threadIds, priorTurns));
+  // isOwnComment: threadIds is snapshotted before this round posts anything, so
+  // the comments this round is about to write are unseen next round. Feeding
+  // the agent its own findings back as "new discussion" is noise that also
+  // crowds real threads out of the newest-MAX_CONTEXT_THREADS window —
+  // postedSummaries already tells it which anchors it commented on.
+  const newThreads =
+    turn === 1
+      ? []
+      : comments
+          .filter((comment) => unseen.has(comment.id) && !isOwnComment(comment))
+          .slice(-MAX_CONTEXT_THREADS)
+          .map((comment) => `@${comment.author}${comment.path ? ` on ${comment.path}:${comment.line ?? '?'}` : ''}: ${comment.body.slice(0, THREAD_CONTEXT_CHARS)}`);
+  if (turn > 1) note(`review round ${turn} — ${newThreads.length} new comment thread(s) since the last one`);
+  return { round: { turn, priorTurns, newThreads, selectFindings: createFindingSelector() }, threadIds };
+}
+
 /**
  * Reviews an open MR/PR's diff, posts line-anchored comments, and then answers
  * the comment threads already on it (human review comments and scanner
@@ -173,11 +222,13 @@ export async function reviewBranch(repoRoot: string, opts: { branch: string }): 
   const worktreePath = await runStep('adopt', `checkout ${opts.branch} into a disposable worktree`, () =>
     checkoutExistingBranch(repoRoot, opts.branch),
   );
+  const round = await prepareReviewRound(forge, repoRoot, opts.branch, mr.iid);
   try {
     // Asking for a review explicitly *is* the opt-in, so config.review is
     // overridden here — the `review` setting only gates the automatic stage
     // inside `run`/`resume`.
-    const review = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid);
+    const review = await maybeReviewMergeRequest(forge, { ...config, review: true }, agent, worktreePath, mr.targetBranch, mr.iid, undefined, round.round);
+    if (review.round) appendReviewTurn(repoRoot, opts.branch, { ...review.round, at: new Date().toISOString(), threadIds: round.threadIds });
     // Answering what is already there is part of an explicit review, and only
     // of an explicit review: inside run/resume the MR/PR was opened seconds
     // ago and carries nothing to answer.
@@ -202,7 +253,7 @@ export async function reviewBranch(repoRoot: string, opts: { branch: string }): 
  * fails the command: the worktree is removed either way, so a fix that could
  * not be verified is a fix that was never pushed.
  */
-export async function fixBranch(repoRoot: string, opts: { branch: string }): Promise<FixOutcome> {
+export async function fixBranch(repoRoot: string, opts: { branch: string; includeOwn?: boolean }): Promise<FixOutcome> {
   const config = loadConfig(repoRoot);
   setCompletionSound(config.completionSound);
   setPlainOutput(config.plainOutput);
@@ -219,7 +270,7 @@ export async function fixBranch(repoRoot: string, opts: { branch: string }): Pro
     checkoutExistingBranch(repoRoot, opts.branch),
   );
   try {
-    const outcome = await fixMrComments(forge, config, agent, worktreePath, opts.branch, mr.targetBranch, mr.iid);
+    const outcome = await fixMrComments(forge, config, agent, worktreePath, opts.branch, mr.targetBranch, mr.iid, opts.includeOwn);
     const acted = outcome.fixed > 0 || outcome.refuted > 0;
     const summary = acted ? `fixed ${outcome.fixed} · refuted ${outcome.refuted} · replied ${outcome.posted}` : 'nothing to act on';
     endRun('done', `${summary} — ${mr.webUrl}`);

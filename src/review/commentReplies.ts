@@ -52,6 +52,17 @@ export interface PreparedReply {
  */
 const OWN_COMMENT_MARKER = /pipeline-worker (review|reply|fix) \(/;
 
+/**
+ * The subset of that footer meaning "pipeline-worker has already *answered*
+ * this thread" — a reply or a fix, never a review finding it merely raised.
+ * `fix --include-own` narrows the guard to this: a finding pipeline-worker
+ * wrote is still work someone has to do, while a thread it already answered is
+ * the argument-with-itself the guard exists to prevent. MrComment.body is the
+ * whole thread (opening comment plus every reply), so a finding this command
+ * has acted on carries the fix footer from then on and drops out by itself.
+ */
+const OWN_ANSWER_MARKER = /pipeline-worker (reply|fix) \(/;
+
 /** The opening a correction must carry, so a reader sees the verdict before the reasoning. */
 export const CORRECTION_LEAD = 'This is not recommended because:';
 
@@ -67,6 +78,11 @@ const SCANNERS: Array<{ label: string; pattern: RegExp }> = [
 /** True for a thread pipeline-worker itself wrote — its own review comment, or an earlier reply. */
 export function isOwnComment(comment: MrComment): boolean {
   return OWN_COMMENT_MARKER.test(comment.body);
+}
+
+/** True for a thread pipeline-worker has already answered — its own reply or fix, but not a review finding it raised. */
+export function isOwnAnswer(comment: MrComment): boolean {
+  return OWN_ANSWER_MARKER.test(comment.body);
 }
 
 /**

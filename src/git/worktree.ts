@@ -162,6 +162,19 @@ export async function worktreeExists(worktreePath: string): Promise<boolean> {
 }
 
 /**
+ * The worktree path git names in its "'<branch>' is already used by worktree
+ * at '<path>'" refusal. The pre-check in checkoutExistingBranch normally spots
+ * that collision first, but git is the only authority on it — a stale worktree
+ * record, a path git reports differently than `worktree list` did, or an older
+ * pipeline-worker's leftovers all end here — so the refusal itself is parsed
+ * rather than trusted to never happen.
+ */
+export function worktreeHoldingBranch(error: unknown): string | undefined {
+  const stderr = (error as { stderr?: string }).stderr ?? (error instanceof Error ? error.message : '');
+  return /is already used by worktree at '([^']+)'/.exec(stderr)?.[1];
+}
+
+/**
  * Checks out a branch that already exists on origin (used by `pipeline-worker
  * resume`/`review`/`fix` whenever a fresh disposable worktree is needed).
  *
@@ -178,10 +191,18 @@ export async function worktreeExists(worktreePath: string): Promise<boolean> {
  * already exist, so the worktree reflects the branch's actual current state
  * on the forge (what CI is really running against) instead of a possibly
  * stale/diverged local copy.
+ *
+ * `alreadyPruned` is internal: the stale-record recovery below retries exactly
+ * once, so a record `git worktree prune` cannot drop surfaces git's own error
+ * instead of recursing forever.
  */
-export async function checkoutExistingBranch(repoRoot: string, branch: string): Promise<string> {
+export async function checkoutExistingBranch(repoRoot: string, branch: string, alreadyPruned = false): Promise<string> {
+  // existsSync: `git worktree list` still reports worktrees whose directory is
+  // gone (marked "prunable"), and pulling inside a directory that no longer
+  // exists fails with a confusing spawn error. Those fall through to the add
+  // below, whose catch prunes the stale record and retries.
   const existingPath = await findExistingWorktreePath(repoRoot, branch);
-  if (existingPath) {
+  if (existingPath && existsSync(existingPath)) {
     await syncWithOrigin(existingPath, branch);
     return existingPath;
   }
@@ -192,6 +213,19 @@ export async function checkoutExistingBranch(repoRoot: string, branch: string): 
     await execGit(['worktree', 'add', '-B', branch, worktreePath, `origin/${branch}`], { cwd: repoRoot });
   } catch (error) {
     cleanupFailedWorktreeDir(worktreePath);
+    // git refused because the branch is checked out somewhere after all:
+    // reuse that worktree, exactly as the pre-check above would have.
+    const heldBy = worktreeHoldingBranch(error);
+    if (heldBy && (await isWorktreeOnBranch(heldBy, branch))) {
+      await syncWithOrigin(heldBy, branch);
+      return heldBy;
+    }
+    // The holder is a stale record (its directory is gone): drop it and retry
+    // once, so one crashed run cannot block every later review/fix forever.
+    if (heldBy && !alreadyPruned && !existsSync(heldBy)) {
+      await execGit(['worktree', 'prune'], { cwd: repoRoot });
+      return await checkoutExistingBranch(repoRoot, branch, true);
+    }
     throw error;
   }
   // Same dependency link a fresh run gets (see linkNodeModules): without it,
