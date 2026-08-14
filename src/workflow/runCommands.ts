@@ -22,6 +22,7 @@ import { selectAgent } from '../agent/index.js';
 import { loadRunState, recordEvent } from '../state/runState.js';
 import { appendReviewTurn, loadReviewTurns } from '../state/reviewTurns.js';
 import { nextTurnNumber, unseenThreadIds } from '../review/selection.js';
+import { isOwnComment } from '../review/commentReplies.js';
 import { createFindingSelector } from '../ui/tui/reviewSession.js';
 import { isWorktreeOnBranch, checkoutExistingBranch, removeWorktree, worktreeExists } from '../git/worktree.js';
 import { remoteBranchExists } from '../git/remote.js';
@@ -183,7 +184,18 @@ export async function prepareReviewRound(
   }
   const threadIds = comments.map((comment) => comment.id);
   const unseen = new Set(unseenThreadIds(threadIds, priorTurns));
-  const newThreads = turn === 1 ? [] : comments.filter((comment) => unseen.has(comment.id)).slice(-MAX_CONTEXT_THREADS).map((comment) => `@${comment.author}${comment.path ? ` on ${comment.path}:${comment.line ?? '?'}` : ''}: ${comment.body.slice(0, THREAD_CONTEXT_CHARS)}`);
+  // isOwnComment: threadIds is snapshotted before this round posts anything, so
+  // the comments this round is about to write are unseen next round. Feeding
+  // the agent its own findings back as "new discussion" is noise that also
+  // crowds real threads out of the newest-MAX_CONTEXT_THREADS window —
+  // postedSummaries already tells it which anchors it commented on.
+  const newThreads =
+    turn === 1
+      ? []
+      : comments
+          .filter((comment) => unseen.has(comment.id) && !isOwnComment(comment))
+          .slice(-MAX_CONTEXT_THREADS)
+          .map((comment) => `@${comment.author}${comment.path ? ` on ${comment.path}:${comment.line ?? '?'}` : ''}: ${comment.body.slice(0, THREAD_CONTEXT_CHARS)}`);
   if (turn > 1) note(`review round ${turn} — ${newThreads.length} new comment thread(s) since the last one`);
   return { round: { turn, priorTurns, newThreads, selectFindings: createFindingSelector() }, threadIds };
 }

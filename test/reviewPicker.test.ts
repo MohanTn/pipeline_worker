@@ -117,8 +117,10 @@ test('esc in the editor discards the edit', () => {
   press(view, 'xyz');
   press(view, '\x1b');
   press(view, 's');
-  assert.equal(result().selected?.[0].body, undefined);
-  assert.equal(result().selected?.[0].edited, undefined);
+  const selected = result().selected;
+  assert.equal(selected?.length, 1, 'esc leaves the editor, not the picker');
+  assert.equal(selected?.[0].body, undefined);
+  assert.equal(selected?.[0].edited, undefined);
 });
 
 test('an edit saved empty unchecks the row, so nothing is posted for it', () => {

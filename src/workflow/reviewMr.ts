@@ -236,6 +236,10 @@ export async function maybeReviewMergeRequest(
       }
       const posted = await postFindings(forge, mrIid, selection.chosen, config.forge, config.agent);
       const postedKeys = new Set(posted.map((finding) => findingKey(finding)));
+      // Only what the human deselected is "ignored". A chosen finding whose
+      // post failed (rejected position, 5xx) is neither posted nor dismissed,
+      // so it stays new and the next round offers it again.
+      const chosenKeys = new Set(selection.chosen.map((finding) => findingKey(finding)));
       note(`posted ${posted.length} of ${selection.offered.length} review comment(s) in round ${round.turn}`);
       return {
         posted: posted.length,
@@ -243,7 +247,7 @@ export async function maybeReviewMergeRequest(
         round: {
           turn: round.turn,
           posted: [...postedKeys],
-          ignored: selection.offered.map((candidate) => candidate.key).filter((key) => !postedKeys.has(key)),
+          ignored: selection.offered.map((candidate) => candidate.key).filter((key) => !chosenKeys.has(key)),
           edited: posted.filter((finding) => finding.edited).map((finding) => findingKey(finding)),
         },
       };

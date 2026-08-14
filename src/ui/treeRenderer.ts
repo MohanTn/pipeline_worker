@@ -60,6 +60,8 @@ export class TreeRenderer implements Renderer {
   private stopped = false;
   /** True while another screen owns the terminal (see pause/resume): no repaint, no console interception. */
   private paused = false;
+  /** Notes raised while paused: held here rather than printed over the screen that took the terminal, and flushed by resume(). */
+  private readonly pendingLogs: string[] = [];
   private readonly originalConsole = { log: console.log, error: console.error, warn: console.warn };
   // Every painted line is pre-truncated to the terminal width (see the file
   // header), so a resize never changes how many physical rows the region
@@ -128,6 +130,9 @@ export class TreeRenderer implements Renderer {
     this.paused = false;
     this.out.write(HIDE_CURSOR);
     this.interceptConsole();
+    // Whatever was raised while another screen owned the terminal lands in
+    // scrollback first, so the repaint below sits beneath it as usual.
+    for (const text of this.pendingLogs.splice(0)) this.out.write(`${text}\n`);
     this.timer = setInterval(() => this.paint(), PAINT_INTERVAL_MS);
     this.timer.unref?.();
     this.paint();
@@ -154,7 +159,10 @@ export class TreeRenderer implements Renderer {
 
   /** Freeform text: erase the region, let the text enter scrollback, repaint beneath it. A note raised while paused waits for the region to come back rather than printing over the screen that took it. */
   log(text: string): void {
-    if (this.paused) return;
+    if (this.paused) {
+      this.pendingLogs.push(text);
+      return;
+    }
     this.eraseRegion();
     this.out.write(`${text}\n`);
     if (!this.stopped) this.paint();

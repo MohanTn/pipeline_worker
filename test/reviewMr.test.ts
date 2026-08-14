@@ -391,11 +391,39 @@ test('a round-aware review offers its findings to the picker and posts only what
   }
 });
 
-test('a cancelled picker posts nothing and remembers nothing, so the next round offers the same findings', async () => {
+test('a chosen finding the forge rejected is not remembered as ignored — the next round offers it again', async () => {
   const { worktreePath, originDir } = await makeReviewableBranch();
   try {
     const forge = forgeStub();
     forge.createInlineComment = async () => {
+      throw new Error('outdated position');
+    };
+    const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(TWO_FINDINGS), worktreePath, 'main', 7, undefined, {
+      turn: 1,
+      priorTurns: [],
+      newThreads: [],
+      selectFindings: async (candidates) => candidates.map((candidate) => candidate.finding),
+    });
+
+    assert.equal(outcome.posted, 0);
+    assert.deepEqual(outcome.round?.posted, []);
+    assert.deepEqual(outcome.round?.ignored, [], 'a failed post is not a dismissal');
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('a cancelled picker posts nothing and remembers nothing, so the next round offers the same findings', async () => {
+  const { worktreePath, originDir } = await makeReviewableBranch();
+  try {
+    const forge = forgeStub();
+    // Recorded rather than only thrown: postFindings swallows a rejected
+    // comment, so a throw alone would be reduced to a note and the assertions
+    // below would still pass.
+    let attempted = false;
+    forge.createInlineComment = async () => {
+      attempted = true;
       throw new Error('createInlineComment must not be called after a cancel');
     };
     const outcome = await maybeReviewMergeRequest(forge, reviewConfig(), agentReturning(CRITICAL_FINDING), worktreePath, 'main', 7, undefined, {
@@ -404,6 +432,7 @@ test('a cancelled picker posts nothing and remembers nothing, so the next round 
       newThreads: [],
       selectFindings: async () => undefined,
     });
+    assert.equal(attempted, false, 'a cancel must not reach the forge');
     assert.equal(outcome.posted, 0);
     assert.equal(outcome.round, undefined, 'a cancel records no round at all — an empty selection would have');
   } finally {

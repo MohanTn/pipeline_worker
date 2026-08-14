@@ -330,6 +330,9 @@ test('pause hands the terminal back: the region is erased, the cursor shown, and
     rig.renderer.log('a note raised while the picker is up');
     rig.tree.finish('capture', 'done');
     assert.equal(rig.out.writes.length, writesWhilePaused, 'nothing may be written while another screen owns the terminal');
+
+    rig.renderer.resume();
+    assert.match(rig.out.text(), /a note raised while the picker is up/, 'the deferred note is flushed once the region comes back');
   });
 });
 
@@ -337,10 +340,15 @@ test('resume takes the terminal back, repaints, and re-intercepts console', () =
   withRig((rig) => {
     rig.renderer.pause();
     const released = console.log;
+    const writesBeforeResume = rig.out.writes.length;
     rig.renderer.resume();
 
     assert.notEqual(console.log, released, 'the region is painted again, so stray console output must be routed around it');
-    assert.match(rig.out.text(), /add-login/, 'the tree is repainted on the way back');
+    // Sliced at the resume boundary: rig.out.text() also holds the initial
+    // paint, so asserting on the whole buffer would pass even if resume()
+    // repainted nothing at all.
+    const paintedOnResume = rig.out.writes.slice(writesBeforeResume).join('');
+    assert.match(paintedOnResume, /add-login/, 'the tree is repainted on the way back');
     const before = rig.out.writes.length;
     rig.tree.finish('capture', 'done');
     assert.ok(rig.out.writes.length > before, 'tree events paint again after resume');
