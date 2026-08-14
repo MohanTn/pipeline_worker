@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Added
+
+- **New flag: `pipeline-worker fix --branch <name> --include-own` acts on the findings `review` posted.** `fix` skips every thread carrying pipeline-worker's own footer, which stops it arguing with itself but also makes the comments its own `review` just posted invisible — the run reports `no open comments to act on` and skips straight to the end. `--include-own` narrows that guard to threads it has already **answered** (its replies and earlier fixes), so its review findings become actionable while re-entry stays safe: a finding it fixes or refutes gains its own reply in the same thread and drops out of the next run by itself. Off by default; nothing changes for a run without the flag.
+
 ### Fixed
 
 - **`review`/`fix`/`resume --branch <name>` no longer fail when the branch is already checked out somewhere.** The branch-adoption path already preferred an existing worktree over a disposable one, but it trusted a `git worktree list` pre-check to spot the collision; git's own refusal (`'<branch>' is already used by worktree at '<path>'`) is now read as well, and that worktree is reused — so the command reviews the checkout you are standing in rather than aborting on the `adopt` step. A **stale** record (the directory is gone, e.g. a run killed before cleanup) no longer blocks the branch forever either: it is pruned and the checkout retried once, instead of being pulled inside a directory that no longer exists.

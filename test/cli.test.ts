@@ -36,4 +36,5 @@ test('pipeline-worker fix --help says it requires a branch and names the bots it
 
   assert.match(stdout, /--branch <name>/);
   assert.match(stdout, /CodeRabbit, SonarQube, Checkmarx/);
+  assert.match(stdout, /--include-own/);
 });

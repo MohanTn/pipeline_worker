@@ -34,7 +34,7 @@ import {
   renderFixBody,
   type PreparedFix,
 } from '../review/commentFixes.js';
-import { isOwnComment, scannerLabel } from '../review/commentReplies.js';
+import { isOwnAnswer, isOwnComment, scannerLabel } from '../review/commentReplies.js';
 import { renderSections, suggestionFence } from '../review/prompt.js';
 import { note, noteSession, runStep, skipStep } from '../ui/steps.js';
 import type { AgentAdapter } from '../agent/types.js';
@@ -55,9 +55,21 @@ export interface FixOutcome {
 
 const EMPTY: FixOutcome = { fixed: 0, refuted: 0, posted: 0 };
 
-/** Threads worth acting on: everything open except pipeline-worker's own comments, replies and fixes. */
-function actionable(comments: MrComment[]): MrComment[] {
-  return comments.filter((comment) => !isOwnComment(comment) && comment.body.trim().length > 0);
+/**
+ * Threads worth acting on: everything open except pipeline-worker's own
+ * comments, replies and fixes.
+ *
+ * `includeOwn` (the `--include-own` flag) keeps the findings `pipeline-worker
+ * review` posted, which are otherwise dropped along with everything else
+ * carrying the footer — the common case of reviewing a branch and then wanting
+ * the same tool to act on what it found. Only the *answered* threads stay
+ * excluded then (see isOwnAnswer), so the command still cannot argue with
+ * itself: once it fixes or refutes a finding, its own reply joins that thread
+ * and the next run skips it.
+ */
+function actionable(comments: MrComment[], includeOwn: boolean): MrComment[] {
+  const isSelf = includeOwn ? isOwnAnswer : isOwnComment;
+  return comments.filter((comment) => !isSelf(comment) && comment.body.trim().length > 0);
 }
 
 /** One line naming what was found, so the run tree says whether bot output was part of it. */
@@ -159,9 +171,11 @@ export async function fixMrComments(
   branch: string,
   targetBranch: string,
   mrIid: number,
+  includeOwn = false,
 ): Promise<FixOutcome> {
   const comments = await runStep('comments', 'read the open comment threads on the MR/PR', async () => {
-    const found = actionable(await forge.listMrComments(mrIid));
+    const found = actionable(await forge.listMrComments(mrIid), includeOwn);
+    if (includeOwn) note("--include-own: pipeline-worker's own review findings count as threads to act on");
     note(found.length === 0 ? 'no open comments to act on' : `reading ${describeThreads(found)}`);
     return found;
   });

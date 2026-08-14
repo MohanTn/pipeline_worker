@@ -241,7 +241,7 @@ export async function reviewBranch(repoRoot: string, opts: { branch: string }): 
  * fails the command: the worktree is removed either way, so a fix that could
  * not be verified is a fix that was never pushed.
  */
-export async function fixBranch(repoRoot: string, opts: { branch: string }): Promise<FixOutcome> {
+export async function fixBranch(repoRoot: string, opts: { branch: string; includeOwn?: boolean }): Promise<FixOutcome> {
   const config = loadConfig(repoRoot);
   setCompletionSound(config.completionSound);
   setPlainOutput(config.plainOutput);
@@ -258,7 +258,7 @@ export async function fixBranch(repoRoot: string, opts: { branch: string }): Pro
     checkoutExistingBranch(repoRoot, opts.branch),
   );
   try {
-    const outcome = await fixMrComments(forge, config, agent, worktreePath, opts.branch, mr.targetBranch, mr.iid);
+    const outcome = await fixMrComments(forge, config, agent, worktreePath, opts.branch, mr.targetBranch, mr.iid, opts.includeOwn);
     const acted = outcome.fixed > 0 || outcome.refuted > 0;
     const summary = acted ? `fixed ${outcome.fixed} · refuted ${outcome.refuted} · replied ${outcome.posted}` : 'nothing to act on';
     endRun('done', `${summary} — ${mr.webUrl}`);

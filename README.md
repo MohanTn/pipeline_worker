@@ -227,6 +227,8 @@ Replies are threaded (GitLab discussion notes, GitHub review-comment replies); a
 - **Fixed** — the comment is right, so the agent changes the code. All accepted fixes land as **one commit** on the same branch (`fix: address N review comment(s) on !42`), and each thread is answered `Fixed in <sha>: …`.
 - **Invalid** — the comment misreads the code, points at the wrong place, or recommends something that must not be done here (the common case for a scanner false positive). Nothing is edited and the thread is answered `This is not recommended because: …`.
 
+By default pipeline-worker's **own** threads are skipped, so a second run never argues with itself — which also means the findings `review` posted are invisible to `fix`. Pass **`--include-own`** when you want it to act on those too: only the threads it has already *answered* (its replies and earlier fixes) stay excluded, so each finding is fixed or refuted exactly once and re-running the command is still safe.
+
 Two guards decide what actually reaches the branch: **`build`/`lint`/`test` must pass in the worktree before anything is pushed** (a failing check aborts the command with nothing pushed and no replies posted), and a thread the agent *claims* to have fixed while leaving every file untouched is **dropped rather than answered** — a reply pointing at a commit that carries nothing is worse than no reply. Unlike `review`, this command is not best-effort: a forge that cannot be read or a check that fails is a failed command, not a note. It never approves and never merges.
 
 #### Approving a clean review

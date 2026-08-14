@@ -235,6 +235,61 @@ test("pipeline-worker's own threads are never acted on — a second fix run must
   }
 });
 
+test('--include-own acts on the findings pipeline-worker review posted', async () => {
+  const { worktreePath, originDir } = await makeCommentedBranch();
+  const posted: Array<{ commentId: string; body: string }> = [];
+  try {
+    const finding = mrComment({ body: 'This hard-codes a secret.\n\n_CRITICAL · pipeline-worker review (claude)_' });
+    const forge = forgeStub([finding]);
+    forge.replyToComment = async (_mrIid, commentId, body) => {
+      posted.push({ commentId, body });
+      return { id: 1 };
+    };
+
+    const outcome = await fixMrComments(forge, fixConfig(), agentFixing(worktreePath, FIXED_PAYLOAD), worktreePath, BRANCH, 'main', 7, true);
+
+    assert.equal(outcome.fixed, 1);
+    assert.equal(outcome.posted, 1);
+    assert.match(posted[0].body, /_CRITICAL · pipeline-worker fix \(claude\)_/);
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('--include-own still skips a thread pipeline-worker already answered, so a second run does not re-fix its own finding', async () => {
+  const { worktreePath, originDir } = await makeCommentedBranch();
+  try {
+    // The whole thread as the forge reports it: the review finding, then the
+    // fix reply a previous run left under it.
+    const answered = mrComment({
+      body:
+        'This hard-codes a secret.\n\n_CRITICAL · pipeline-worker review (claude)_\n\n' +
+        '--- reply from @pipeline-worker\nFixed in `a1b2c3d`: reads it from env now.\n\n_CRITICAL · pipeline-worker fix (claude)_',
+    });
+    const reply = mrComment({ id: 'd2', body: 'Thanks, looks right.\n\n_MAJOR · pipeline-worker reply (claude)_' });
+
+    const outcome = await fixMrComments(forgeStub([answered, reply]), fixConfig(), NEVER_INVOKED, worktreePath, BRANCH, 'main', 7, true);
+
+    assert.deepEqual(outcome, { fixed: 0, refuted: 0, posted: 0 });
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
+test('without --include-own a review finding is left alone, exactly as before', async () => {
+  const { worktreePath, originDir } = await makeCommentedBranch();
+  try {
+    const finding = mrComment({ body: 'This hard-codes a secret.\n\n_CRITICAL · pipeline-worker review (claude)_' });
+    const outcome = await fixMrComments(forgeStub([finding]), fixConfig(), NEVER_INVOKED, worktreePath, BRANCH, 'main', 7);
+    assert.deepEqual(outcome, { fixed: 0, refuted: 0, posted: 0 });
+  } finally {
+    rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(originDir, { recursive: true, force: true });
+  }
+});
+
 test('the agent sees every thread plus the diff, and gets write access to the worktree', async () => {
   const { worktreePath, originDir } = await makeCommentedBranch();
   const calls: AgentInvokeOptions[] = [];
