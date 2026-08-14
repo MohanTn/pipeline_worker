@@ -16,6 +16,7 @@ import {
   checkoutExistingBranch,
   resetWorktree,
   worktreeExists,
+  worktreeHoldingBranch,
 } from '../src/git/worktree.js';
 
 const execFileAsync = promisify(execFile);
@@ -399,6 +400,50 @@ test('checkoutExistingBranch reuses a worktree that already has the branch check
     rmSync(otherClone, { recursive: true, force: true });
     rmSync(repoRoot, { recursive: true, force: true });
   }
+});
+
+test('checkoutExistingBranch recovers from a stale worktree record still holding the branch', async () => {
+  const originDir = mkdtempSync(join(tmpdir(), 'pipeline-worker-origin-'));
+  const repoRoot = await makeSampleRepo();
+  try {
+    await execFileAsync('git', ['init', '-q', '--bare', originDir]);
+    await execFileAsync('git', ['branch', '-M', 'main'], { cwd: repoRoot });
+    await execFileAsync('git', ['remote', 'add', 'origin', originDir], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repoRoot });
+
+    await execFileAsync('git', ['checkout', '-q', '-b', 'feature/stale-test'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'feature.txt'), 'work\n');
+    await execFileAsync('git', ['add', '-A'], { cwd: repoRoot });
+    await execFileAsync('git', ['commit', '-q', '-m', 'feature work'], { cwd: repoRoot });
+    await execFileAsync('git', ['push', '-q', '-u', 'origin', 'feature/stale-test'], { cwd: repoRoot });
+    await execFileAsync('git', ['checkout', '-q', 'main'], { cwd: repoRoot });
+
+    // A crashed run's worktree: git still records it as holding the branch
+    // ("prunable"), which makes every later `worktree add -B` refuse.
+    const crashed = await checkoutExistingBranch(repoRoot, 'feature/stale-test');
+    rmSync(crashed, { recursive: true, force: true });
+
+    const worktreePath = await checkoutExistingBranch(repoRoot, 'feature/stale-test');
+    try {
+      assert.notEqual(worktreePath, crashed);
+      assert.equal(readFileSync(join(worktreePath, 'feature.txt'), 'utf-8'), 'work\n');
+    } finally {
+      await removeWorktree(repoRoot, worktreePath);
+    }
+  } finally {
+    rmSync(originDir, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('worktreeHoldingBranch reads the holder out of git\'s refusal, and ignores unrelated failures', () => {
+  const refusal = Object.assign(new Error('Command failed: git worktree add -B feature/x /tmp/wt origin/feature/x'), {
+    stderr: "fatal: 'feature/x' is already used by worktree at '/home/me/repo'\n",
+  });
+  assert.equal(worktreeHoldingBranch(refusal), '/home/me/repo');
+  // Some callers surface the refusal only in the message.
+  assert.equal(worktreeHoldingBranch(new Error("fatal: 'feature/x' is already used by worktree at '/home/me/repo'")), '/home/me/repo');
+  assert.equal(worktreeHoldingBranch(new Error('fatal: invalid reference: origin/feature/x')), undefined);
 });
 
 test('removeWorktree leaves a reused (non pipeline-worker-owned) worktree untouched', async () => {
