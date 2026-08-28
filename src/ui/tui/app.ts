@@ -113,6 +113,26 @@ export class TuiApp {
     });
   }
 
+  /**
+   * Releases the real terminal for a `handoff` action: alt screen exited and
+   * the key reader stopped, so a child interactive CLI gets a normal TTY to
+   * itself, then both are restored exactly as `run()` set them up. Unlike
+   * `runJob`, nothing is pushed and no "press any key" pause follows — the
+   * child's own exit is the signal to come back.
+   */
+  private async runHandoff(label: string, run: () => Promise<void>): Promise<void> {
+    this.keys.stop();
+    this.screen.stop();
+    try {
+      await run();
+    } catch (error) {
+      this.error = `${label} failed: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    this.screen.start(() => this.draw());
+    this.keys.start((key) => void this.onKey(key));
+    this.draw();
+  }
+
   private async apply(action: Action): Promise<void> {
     switch (action.type) {
       case 'push':
@@ -127,6 +147,9 @@ export class TuiApp {
         break;
       case 'run':
         await this.runJob(action.label, action.view, action.run);
+        break;
+      case 'handoff':
+        await this.runHandoff(action.label, action.run);
         break;
       default:
         break;

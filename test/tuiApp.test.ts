@@ -247,6 +247,78 @@ test('a key pressed while a job runs repaints, so a scroll or a cancel hint is v
   await running;
 });
 
+test('a handoff action exits the alt screen for the whole child process, then restores it once it settles', async () => {
+  let altScreenDuringHandoff = true;
+  const out = new FakeStream();
+  const input = new FakeInput();
+  const view = new ScriptedView('home', [
+    {
+      type: 'handoff',
+      label: 'rewrite',
+      run: async () => {
+        altScreenDuringHandoff = out.written.lastIndexOf(ENTER_ALT) > out.written.lastIndexOf(EXIT_ALT);
+      },
+    },
+    { type: 'quit' },
+  ]);
+  const app = new TuiApp(view, new Screen(out), new KeyReader(input));
+
+  const running = app.run();
+  input.send('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(altScreenDuringHandoff, false, 'the alt screen must be exited for a child process to draw its own UI');
+  assert.ok(out.written.lastIndexOf(ENTER_ALT) > out.written.lastIndexOf(EXIT_ALT), 'the screen is restored once the handoff settles');
+
+  input.send('q');
+  await running;
+  assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
+});
+
+test('the key reader is released for the duration of a handoff, since the child process owns stdin', async () => {
+  const out = new FakeStream();
+  const input = new FakeInput();
+  let release: (() => void) | undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const view = new ScriptedView('home', [{ type: 'handoff', label: 'rewrite', run: () => held }, { type: 'quit' }]);
+  const app = new TuiApp(view, new Screen(out), new KeyReader(input));
+
+  const running = app.run();
+  await send(input, '\r');
+  assert.equal(input.attached, false, 'the reader must be stopped while the child has the terminal');
+
+  release?.();
+  await tick();
+  await send(input, 'q');
+  await running;
+});
+
+test('an error thrown by a handoff is shown as the usual error banner, and the screen is still restored', async () => {
+  const out = new FakeStream();
+  const input = new FakeInput();
+  const view = new ScriptedView('home', [
+    {
+      type: 'handoff',
+      label: 'rewrite',
+      run: async () => {
+        throw new Error('agent crashed');
+      },
+    },
+    { type: 'quit' },
+  ]);
+  const app = new TuiApp(view, new Screen(out), new KeyReader(input));
+
+  const running = app.run();
+  input.send('\r');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(out.written.includes('rewrite failed: agent crashed'));
+
+  input.send('q');
+  await running;
+  assert.ok(out.written.endsWith(SHOW_CURSOR + EXIT_ALT));
+});
+
 test('an error thrown by a run action is shown as the usual error banner, not a raw write, and clears once dismissed', async () => {
   const out = new FakeStream();
   const input = new FakeInput();

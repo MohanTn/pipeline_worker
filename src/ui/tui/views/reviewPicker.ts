@@ -23,6 +23,7 @@ import type { Size } from '../screen.js';
 import type { FindingCandidate, SelectableFinding } from '../../../review/selection.js';
 import type { MochaRole } from '../../theme.js';
 import type { ReviewSeverity } from '../../../review/types.js';
+import { REWRITE_AGENTS, type RewriteAgent, type RewriteAsk } from '../../../review/agentRewrite.js';
 
 const SEVERITY_ROLE: Record<ReviewSeverity, MochaRole> = { CRITICAL: 'red', MAJOR: 'yellow', MINOR: 'subtext0' };
 
@@ -132,19 +133,32 @@ function summarize(body: string): string {
   return first.replace(/^#+\s*/, '').trim();
 }
 
+/** How the picker reaches an interactive agent CLI — injected so the view stays testable without spawning a real process. */
+export interface RewriteIo {
+  rewrite(ask: RewriteAsk): Promise<string | undefined>;
+}
+
+/** The rewrite-with-agent form: which of REWRITE_AGENTS is picked, and the reviewer's extra context so far. */
+interface RewriteState {
+  input: InputState;
+  agentIndex: number;
+}
+
 export class ReviewPickerView implements View {
   private readonly rows: PickerRow[];
   private index = 0;
   private windowStart = 0;
-  private mode: 'list' | 'detail' | 'edit' = 'list';
+  private mode: 'list' | 'detail' | 'edit' | 'rewrite' = 'list';
   private detailOffset = 0;
   private showSeen = false;
   private editor: EditorState | undefined;
+  private rewriteState: RewriteState | undefined;
 
   constructor(
     private readonly turn: number,
     candidates: FindingCandidate[],
     private readonly done: (selected: SelectableFinding[] | undefined) => void,
+    private readonly rewriteIo?: RewriteIo,
   ) {
     this.rows = initialRows(candidates);
   }
@@ -209,6 +223,27 @@ export class ReviewPickerView implements View {
     return [...head, ...wrapped.slice(this.detailOffset, this.detailOffset + room)];
   }
 
+  private rewriteBody(inner: Size): Line[] {
+    const state = this.rewriteState;
+    const row = this.focused();
+    if (!state || !row) return [[seg('no finding selected', { role: 'overlay1' })]];
+    const agent = REWRITE_AGENTS[state.agentIndex];
+    const { file, line } = row.candidate.finding;
+    const body: Line[] = [
+      [seg(`${file}:${line}`, { bold: true })],
+      [],
+      [seg('agent: ', { role: 'overlay1' }), seg(agent, { role: 'mauve', bold: true }), seg('  (tab to change)', { role: 'overlay1' })],
+      [],
+      [seg('additional context — e.g. "consider another point of view":', { role: 'overlay1' })],
+      renderInput(state.input, '(optional — leave blank to just ask it to reconsider)'),
+      [],
+    ];
+    for (const text of wrap(`⏎ opens an interactive ${agent} session seeded with this comment — talk it through, and it hands the rewritten comment back here once it exits.`, inner.columns)) {
+      body.push([seg(text, { role: 'overlay1' })]);
+    }
+    return body;
+  }
+
   private editBody(inner: Size): Line[] {
     const editor = this.editor;
     if (!editor) return [];
@@ -221,7 +256,14 @@ export class ReviewPickerView implements View {
 
   render(inner: Size): RenderedView {
     if (this.mode === 'edit') return { title: 'review · edit comment', body: this.editBody(inner), hints: hints('ctrl-s save', 'esc discard', HINT.clear) };
-    if (this.mode === 'detail') return { title: 'review · comment', body: this.detailBody(inner), hints: hints(HINT.scroll, 'e edit', 'space toggle', 'esc back') };
+    if (this.mode === 'rewrite') return { title: 'review · rewrite with agent', body: this.rewriteBody(inner), hints: hints('tab agent', '⏎ start', 'esc cancel') };
+    if (this.mode === 'detail') {
+      return {
+        title: 'review · comment',
+        body: this.detailBody(inner),
+        hints: hints(HINT.scroll, 'e edit', this.rewriteIo && 'r rewrite w/ agent', 'space toggle', 'esc back'),
+      };
+    }
     return { title: `review · pick comments`, body: this.listBody(inner), hints: hints(HINT.move, 'space toggle', 'a/n all/none', '⏎ read', 'e edit', 'd seen', 's submit', 'q cancel') };
   }
 
@@ -264,6 +306,7 @@ export class ReviewPickerView implements View {
       return NONE;
     }
     if (key.name === 'char' && key.value === 'e') return this.startEditing();
+    if (key.name === 'char' && key.value === 'r' && this.rewriteIo) return this.startRewrite();
     if (key.name === 'char' && key.value === ' ') {
       const row = this.focused();
       if (row) row.checked = !row.checked;
@@ -271,6 +314,67 @@ export class ReviewPickerView implements View {
     }
     this.mode = 'list';
     return NONE;
+  }
+
+  private startRewrite(): Action {
+    if (!this.focused()) return NONE;
+    this.rewriteState = { input: createInput(''), agentIndex: 0 };
+    this.mode = 'rewrite';
+    return NONE;
+  }
+
+  private onRewriteKey(key: Key): Action {
+    const state = this.rewriteState;
+    if (!state) {
+      this.mode = 'detail';
+      return NONE;
+    }
+    if (key.name === 'escape') {
+      this.rewriteState = undefined;
+      this.mode = 'detail';
+      return NONE;
+    }
+    if (key.name === 'tab') {
+      state.agentIndex = (state.agentIndex + 1) % REWRITE_AGENTS.length;
+      return NONE;
+    }
+    if (key.name === 'enter') return this.confirmRewrite(state);
+    const result = applyKey(state.input, key);
+    if (result.handled) state.input = result.state;
+    return NONE;
+  }
+
+  /**
+   * Builds the `handoff` action that hands the terminal to the chosen agent
+   * CLI. The actual spawn (and, on success, folding the result back into the
+   * row) happens in the closure app.ts runs — this method itself stays a
+   * plain state transition, like every other key handler here.
+   */
+  private confirmRewrite(state: RewriteState): Action {
+    const row = this.focused();
+    const io = this.rewriteIo;
+    this.rewriteState = undefined;
+    if (!row || !io) {
+      this.mode = 'detail';
+      return NONE;
+    }
+    const agent: RewriteAgent = REWRITE_AGENTS[state.agentIndex];
+    const ask: RewriteAsk = { finding: row.candidate.finding, currentBody: row.body, context: state.input.value.trim(), agent };
+    return {
+      type: 'handoff',
+      label: `rewrite with ${agent}`,
+      run: async () => {
+        try {
+          const result = await io.rewrite(ask);
+          if (result !== undefined && result.trim() !== '') {
+            row.body = result;
+            row.edited = result !== row.candidate.finding.comment;
+          }
+        } finally {
+          this.mode = 'detail';
+        }
+      },
+    };
   }
 
   /** Ends the picker: `selected` for a submit, undefined for a cancel — the caller tells the two apart (see reviewMr.ts's ReviewRound). */
@@ -312,6 +416,7 @@ export class ReviewPickerView implements View {
 
   onKey(key: Key): Action {
     if (this.mode === 'edit') return this.onEditKey(key);
+    if (this.mode === 'rewrite') return this.onRewriteKey(key);
     if (this.mode === 'detail') return this.onDetailKey(key);
     return this.onListKey(key);
   }

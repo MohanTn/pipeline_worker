@@ -8,6 +8,6 @@ build_property.PlatformNeutralAssembly =
 build_property.EnforceExtendedAnalyzerRules = 
 build_property._SupportedPlatformList = Linux,macOS,Windows
 build_property.RootNamespace = Sample
-build_property.ProjectDir = /run/media/mohan/M/REPO/pipeline_worker/test/fixtures/sample-dotnet-repo/
+build_property.ProjectDir = /home/mohan/REPO/pipeline_worker/test/fixtures/sample-dotnet-repo/
 build_property.EnableComHosting = 
 build_property.EnableGeneratedComInterfaceComImportInterop = 

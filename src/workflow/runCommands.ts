@@ -197,7 +197,7 @@ export async function prepareReviewRound(
           .slice(-MAX_CONTEXT_THREADS)
           .map((comment) => `@${comment.author}${comment.path ? ` on ${comment.path}:${comment.line ?? '?'}` : ''}: ${comment.body.slice(0, THREAD_CONTEXT_CHARS)}`);
   if (turn > 1) note(`review round ${turn} — ${newThreads.length} new comment thread(s) since the last one`);
-  return { round: { turn, priorTurns, newThreads, selectFindings: createFindingSelector() }, threadIds };
+  return { round: { turn, priorTurns, newThreads, selectFindings: createFindingSelector(repoRoot) }, threadIds };
 }
 
 /**

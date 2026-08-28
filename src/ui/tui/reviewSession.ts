@@ -14,6 +14,7 @@
 import { TuiApp } from './app.js';
 import { ReviewPickerView } from './views/reviewPicker.js';
 import { rendererIsDelegated, withDisplaySuspended } from '../steps.js';
+import { runAgentRewrite } from '../../review/agentRewrite.js';
 import type { FindingSelector, SelectableFinding } from '../../review/selection.js';
 
 /** Pure half of the gate, so the rule is testable without flipping process.stdin.isTTY on the terminal running the tests. */
@@ -21,16 +22,26 @@ export function pickerAvailable(stdinIsTty: boolean, stdoutIsTty: boolean, rende
   return stdinIsTty && stdoutIsTty && !rendererDelegated;
 }
 
-/** The selector to hand ReviewRound, or undefined when this terminal cannot host the picker. */
-export function createFindingSelector(): FindingSelector | undefined {
+/**
+ * The selector to hand ReviewRound, or undefined when this terminal cannot
+ * host the picker. `cwd` is the worktree the rewrite-with-agent handoff
+ * spawns its interactive CLI in — the same directory the review itself ran
+ * against, so the agent sees the diff it's commenting on.
+ */
+export function createFindingSelector(cwd: string): FindingSelector | undefined {
   if (!pickerAvailable(process.stdin.isTTY === true, process.stdout.isTTY === true, rendererIsDelegated())) return undefined;
   return async (candidates, turn) => {
     if (candidates.length === 0) return [];
     return withDisplaySuspended(async () => {
       let selected: SelectableFinding[] | undefined;
-      const view = new ReviewPickerView(turn, candidates, (result) => {
-        selected = result;
-      });
+      const view = new ReviewPickerView(
+        turn,
+        candidates,
+        (result) => {
+          selected = result;
+        },
+        { rewrite: (ask) => runAgentRewrite(ask, cwd) },
+      );
       await new TuiApp(view).run();
       return selected;
     });
