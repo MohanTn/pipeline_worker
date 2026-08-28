@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ReviewPickerView, applyEditorKey, createEditor, editedLine, editorText, initialRows, selectedFindings } from '../src/ui/tui/views/reviewPicker.js';
+import { ReviewPickerView, applyEditorKey, createEditor, editedLine, editorText, initialRows, selectedFindings, type RewriteIo } from '../src/ui/tui/views/reviewPicker.js';
 import { pickerAvailable } from '../src/ui/tui/reviewSession.js';
 import { plainText } from '../src/ui/tui/line.js';
 import { parseKeys } from '../src/ui/tui/keys.js';
 import type { Action } from '../src/ui/tui/view.js';
 import type { FindingCandidate, SelectableFinding } from '../src/review/selection.js';
 import type { ReviewFinding } from '../src/review/types.js';
+import type { RewriteAsk } from '../src/review/agentRewrite.js';
 
 const SIZE = { columns: 80, rows: 20 };
 
@@ -22,14 +23,37 @@ function press(view: ReviewPickerView, keys: string): Action {
   return action;
 }
 
-function pickerWith(candidates: FindingCandidate[], turn = 1): { view: ReviewPickerView; result: () => { called: boolean; selected: SelectableFinding[] | undefined } } {
+function pickerWith(
+  candidates: FindingCandidate[],
+  turn = 1,
+  rewriteIo?: RewriteIo,
+): { view: ReviewPickerView; result: () => { called: boolean; selected: SelectableFinding[] | undefined } } {
   let called = false;
   let selected: SelectableFinding[] | undefined;
-  const view = new ReviewPickerView(turn, candidates, (result) => {
-    called = true;
-    selected = result;
-  });
+  const view = new ReviewPickerView(
+    turn,
+    candidates,
+    (result) => {
+      called = true;
+      selected = result;
+    },
+    rewriteIo,
+  );
   return { view, result: () => ({ called, selected }) };
+}
+
+/** A RewriteIo stub that records what it was asked and resolves with a canned answer. */
+function stubRewriteIo(answer: string | undefined): { io: RewriteIo; asked: () => RewriteAsk | undefined } {
+  let asked: RewriteAsk | undefined;
+  return {
+    io: {
+      rewrite: async (ask) => {
+        asked = ask;
+        return answer;
+      },
+    },
+    asked: () => asked,
+  };
 }
 
 test('new findings start checked and previously ignored ones do not', () => {
@@ -161,6 +185,77 @@ test('selectedFindings drops unchecked rows and rows edited down to whitespace',
   rows[2].body = '   ';
   rows[2].edited = true;
   assert.deepEqual(selectedFindings(rows).map((finding) => finding.line), [1]);
+});
+
+test('r is not offered in the detail view when no rewriteIo was given, so it falls through like any other unbound key', () => {
+  const { view } = pickerWith([candidate()]);
+  press(view, '\r'); // open detail
+  assert.doesNotMatch(view.render(SIZE).hints, /rewrite/);
+  press(view, 'r');
+  assert.equal(view.render(SIZE).title, 'review · pick comments', 'r without a rewriteIo is unbound, same as any other unhandled detail-view key');
+});
+
+test('r in the detail view opens the rewrite form, tab cycles the agent, esc cancels back without asking anything', () => {
+  const { io, asked } = stubRewriteIo(undefined);
+  const { view } = pickerWith([candidate()], 1, io);
+  press(view, '\r'); // open detail
+  assert.match(view.render(SIZE).hints, /r rewrite w\/ agent/);
+  press(view, 'r');
+  const rewrite = view.render(SIZE);
+  assert.equal(rewrite.title, 'review · rewrite with agent');
+  assert.match(rewrite.body.map(plainText).join('\n'), /agent: claude/);
+  press(view, '\t');
+  assert.match(view.render(SIZE).body.map(plainText).join('\n'), /agent: copilot/);
+  press(view, '\x1b'); // esc cancels
+  assert.equal(view.render(SIZE).title, 'review · comment', 'esc returns to the detail view');
+  assert.equal(asked(), undefined, 'cancelling must never call the agent');
+});
+
+test('confirming a rewrite produces a handoff action; running it asks the agent and folds the result into the row', async () => {
+  const { io, asked } = stubRewriteIo('### Better\n\nreconsidered');
+  const { view, result } = pickerWith([candidate({ comment: '### Bad\n\nfix it' })], 1, io);
+  press(view, '\r'); // detail
+  press(view, 'r'); // rewrite form
+  press(view, '\t'); // agent -> copilot
+  press(view, 'consider perf too');
+  const action = press(view, '\r');
+  assert.equal(action.type, 'handoff');
+  if (action.type !== 'handoff') return;
+  assert.equal(action.label, 'rewrite with copilot');
+
+  await action.run();
+  assert.deepEqual(asked(), { finding: candidate().finding, currentBody: '### Bad\n\nfix it', context: 'consider perf too', agent: 'copilot' });
+  assert.equal(view.render(SIZE).title, 'review · comment', 'the handoff returns the view to the detail screen');
+
+  press(view, '\x1b'); // back to list
+  press(view, 's');
+  const selected = result().selected ?? [];
+  assert.equal(selected[0].body, '### Better\n\nreconsidered');
+  assert.equal(selected[0].edited, true);
+});
+
+test('a rewrite that comes back empty leaves the comment as it was', async () => {
+  const { io } = stubRewriteIo('   ');
+  const { view, result } = pickerWith([candidate({ comment: 'original' })], 1, io);
+  press(view, '\r');
+  press(view, 'r');
+  const action = press(view, '\r');
+  assert.equal(action.type, 'handoff');
+  if (action.type === 'handoff') await action.run();
+  press(view, '\x1b');
+  press(view, 's');
+  assert.equal(result().selected?.[0].body, undefined, 'a blank rewrite must not overwrite the existing comment');
+});
+
+test('a rewrite that throws still returns the view to the detail screen', async () => {
+  const io: RewriteIo = { rewrite: async () => { throw new Error('agent crashed'); } };
+  const { view } = pickerWith([candidate()], 1, io);
+  press(view, '\r');
+  press(view, 'r');
+  const action = press(view, '\r');
+  assert.equal(action.type, 'handoff');
+  if (action.type === 'handoff') await assert.rejects(action.run(), /agent crashed/);
+  assert.equal(view.render(SIZE).title, 'review · comment', 'the mode must reset to detail even when the agent call throws');
 });
 
 test('the picker only runs where nothing else owns the terminal', () => {

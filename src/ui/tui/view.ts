@@ -23,7 +23,17 @@ export type Action =
    * drives the job, and `redraw` lets it repaint as the job reports events.
    * The app pops `view` and waits for a keypress once `run` settles.
    */
-  | { type: 'run'; label: string; view: View; run: (ctx: { redraw(): void }) => Promise<void> };
+  | { type: 'run'; label: string; view: View; run: (ctx: { redraw(): void }) => Promise<void> }
+  /**
+   * Hand the literal terminal to a child process — unlike `run`, which stays
+   * on the alt screen throughout, this exits it and releases raw-mode key
+   * reading first, because the child is a full interactive CLI with its own
+   * TTY UI (e.g. an agent session the human types back and forth with), and
+   * two programs cannot both own the same stdin. Both are restored once
+   * `run` resolves; a throw is shown as the usual `<label> failed: ...`
+   * error banner.
+   */
+  | { type: 'handoff'; label: string; run: () => Promise<void> };
 
 export const NONE: Action = { type: 'none' };
 

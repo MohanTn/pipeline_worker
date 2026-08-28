@@ -1,0 +1,74 @@
+# Regression eval for the intent-capture turn (src/workflow/captureIntent.ts).
+# Run with: npm run eval:intent
+# See eval/README.md for setup and what each assertion is checking.
+
+description: pipeline-worker intent-capture regression eval
+
+prompts:
+  - '{{scenario}}'
+
+providers:
+  - id: file://captureIntentProvider.mjs
+    label: captureIntent (claude adapter, haiku)
+
+# llm-rubric assertions grade with a real model call, kept on the same
+# vendor as the rest of this repo. Needs ANTHROPIC_API_KEY in the
+# environment running `promptfoo eval` (separate from the `claude` CLI's own
+# login, which the provider above uses instead).
+defaultTest:
+  options:
+    provider: anthropic:messages:claude-haiku-4-5
+
+tests:
+  - description: an isolated new component is classified as a feature
+    vars:
+      scenario: feature-login-page
+    assert:
+      - type: javascript
+        value: "JSON.parse(output).changeType === 'feature'"
+      - type: javascript
+        value: "/^feat: /.test(JSON.parse(output).commitMessage)"
+      - type: javascript
+        value: 'JSON.parse(output).commitMessage.length <= 72'
+      - type: javascript
+        value: "/^[a-z0-9][a-z0-9-]*$/.test(JSON.parse(output).branchSlug)"
+      - type: llm-rubric
+        value: >
+          The summary and fileChanges accurately describe adding a new login
+          form component, and do not invent unrelated changes.
+
+  - description: an off-by-one correction is classified as a bugfix
+    vars:
+      scenario: bugfix-off-by-one
+    assert:
+      - type: javascript
+        value: "JSON.parse(output).changeType === 'bugfix'"
+      - type: javascript
+        value: "/^fix: /.test(JSON.parse(output).commitMessage)"
+      - type: llm-rubric
+        value: >
+          The summary and riskReason correctly identify this as a pagination
+          boundary/off-by-one correction, not a new feature or unrelated
+          refactor.
+
+  - description: a dependency-only bump is a low-risk chore
+    vars:
+      scenario: chore-dependency-bump
+    assert:
+      - type: javascript
+        value: "JSON.parse(output).changeType === 'chore'"
+      - type: javascript
+        value: "/^chore: /.test(JSON.parse(output).commitMessage)"
+      - type: javascript
+        value: "JSON.parse(output).risk === 'low'"
+
+  - description: removing a token-expiry check is flagged as high risk
+    vars:
+      scenario: security-expiry-check-removed
+    assert:
+      - type: javascript
+        value: "JSON.parse(output).risk === 'high'"
+      - type: llm-rubric
+        value: >
+          riskReason explains the risk in terms of the removed expiry/security
+          check specifically, not a generic "touches auth code" justification.
